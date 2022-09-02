@@ -5,7 +5,7 @@ import Spec.Auction qualified
 import Spec.Crowdfunding qualified
 import Spec.Currency qualified
 import Spec.ErrorHandling qualified
-import Spec.Escrow qualified
+import Plutus.Contracts.Tutorial.Spec qualified
 import Spec.Future qualified
 import Spec.Game qualified
 import Spec.GameStateMachine qualified
