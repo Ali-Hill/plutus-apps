@@ -127,6 +127,8 @@ library
     , streaming
     , template-haskell
     , text
+    , data-default
+    , QuickCheck
 
   if flag(defer-plugin-errors)
     ghc-options: -fplugin-opt PlutusTx.Plugin:defer-errors
