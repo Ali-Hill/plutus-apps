@@ -13,56 +13,58 @@ module Escrow
     , EscrowModel
     ) where
 
-import Control.Lens (makeLenses, to, (%=), (.=), (^.))
+import Control.Lens hiding (both, elements)
 import Control.Monad (void)
-import Data.Data (Data)
-import Data.Foldable (Foldable (fold))
+import Data.Data
+import Data.Foldable
 import Data.Map (Map)
 import Data.Map qualified as Map
 
 import Ledger (minAdaTxOut)
 import Ledger.Ada qualified as Ada
 import Ledger.Typed.Scripts qualified as Scripts
-import Ledger.Value qualified as Value
-import Plutus.Contract (selectList)
-import Plutus.Contract.Test (Wallet, mockWalletPaymentPubKeyHash, w1, w2, w3, w4, w5)
-import Plutus.Contract.Test.ContractModel qualified as CM
+import Ledger.Value
+import Plutus.Contract hiding (currentSlot)
+import Plutus.Contract.Test
+import Plutus.Contract.Test.ContractModel
 
-import Plutus.Contracts.Tutorial.Escrow (EscrowError, EscrowParams (EscrowParams, escrowTargets), EscrowSchema, payEp,
-                                         payToPaymentPubKeyTarget, redeemEp)
+import Plutus.Contracts.Tutorial.Escrow hiding (Action (..))
 import Plutus.Trace.Emulator qualified as Trace
 import PlutusTx.Monoid (inv)
 
-import Test.Tasty (TestTree, testGroup)
-import Test.Tasty.QuickCheck (Arbitrary (shrink), Property, choose, elements, frequency, testProperty, withMaxSuccess)
+import Test.QuickCheck as QC hiding ((.&&.))
+import Test.Tasty
+import Test.Tasty.QuickCheck hiding ((.&&.))
 
 {- START EscrowModel -}
-data EscrowModel = EscrowModel { _contributions :: Map Wallet Value.Value
-                               , _targets       :: Map Wallet Value.Value
+data EscrowModel = EscrowModel { _contributions :: Map Wallet Value
+                               , _targets       :: Map Wallet Value
                                } deriving (Eq, Show, Data)
 
 makeLenses ''EscrowModel
 {- END EscrowModel -}
 
 {- START ContractInstanceKeyDeriving :-}
-deriving instance Eq (CM.ContractInstanceKey EscrowModel w s e params)
-deriving instance Show (CM.ContractInstanceKey EscrowModel w s e params)
+deriving instance Eq (ContractInstanceKey EscrowModel w s e params)
+deriving instance Show (ContractInstanceKey EscrowModel w s e params)
 {- END ContractInstanceKeyDeriving -}
 {-
 {- START ContractModelInstance -}
 instance ContractModel EscrowModel where ...
 {- END ContractModelInstance -}
 -}
-instance CM.ContractModel EscrowModel where
+instance ContractModel EscrowModel where
 {- START ActionType -}
   data Action EscrowModel = Pay Wallet Integer
-                          | Redeem Wallet -- ^ Refund Wallet
+                          | Redeem Wallet
     deriving (Eq, Show, Data)
 {- END ActionType -}
 
+                          -- | Refund Wallet
+
 {- START ContractInstanceKeyType -}
   data ContractInstanceKey EscrowModel w s e params where
-    WalletKey :: Wallet -> CM.ContractInstanceKey EscrowModel () EscrowSchema EscrowError ()
+    WalletKey :: Wallet -> ContractInstanceKey EscrowModel () EscrowSchema EscrowError ()
 {- END ContractInstanceKeyType -}
 
 {- START initialState -}
@@ -102,7 +104,7 @@ testContract = selectList [ void $ payEp escrowParams
                                 -- , void $ refundEp escrowParams
                                 ] >> testContract
 {- START initialInstances -}
-  initialInstances = [CM.StartContract (WalletKey w) () | w <- testWallets]
+  initialInstances = [StartContract (WalletKey w) () | w <- testWallets]
 {- END initialInstances -}
 {-
 {- START 0nextState -}
@@ -135,17 +137,17 @@ testContract = selectList [ void $ payEp escrowParams
 {- START nextState -}
   nextState a = case a of
     Pay w v -> do
-      CM.withdraw w (Ada.adaValueOf $ fromInteger v)
+      withdraw w (Ada.adaValueOf $ fromInteger v)
       contributions %= Map.insertWith (<>) w (Ada.adaValueOf $ fromInteger v)
-      CM.wait 1
+      wait 1
     Redeem w -> do
-      targets <- CM.viewContractState targets
-      contribs <- CM.viewContractState contributions
-      sequence_ [ CM.deposit w v | (w, v) <- Map.toList targets ]
+      targets <- viewContractState targets
+      contribs <- viewContractState contributions
+      sequence_ [ deposit w v | (w, v) <- Map.toList targets ]
       let leftoverValue = fold contribs <> inv (fold targets)
-      CM.deposit w leftoverValue
+      deposit w leftoverValue
       contributions .= Map.empty
-      CM.wait 1
+      wait 1
 {- END nextState -}
 {-    Refund w -> do
       v <- viewContractState $ contributions . at w . to fold
@@ -173,19 +175,19 @@ precondition s a = case a of
 {- END precondition2 -}
 -}
   precondition s a = case a of
-    Redeem _ -> (s ^. CM.contractState . contributions . to fold) `Value.geq` (s ^. CM.contractState . targets . to fold)
+    Redeem _ -> (s ^. contractState . contributions . to fold) `geq` (s ^. contractState . targets . to fold)
     --Redeem _ -> (s ^. contractState . contributions . to fold) == (s ^. contractState . targets . to fold)
     --Refund w -> Nothing /= (s ^. contractState . contributions . at w)
-    Pay _ v  -> Ada.adaValueOf (fromInteger v) `Value.geq` Ada.toValue minAdaTxOut
+    Pay _ v  -> Ada.adaValueOf (fromInteger v) `geq` Ada.toValue minAdaTxOut
 
 {- START perform -}
   perform h _ _ a = case a of
     Pay w v        -> do
       Trace.callEndpoint @"pay-escrow" (h $ WalletKey w) (Ada.adaValueOf $ fromInteger v)
-      CM.delay 1
+      delay 1
     Redeem w       -> do
       Trace.callEndpoint @"redeem-escrow" (h $ WalletKey w) ()
-      CM.delay 1
+      delay 1
 {- END perform -}
 
 {-    Refund w       -> do
@@ -205,11 +207,11 @@ precondition s a = case a of
                                   -}
 
 {- START arbitraryAction2 -}
-  arbitraryAction s = frequency $ (3, Pay <$> elements testWallets <*> choose (1, 30)) :
+  arbitraryAction s = frequency $ [ (3, Pay <$> elements testWallets <*> choose (1, 30)) ] ++
                                   [ (1, Redeem <$> elements testWallets)
-                                  | (s ^. CM.contractState . contributions . to fold)   -- NEW
-                                    `Value.geq`                                      -- NEW
-                                    (s ^. CM.contractState . targets . to fold)         -- NEW
+                                  | (s ^. contractState . contributions . to fold)   -- NEW
+                                    `geq`                                            -- NEW
+                                    (s ^. contractState . targets . to fold)         -- NEW
                                   ]
 {- END arbitraryAction2 -}
 
@@ -230,8 +232,8 @@ testWallets = [w1, w2, w3, w4, w5]
 {- END testWallets -}
 
 {- START prop_Escrow -}
-prop_Escrow :: CM.Actions EscrowModel -> Property
-prop_Escrow = CM.propRunActions_
+prop_Escrow :: Actions EscrowModel -> Property
+prop_Escrow = propRunActions_
 {- END prop_Escrow -}
 
 {-

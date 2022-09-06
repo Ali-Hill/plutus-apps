@@ -24,22 +24,18 @@ module Wallet.API(
     WalletEffect,
     submitTxn,
     ownPaymentPubKeyHash,
-    ownPaymentPubKeyHashes,
-    ownFirstPaymentPubKeyHash,
-    ownAddresses,
     balanceTx,
     yieldUnbalancedTx,
     NodeClientEffect,
     publishTx,
     getClientSlot,
-    getClientParams,
+    getClientSlotConfig,
     PubKey(..),
     PubKeyHash(..),
     signTxAndSubmit,
     signTxAndSubmit_,
     payToPaymentPublicKeyHash,
     payToPaymentPublicKeyHash_,
-    Params(..),
     -- * Slot ranges
     Interval(..),
     Slot,
@@ -63,74 +59,39 @@ module Wallet.API(
 import Control.Monad (unless, void)
 import Control.Monad.Freer (Eff, Member)
 import Control.Monad.Freer.Error (Error, throwError)
-import Control.Monad.Freer.Extras.Log (LogMsg, logDebug, logWarn)
+import Control.Monad.Freer.Extras.Log (LogMsg, logWarn)
 import Data.Default (Default (def))
-import Data.List.NonEmpty qualified as NonEmpty
-import Data.Maybe (mapMaybe)
 import Data.Text (Text)
 import Data.Void (Void)
-import Ledger (CardanoTx, Interval (Interval, ivFrom, ivTo), Params (..), PaymentPubKeyHash (PaymentPubKeyHash),
-               PubKey (PubKey, getPubKey), PubKeyHash (PubKeyHash, getPubKeyHash), Slot, SlotRange, Value, after,
-               always, before, contains, interval, isEmpty, member, singleton, width)
+import Ledger (CardanoTx, Interval (Interval, ivFrom, ivTo), PaymentPubKeyHash, PubKey (PubKey, getPubKey),
+               PubKeyHash (PubKeyHash, getPubKeyHash), Slot, SlotRange, Value, after, always, before, contains,
+               interval, isEmpty, member, singleton, width)
 import Ledger.Constraints qualified as Constraints
-import Ledger.Constraints.OffChain (adjustUnbalancedTx)
 import Ledger.TimeSlot qualified as TimeSlot
-import Plutus.V1.Ledger.Address (toPubKeyHash)
-import Wallet.Effects (NodeClientEffect, WalletEffect, balanceTx, getClientParams, getClientSlot, ownAddresses,
-                       publishTx, submitTxn, walletAddSignature, yieldUnbalancedTx)
-import Wallet.Emulator.LogMessages (RequestHandlerLogMsg (AdjustingUnbalancedTx))
-import Wallet.Error (WalletAPIError (NoPaymentPubKeyHashError, PaymentMkTxError, ToCardanoError))
+import Wallet.Effects (NodeClientEffect, WalletEffect, balanceTx, getClientSlot, getClientSlotConfig,
+                       ownPaymentPubKeyHash, publishTx, submitTxn, walletAddSignature, yieldUnbalancedTx)
+import Wallet.Error (WalletAPIError (PaymentMkTxError))
 import Wallet.Error qualified
-
-{-# DEPRECATED ownPaymentPubKeyHash "Use ownFirstPaymentPubKeyHash, ownPaymentPubKeyHashes or ownAddresses instead" #-}
-
-ownPaymentPubKeyHash ::
-    ( Member WalletEffect effs
-    , Member (Error WalletAPIError) effs
-    )
-    => Eff effs PaymentPubKeyHash
-ownPaymentPubKeyHash = ownFirstPaymentPubKeyHash
-
-ownPaymentPubKeyHashes ::
-    ( Member WalletEffect effs
-    )
-    => Eff effs [PaymentPubKeyHash]
-ownPaymentPubKeyHashes = do
-    addrs <- ownAddresses
-    pure $ fmap PaymentPubKeyHash $ mapMaybe toPubKeyHash $ NonEmpty.toList addrs
-
-ownFirstPaymentPubKeyHash ::
-    ( Member WalletEffect effs
-    , Member (Error WalletAPIError) effs
-    )
-    => Eff effs PaymentPubKeyHash
-ownFirstPaymentPubKeyHash = do
-    pkhs <- ownPaymentPubKeyHashes
-    case pkhs of
-      []      -> throwError NoPaymentPubKeyHashError
-      (pkh:_) -> pure pkh
 
 -- | Transfer some funds to an address locked by a public key, returning the
 --   transaction that was submitted.
 --
 --  Note: Due to a constraint in the Cardano ledger, each tx output must have a
 --  minimum amount of Ada. Therefore, the funds to transfer will be adjusted
---  to satisfy that constraint. See 'adjustUnbalancedTx'.
+--  to satisfy that constraint. See 'Ledger.Constraints.OffChain.adjustUnbalancedTx.
 payToPaymentPublicKeyHash ::
     ( Member WalletEffect effs
     , Member (Error WalletAPIError) effs
     , Member (LogMsg Text) effs
-    , Member (LogMsg RequestHandlerLogMsg) effs
     )
-    => Params -> SlotRange -> Value -> PaymentPubKeyHash -> Eff effs CardanoTx
-payToPaymentPublicKeyHash params range v pk = do
+    => SlotRange -> Value -> PaymentPubKeyHash -> Eff effs CardanoTx
+payToPaymentPublicKeyHash range v pk = do
     let constraints = Constraints.mustPayToPubKey pk v
                    <> Constraints.mustValidateIn (TimeSlot.slotRangeToPOSIXTimeRange def range)
     utx <- either (throwError . PaymentMkTxError)
                   pure
                   (Constraints.mkTx @Void mempty constraints)
-    (missingAdaCosts, adjustedUtx) <- either (throwError . ToCardanoError) pure (adjustUnbalancedTx params utx)
-    logDebug $ AdjustingUnbalancedTx missingAdaCosts
+    let adjustedUtx = Constraints.adjustUnbalancedTx utx
     unless (utx == adjustedUtx) $
       logWarn @Text $ "Wallet.API.payToPublicKeyHash: "
                    <> "Adjusted a transaction output value which has less than the minimum amount of Ada."
@@ -142,10 +103,9 @@ payToPaymentPublicKeyHash_ ::
     ( Member WalletEffect effs
     , Member (Error WalletAPIError) effs
     , Member (LogMsg Text) effs
-    , Member (LogMsg RequestHandlerLogMsg) effs
     )
-    => Params -> SlotRange -> Value -> PaymentPubKeyHash -> Eff effs ()
-payToPaymentPublicKeyHash_ params r v = void . payToPaymentPublicKeyHash params r v
+    => SlotRange -> Value -> PaymentPubKeyHash -> Eff effs ()
+payToPaymentPublicKeyHash_ r v = void . payToPaymentPublicKeyHash r v
 
 -- | Add the wallet's signature to the transaction and submit it. Returns
 --   the transaction with the wallet's signature.

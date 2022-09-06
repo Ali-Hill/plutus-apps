@@ -5,7 +5,6 @@
 {-# LANGUAGE NamedFieldPuns        #-}
 {-# LANGUAGE QuantifiedConstraints #-}
 {-# LANGUAGE RankNTypes            #-}
-{-# LANGUAGE TupleSections         #-}
 {-# LANGUAGE TypeApplications      #-}
 {-# LANGUAGE TypeOperators         #-}
 {-# LANGUAGE UndecidableInstances  #-}
@@ -21,34 +20,33 @@ module Plutus.ChainIndex.Handlers
 
 import Cardano.Api qualified as C
 import Control.Applicative (Const (..))
-import Control.Lens (Lens', _Just, ix, view, (^?))
+import Control.Lens (Lens', view)
 import Control.Monad (foldM)
 import Control.Monad.Freer (Eff, Member, type (~>))
 import Control.Monad.Freer.Error (Error, throwError)
 import Control.Monad.Freer.Extras.Beam (BeamEffect (..), BeamableSqlite, combined, selectList, selectOne, selectPage)
 import Control.Monad.Freer.Extras.Log (LogMsg, logDebug, logError, logWarn)
-import Control.Monad.Freer.Extras.Pagination (Page (Page, nextPageQuery, pageItems), PageQuery (..))
+import Control.Monad.Freer.Extras.Pagination (Page (Page), PageQuery (..))
 import Control.Monad.Freer.Reader (Reader, ask)
 import Control.Monad.Freer.State (State, get, gets, put)
 import Data.ByteString (ByteString)
 import Data.FingerTree qualified as FT
-import Data.List qualified as List
 import Data.Map qualified as Map
-import Data.Maybe (catMaybes, fromMaybe, mapMaybe, maybeToList)
+import Data.Maybe (catMaybes, fromMaybe, mapMaybe)
 import Data.Proxy (Proxy (..))
 import Data.Set qualified as Set
 import Data.Word (Word64)
-import Database.Beam (Columnar, Identity, SqlSelect, TableEntity, aggregate_, all_, countAll_, delete, filter_, in_,
-                      limit_, nub_, select, val_)
+import Database.Beam (Columnar, Identity, SqlSelect, TableEntity, aggregate_, all_, countAll_, delete, filter_, limit_,
+                      not_, nub_, select, val_)
 import Database.Beam.Backend.SQL (BeamSqlBackendCanSerialize)
-import Database.Beam.Query (HasSqlEqualityCheck, asc_, desc_, exists_, guard_, isJust_, isNothing_, leftJoin_, orderBy_,
-                            update, (&&.), (<-.), (<.), (==.), (>.))
+import Database.Beam.Query (HasSqlEqualityCheck, asc_, desc_, exists_, orderBy_, update, (&&.), (<-.), (<.), (==.),
+                            (>.))
 import Database.Beam.Schema.Tables (zipTables)
 import Database.Beam.Sqlite (Sqlite)
-import Ledger (Address (..), ChainIndexTxOut (..), TxId, TxOut (..), TxOutRef (..))
+import Ledger (Address (..), ChainIndexTxOut (..), Datum, DatumHash (..), TxOut (..), TxOutRef (..))
 import Ledger.Value (AssetClass (AssetClass), flattenValue)
-import Plutus.ChainIndex.Api (IsUtxoResponse (IsUtxoResponse), QueryResponse (QueryResponse),
-                              TxosResponse (TxosResponse), UtxosResponse (UtxosResponse))
+import Plutus.ChainIndex.Api (IsUtxoResponse (IsUtxoResponse), TxosResponse (TxosResponse),
+                              UtxosResponse (UtxosResponse))
 import Plutus.ChainIndex.ChainIndexError (ChainIndexError (..))
 import Plutus.ChainIndex.ChainIndexLog (ChainIndexLog (..))
 import Plutus.ChainIndex.Compatibility (toCardanoPoint)
@@ -61,7 +59,7 @@ import Plutus.ChainIndex.Types (ChainSyncBlock (..), Depth (..), Diagnostics (..
 import Plutus.ChainIndex.UtxoState (InsertUtxoSuccess (..), RollbackResult (..), UtxoIndex)
 import Plutus.ChainIndex.UtxoState qualified as UtxoState
 import Plutus.V1.Ledger.Ada qualified as Ada
-import Plutus.V1.Ledger.Api (Credential (..), Datum, DatumHash)
+import Plutus.V1.Ledger.Api (Credential (..))
 
 type ChainIndexState = UtxoIndex TxUtxoBalance
 
@@ -83,8 +81,6 @@ handleQuery = \case
     MintingPolicyFromHash hash  -> getScriptFromHash hash
     RedeemerFromHash hash       -> getRedeemerFromHash hash
     StakeValidatorFromHash hash -> getScriptFromHash hash
-    TxFromTxId txId -> getTxFromTxId txId
-    TxOutFromRef tor            -> getTxOutFromRef tor
     UnspentTxOutFromRef tor     -> getUtxoutFromRef tor
     UtxoSetMembership r -> do
         utxoState <- gets @ChainIndexState UtxoState.utxoState
@@ -92,11 +88,9 @@ handleQuery = \case
             TipAtGenesis -> throwError QueryFailedNoTip
             tp           -> pure (IsUtxoResponse tp (TxUtxoBalance.isUnspentOutput r utxoState))
     UtxoSetAtAddress pageQuery cred -> getUtxoSetAtAddress pageQuery cred
-    UnspentTxOutSetAtAddress pageQuery cred -> getTxOutSetAtAddress pageQuery cred
     UtxoSetWithCurrency pageQuery assetClass ->
       getUtxoSetWithCurrency pageQuery assetClass
     TxoSetAtAddress pageQuery cred -> getTxoSetAtAddress pageQuery cred
-    TxsFromTxIds txids -> getTxsFromTxIds txids
     GetTip -> getTip
 
 getTip :: Member BeamEffect effs => Eff effs Tip
@@ -104,9 +98,6 @@ getTip = fmap fromDbValue . selectOne . select $ limit_ 1 (orderBy_ (desc_ . _ti
 
 getDatumFromHash :: Member BeamEffect effs => DatumHash -> Eff effs (Maybe Datum)
 getDatumFromHash = queryOne . queryKeyValue datumRows _datumRowHash _datumRowDatum
-
-getTxFromTxId :: Member BeamEffect effs => TxId -> Eff effs (Maybe ChainIndexTx)
-getTxFromTxId = queryOne . queryKeyValue txRows _txRowTxId _txRowTx
 
 getScriptFromHash ::
     ( Member BeamEffect effs
@@ -147,28 +138,6 @@ queryOne ::
     -> Eff effs (Maybe o)
 queryOne = fmap (fmap fromDbValue) . selectOne
 
-queryList ::
-    ( Member BeamEffect effs
-    , HasDbType o
-    ) => SqlSelect Sqlite (DbType o)
-    -> Eff effs [o]
-queryList = fmap (fmap fromDbValue) . selectList
-
--- | Get the 'ChainIndexTxOut' for a 'TxOutRef'.
-getTxOutFromRef ::
-  forall effs.
-  ( Member BeamEffect effs
-  , Member (LogMsg ChainIndexLog) effs
-  )
-  => TxOutRef
-  -> Eff effs (Maybe ChainIndexTxOut)
-getTxOutFromRef ref@TxOutRef{txOutRefId, txOutRefIdx} = do
-  mTx <- getTxFromTxId txOutRefId
-  -- Find the output in the tx matching the output ref
-  case mTx ^? _Just . citxOutputs . _ValidTx . ix (fromIntegral txOutRefIdx) of
-    Nothing    -> logWarn (TxOutNotFound ref) >> pure Nothing
-    Just txout -> makeChainIndexTxOut txout
-
 -- | Get the 'ChainIndexTxOut' for a 'TxOutRef'.
 getUtxoutFromRef ::
   forall effs.
@@ -180,31 +149,20 @@ getUtxoutFromRef ::
 getUtxoutFromRef txOutRef = do
     mTxOut <- queryOne $ queryKeyValue utxoOutRefRows _utxoRowOutRef _utxoRowTxOut txOutRef
     case mTxOut of
-      Nothing    -> logWarn (TxOutNotFound txOutRef) >> pure Nothing
-      Just txout -> makeChainIndexTxOut txout
-
-makeChainIndexTxOut ::
-  forall effs.
-  ( Member BeamEffect effs
-  , Member (LogMsg ChainIndexLog) effs
-  )
-  => TxOut
-  -> Eff effs (Maybe ChainIndexTxOut)
-makeChainIndexTxOut txout@(TxOut address value dh) =
-  case addressCredential address of
-    PubKeyCredential _ -> do
-      d <- maybe (pure Nothing) getDatumFromHash dh
-      pure $ Just $ PublicKeyChainIndexTxOut address value ((, d) <$> dh)
-    ScriptCredential vh ->
-      case dh of
-        Just h -> do
-          v <- getScriptFromHash vh
-          d <- getDatumFromHash h
-          pure $ Just $ ScriptChainIndexTxOut address value (h, d) (vh, v)
-        Nothing -> do
-          -- If the txout comes from a script address, the Datum should not be Nothing
-          logWarn $ NoDatumScriptAddr txout
-          pure Nothing
+      Nothing -> logWarn (TxOutNotFound txOutRef) >> pure Nothing
+      Just txout@TxOut { txOutAddress, txOutValue, txOutDatumHash } ->
+        case addressCredential txOutAddress of
+          PubKeyCredential _ -> pure $ Just $ PublicKeyChainIndexTxOut txOutAddress txOutValue
+          ScriptCredential vh ->
+            case txOutDatumHash of
+              Nothing -> do
+                -- If the txout comes from a script address, the Datum should not be Nothing
+                logWarn $ NoDatumScriptAddr txout
+                pure Nothing
+              Just dh -> do
+                v <- maybe (Left vh) Right <$> getScriptFromHash vh
+                d <- maybe (Left dh) Right <$> getDatumFromHash dh
+                pure $ Just $ ScriptChainIndexTxOut txOutAddress v d txOutValue
 
 getUtxoSetAtAddress
   :: forall effs.
@@ -223,41 +181,19 @@ getUtxoSetAtAddress pageQuery (toDbValue -> cred) = do
           logWarn TipIsGenesis
           pure (UtxosResponse TipAtGenesis (Page pageQuery Nothing []))
       tp           -> do
-          let query = do
-                rowRef <- fmap _unspentOutputRowOutRef (all_ (unspentOutputRows db))
-                rowCred <- leftJoin_
-                           (fmap _addressRowOutRef (filter_ (\row -> _addressRowCred row ==. val_ cred) (all_ (addressRows db))))
-                           (\row -> row ==. rowRef)
-                utxi <- leftJoin_ (fmap _unmatchedInputRowOutRef $ all_ (unmatchedInputRows db)) (\utxi -> rowRef ==. utxi)
-                guard_ (isNothing_ utxi)
-                guard_ (isJust_ rowCred)
-                pure rowRef
+          let query =
+                fmap _addressRowOutRef
+                  $ filter_ (\row ->
+                      (_addressRowCred row ==. val_ cred)
+                      &&. exists_ (filter_ (\utxo -> _addressRowOutRef row ==. _unspentOutputRowOutRef utxo) (all_ (unspentOutputRows db)))
+                      &&. not_ (exists_ (filter_ (\utxi -> _addressRowOutRef row ==. _unmatchedInputRowOutRef utxi) (all_ (unmatchedInputRows db))))
+                      )
+                  $ all_ (addressRows db)
 
           outRefs <- selectPage (fmap toDbValue pageQuery) query
           let page = fmap fromDbValue outRefs
 
           pure (UtxosResponse tp page)
-
-
-getTxOutSetAtAddress ::
-  forall effs.
-  ( Member (State ChainIndexState) effs
-  , Member BeamEffect effs
-  , Member (LogMsg ChainIndexLog) effs
-  )
-  => PageQuery TxOutRef
-  -> Credential
-  -> Eff effs (QueryResponse [(TxOutRef, ChainIndexTxOut)])
-getTxOutSetAtAddress pageQuery cred = do
-  (UtxosResponse tip page) <- getUtxoSetAtAddress pageQuery cred
-  case tip of
-    TipAtGenesis -> do
-      pure (QueryResponse [] Nothing)
-    _             -> do
-      mtxouts <- mapM getUtxoutFromRef (pageItems page)
-      let txouts = [ (t, o) | (t, mo) <- List.zip (pageItems page) mtxouts, o <- maybeToList mo]
-      pure $ QueryResponse txouts (nextPageQuery page)
-
 
 getUtxoSetWithCurrency
   :: forall effs.
@@ -276,37 +212,18 @@ getUtxoSetWithCurrency pageQuery (toDbValue -> assetClass) = do
           logWarn TipIsGenesis
           pure (UtxosResponse TipAtGenesis (Page pageQuery Nothing []))
       tp           -> do
-          let query = do
-                rowRef <- fmap _unspentOutputRowOutRef (all_ (unspentOutputRows db))
-                rowClass <- leftJoin_
-                            (fmap _assetClassRowOutRef (filter_ (\row -> _assetClassRowAssetClass row ==. val_ assetClass) (all_ (assetClassRows db))))
-                            (\row -> row ==. rowRef)
-                utxi <- leftJoin_ (fmap _unmatchedInputRowOutRef $ all_ (unmatchedInputRows db)) (\utxi -> rowRef ==. utxi)
-                guard_ (isNothing_ utxi)
-                guard_ (isJust_ rowClass)
-                pure rowRef
+          let query =
+                fmap _assetClassRowOutRef
+                  $ filter_ (\row -> (_assetClassRowAssetClass row ==. val_ assetClass)
+                      &&. exists_ (filter_ (\utxo -> _assetClassRowOutRef row ==. _unspentOutputRowOutRef utxo) (all_ (unspentOutputRows db)))
+                      &&. not_ (exists_ (filter_ (\utxi -> _assetClassRowOutRef row ==. _unmatchedInputRowOutRef utxi) (all_ (unmatchedInputRows db))))
+                      )
+                  $ all_ (assetClassRows db)
 
           outRefs <- selectPage (fmap toDbValue pageQuery) query
           let page = fmap fromDbValue outRefs
 
           pure (UtxosResponse tp page)
-
-getTxsFromTxIds
-  :: forall effs.
-    ( Member BeamEffect effs
-    )
-  => [TxId]
-  -> Eff effs [ChainIndexTx]
-getTxsFromTxIds txIds =
-  do
-    let
-      txIds' = toDbValue <$> txIds
-      query =
-        fmap _txRowTx
-          $ filter_ (\row -> _txRowTxId row `in_` fmap val_ txIds')
-          $ all_ (txRows db)
-    txs <- selectList $ select query
-    pure $ fmap fromDbValue txs
 
 getTxoSetAtAddress
   :: forall effs.
@@ -396,24 +313,14 @@ handleControl = \case
         newState <- restoreStateFromDb
         put newState
     CollectGarbage -> do
-        -- Rebuild the index using only transactions that still have at
-        -- least one output in the UTXO set
-        utxos <- gets $
-            Set.toList
-            . Set.map txOutRefId
-            . TxUtxoBalance.unspentOutputs
-            . UtxoState.utxoState
-        rows <- foldMap fromTx . catMaybes <$> mapM getTxFromTxId utxos
         combined $
             [ DeleteRows $ truncateTable (datumRows db)
             , DeleteRows $ truncateTable (scriptRows db)
             , DeleteRows $ truncateTable (redeemerRows db)
-            , DeleteRows $ truncateTable (txRows db)
             , DeleteRows $ truncateTable (utxoOutRefRows db)
             , DeleteRows $ truncateTable (addressRows db)
             , DeleteRows $ truncateTable (assetClassRows db)
-            ] ++ getConst (zipTables Proxy (\tbl (InsertRows r) -> Const [AddRowsInBatches batchSize tbl r]) db rows)
-
+            ]
         where
             truncateTable table = delete table (const (val_ True))
     GetDiagnostics -> diagnostics
@@ -534,8 +441,7 @@ fromTx :: ChainIndexTx -> Db InsertRows
 fromTx tx = mempty
     { datumRows = fromMap citxData
     , scriptRows = fromMap citxScripts
-    , redeemerRows = fromPairs (Map.toList . txRedeemersWithHash)
-    , txRows = InsertRows [toDbValue (_citxTxId tx, tx)]
+    , redeemerRows = fromMap citxRedeemers
     , addressRows = fromPairs (fmap credential . txOutsWithRef)
     , assetClassRows = fromPairs (concatMap assetClasses . txOutsWithRef)
     }
@@ -566,19 +472,15 @@ diagnostics ::
     , Member (State ChainIndexState) effs
     ) => Eff effs Diagnostics
 diagnostics = do
-    numTransactions <- selectOne . select $ aggregate_ (const countAll_) (all_ (txRows db))
-    txIds <- queryList . select $ _txRowTxId <$> limit_ 10 (all_ (txRows db))
     numScripts <- selectOne . select $ aggregate_ (const countAll_) (all_ (scriptRows db))
     numAddresses <- selectOne . select $ aggregate_ (const countAll_) $ nub_ $ _addressRowCred <$> all_ (addressRows db)
     numAssetClasses <- selectOne . select $ aggregate_ (const countAll_) $ nub_ $ _assetClassRowAssetClass <$> all_ (assetClassRows db)
     TxUtxoBalance outputs inputs <- UtxoState._usTxUtxoData . UtxoState.utxoState <$> get @ChainIndexState
 
     pure $ Diagnostics
-        { numTransactions    = fromMaybe (-1) numTransactions
-        , numScripts         = fromMaybe (-1) numScripts
+        { numScripts         = fromMaybe (-1) numScripts
         , numAddresses       = fromMaybe (-1) numAddresses
         , numAssetClasses    = fromMaybe (-1) numAssetClasses
         , numUnspentOutputs  = length outputs
         , numUnmatchedInputs = length inputs
-        , someTransactions   = txIds
         }

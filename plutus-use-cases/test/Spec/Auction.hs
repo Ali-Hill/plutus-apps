@@ -21,7 +21,6 @@ module Spec.Auction
     , prop_SanityCheckAssertions
     , prop_Whitelist
     , prop_CrashTolerance
-    , prop_doubleSatisfaction
     , check_propAuctionWithCoverage
     ) where
 
@@ -35,15 +34,15 @@ import Data.Default (Default (def))
 import Data.Monoid (Last (..))
 
 import Ledger (Ada, Slot (..), Value)
-import Ledger qualified as Ledger
 import Ledger.Ada qualified as Ada
+import Ledger.Generators (someTokenValue)
 import Plutus.Contract hiding (currentSlot)
 import Plutus.Contract.Test hiding (not)
-import Plutus.Script.Utils.V1.Generators (someTokenValue)
 import Streaming.Prelude qualified as S
 import Wallet.Emulator.Folds qualified as Folds
 import Wallet.Emulator.Stream qualified as Stream
 
+import Ledger qualified
 import Ledger.TimeSlot (SlotConfig)
 import Ledger.TimeSlot qualified as TimeSlot
 import Plutus.Contract.Test.ContractModel
@@ -53,9 +52,19 @@ import Plutus.Contracts.Auction hiding (Bid)
 import Plutus.Trace.Emulator qualified as Trace
 import PlutusTx.Monoid (inv)
 
+import Plutus.Contract.Test.ContractModel.Symbolics (toSymValue) --needed to add
+
 import Test.QuickCheck hiding ((.&&.))
 import Test.Tasty
 import Test.Tasty.QuickCheck (testProperty)
+
+{-
+test :: Value 
+test = help (Ada.adaValueOf (fromInteger 3)) (Ada.adaValueOf (fromInteger 2)) 
+
+help :: Value -> Value -> Value
+help x v = inv x <> v 
+-} 
 
 slotCfg :: SlotConfig
 slotCfg = def
@@ -78,7 +87,6 @@ theToken =
 options :: CheckOptions
 options = defaultCheckOptionsContractModel
     & changeInitialWalletValue w1 ((<>) theToken)
-    & (increaseTransactionLimits . increaseTransactionLimits)
 
 seller :: Contract AuctionOutput SellerSchema AuctionError ()
 seller = auctionSeller (apAsset params) (apEndTime params)
@@ -145,7 +153,7 @@ trace2FinalState =
             }
         , auctionThreadToken = Last $ Just threadToken
         }
-
+        
 threadToken :: ThreadToken
 threadToken =
     let con = getThreadToken :: Contract AuctionOutput SellerSchema AuctionError ThreadToken
@@ -215,7 +223,7 @@ instance ContractModel AuctionModel where
         where
             p    = s ^. contractState . phase
             b    = s ^. contractState . currentBid
-            validBid = choose ((b+1) `max` Ada.getLovelace (Ada.adaOf 2),
+            validBid = choose ((b+1) `max` Ada.getLovelace Ledger.minAdaTxOut,
                                b + Ada.getLovelace (Ada.adaOf 100))
 
     precondition s Init = s ^. contractState . phase == NotStarted
@@ -223,7 +231,7 @@ instance ContractModel AuctionModel where
       -- In order to place a bid, we need to satisfy the constraint where
       -- each tx output must have at least N Ada.
       s ^. contractState . phase /= NotStarted &&
-      bid >= Ada.getLovelace (Ada.adaOf 2) &&
+      bid >= Ada.getLovelace (Ledger.minAdaTxOut) &&
       bid > s ^. contractState . currentBid
 
     nextReactiveState slot' = do
@@ -233,20 +241,19 @@ instance ContractModel AuctionModel where
         w   <- viewContractState winner
         bid <- viewContractState currentBid
         phase .= AuctionOver
-        deposit w theToken
+        deposit w $ Ada.toValue Ledger.minAdaTxOut <> theToken
         deposit w1 $ Ada.lovelaceValueOf bid
-        {-
         w1change <- viewModelState $ balanceChange w1  -- since the start of the test
         assertSpec ("w1 final balance is wrong:\n  "++show w1change) $
-          w1change == toSymValue (inv theToken <> Ada.lovelaceValueOf bid) ||
+          w1change == toSymValue (inv (theToken <> (Ada.toValue Ledger.minAdaTxOut)) <> Ada.lovelaceValueOf bid) ||
           w1change == mempty
-        -}
+--Ada.getLovelace (Ledger.minAdaTxOut)        
 
     nextState cmd = do
         case cmd of
             Init -> do
                 phase .= Bidding
-                withdraw w1 theToken
+                withdraw w1 $ Ada.toValue Ledger.minAdaTxOut <> theToken
                 wait 3
             Bid w bid -> do
                 currentPhase <- viewContractState phase
@@ -273,11 +280,6 @@ instance ContractModel AuctionModel where
 
     shrinkAction _ Init      = []
     shrinkAction _ (Bid w v) = [ Bid w v' | v' <- shrink v ]
-
-    monitoring _ (Bid _ bid) =
-      classify (Ada.lovelaceOf bid == Ada.adaOf 100 - (Ledger.minAdaTxOut <> Ledger.maxFee))
-        "Maximum bid reached"
-    monitoring _ _ = id
 
 prop_Auction :: Actions AuctionModel -> Property
 prop_Auction script =
@@ -338,10 +340,7 @@ check_propAuctionWithCoverage = do
     withMaxSuccess 1000 $
       propRunActionsWithOptions @AuctionModel
         (set minLogLevel Critical options) covopts (const (pure True))
-  writeCoverageReport "Auction" cr
-
-prop_doubleSatisfaction :: Actions AuctionModel -> Property
-prop_doubleSatisfaction = checkDoubleSatisfactionWithOptions options defaultCoverageOptions
+  writeCoverageReport "Auction" covIdx cr
 
 tests :: TestTree
 tests =
@@ -350,8 +349,8 @@ tests =
             (assertDone seller (Trace.walletInstanceTag w1) (const True) "seller should be done"
             .&&. assertDone (buyer threadToken) (Trace.walletInstanceTag w2) (const True) "buyer should be done"
             .&&. assertAccumState (buyer threadToken) (Trace.walletInstanceTag w2) ((==) trace1FinalState ) "wallet 2 final state should be OK"
-            .&&. walletFundsChange w1 (Ada.toValue trace1WinningBid <> inv theToken)
-            .&&. walletFundsChange w2 (inv (Ada.toValue trace1WinningBid) <> theToken))
+            .&&. walletFundsChange w1 (Ada.toValue (-Ledger.minAdaTxOut) <> Ada.toValue trace1WinningBid <> inv theToken)
+            .&&. walletFundsChange w2 (Ada.toValue Ledger.minAdaTxOut <> inv (Ada.toValue trace1WinningBid) <> theToken))
             auctionTrace1
         , checkPredicateOptions options "run an auction with multiple bids"
             (assertDone seller (Trace.walletInstanceTag w1) (const True) "seller should be done"
@@ -359,8 +358,8 @@ tests =
             .&&. assertDone (buyer threadToken) (Trace.walletInstanceTag w3) (const True) "3rd party should be done"
             .&&. assertAccumState (buyer threadToken) (Trace.walletInstanceTag w2) ((==) trace2FinalState) "wallet 2 final state should be OK"
             .&&. assertAccumState (buyer threadToken) (Trace.walletInstanceTag w3) ((==) trace2FinalState) "wallet 3 final state should be OK"
-            .&&. walletFundsChange w1 (Ada.toValue trace2WinningBid <> inv theToken)
-            .&&. walletFundsChange w2 (inv (Ada.toValue trace2WinningBid) <> theToken)
+            .&&. walletFundsChange w1 (Ada.toValue (-Ledger.minAdaTxOut) <> Ada.toValue trace2WinningBid <> inv theToken)
+            .&&. walletFundsChange w2 (Ada.toValue Ledger.minAdaTxOut <> inv (Ada.toValue trace2WinningBid) <> theToken)
             .&&. walletFundsChange w3 mempty)
             auctionTrace2
         , testProperty "QuickCheck property" $
@@ -369,6 +368,4 @@ tests =
             expectFailure $ noShrinking prop_NoLockedFunds
         , testProperty "prop_Reactive" $
             withMaxSuccess 1000 (propSanityCheckReactive @AuctionModel)
-        , testProperty "prop_doubleSatisfaction fails" $
-            expectFailure $ noShrinking prop_doubleSatisfaction
         ]

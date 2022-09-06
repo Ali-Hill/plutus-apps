@@ -33,9 +33,11 @@ import Data.Map qualified as Map
 import Prelude (Semigroup (..))
 
 import GHC.Generics (Generic)
-import Ledger (Address, POSIXTime, POSIXTimeRange, PaymentPubKeyHash (unPaymentPubKeyHash))
+import Ledger (Address, POSIXTime, POSIXTimeRange, PaymentPubKeyHash (unPaymentPubKeyHash), Validator)
 import Ledger.Constraints (TxConstraints, mustBeSignedBy, mustPayToTheScript, mustValidateIn)
 import Ledger.Constraints qualified as Constraints
+import Ledger.Contexts (ScriptContext (..), TxInfo (..))
+import Ledger.Contexts qualified as Validation
 import Ledger.Interval qualified as Interval
 import Ledger.Tx qualified as Tx
 import Ledger.Typed.Scripts (ValidatorTypes (..))
@@ -43,8 +45,7 @@ import Ledger.Typed.Scripts qualified as Scripts
 import Ledger.Value (Value)
 import Ledger.Value qualified as Value
 import Plutus.Contract
-import Plutus.V1.Ledger.Api (ScriptContext (..), TxInfo (..), Validator)
-import Plutus.V1.Ledger.Contexts qualified as Validation
+import Plutus.Contract.Typed.Tx qualified as Typed
 import PlutusTx qualified
 import PlutusTx.Prelude hiding (Semigroup (..), fold)
 import Prelude qualified as Haskell
@@ -151,7 +152,7 @@ typedValidator = Scripts.mkTypedValidatorParam @Vesting
     $$(PlutusTx.compile [|| validate ||])
     $$(PlutusTx.compile [|| wrap ||])
     where
-        wrap = Scripts.mkUntypedValidator
+        wrap = Scripts.wrapValidator
 
 contractAddress :: VestingParams -> Address
 contractAddress = Scripts.validatorAddress . typedValidator
@@ -187,20 +188,11 @@ vestFundsC
     -> Contract w s e ()
 vestFundsC vesting = mapError (review _VestingError) $ do
     let tx = payIntoContract (totalAmount vesting)
-    mkTxConstraints (Constraints.plutusV1TypedValidatorLookups $ typedValidator vesting) tx
-      >>= adjustUnbalancedTx >>= void . submitUnbalancedTx
+    mkTxConstraints (Constraints.typedValidatorLookups $ typedValidator vesting) tx
+      >>= void . submitUnbalancedTx . Constraints.adjustUnbalancedTx
 
 data Liveness = Alive | Dead
 
-{- Note [slots and POSIX time]
- - A slot has a given duration. As a consequence, 'currentTime' does not return exactly the current time but,
- - by convention, the last POSIX time of the current slot.
- - A consequence to this design choice is that when we use this time to build the 'mustValidateIn constraints',
- - we get a range that start at the slot after the current one.
- - To be sure that the validity range is valid when the transaction will be validated by the pool, we must therefore
- - wait the next slot before sumitting it (which is done using 'waitNSlots 1').
- -
- -}
 retrieveFundsC
     :: ( AsVestingError e
        )
@@ -210,12 +202,12 @@ retrieveFundsC
 retrieveFundsC vesting payment = mapError (review _VestingError) $ do
     let inst = typedValidator vesting
         addr = Scripts.validatorAddress inst
-    now <- currentTime
+    nextTime <- awaitTime 0
     unspentOutputs <- utxosAt addr
     let
         currentlyLocked = foldMap (view Tx.ciTxOutValue) (Map.elems unspentOutputs)
         remainingValue = currentlyLocked - payment
-        mustRemainLocked = totalAmount vesting - availableAt vesting now
+        mustRemainLocked = totalAmount vesting - availableAt vesting nextTime
         maxPayment = currentlyLocked - mustRemainLocked
 
     when (remainingValue `Value.lt` mustRemainLocked)
@@ -226,15 +218,14 @@ retrieveFundsC vesting payment = mapError (review _VestingError) $ do
         remainingOutputs = case liveness of
                             Alive -> payIntoContract remainingValue
                             Dead  -> mempty
-        tx = Constraints.collectFromTheScript unspentOutputs ()
+        tx = Typed.collectFromScript unspentOutputs ()
                 <> remainingOutputs
-                <> mustValidateIn (Interval.from now)
+                <> mustValidateIn (Interval.from nextTime)
                 <> mustBeSignedBy (vestingOwner vesting)
                 -- we don't need to add a pubkey output for 'vestingOwner' here
                 -- because this will be done by the wallet when it balances the
                 -- transaction.
-    void $ waitNSlots 1 -- see [slots and POSIX time]
-    mkTxConstraints (Constraints.plutusV1TypedValidatorLookups inst
+    mkTxConstraints (Constraints.typedValidatorLookups inst
                   <> Constraints.unspentOutputs unspentOutputs) tx
-      >>= adjustUnbalancedTx >>= void . submitUnbalancedTx
+      >>= void . submitUnbalancedTx . Constraints.adjustUnbalancedTx
     return liveness

@@ -2,7 +2,7 @@ Explanations
 ============
 
 .. toctree::
-   :maxdepth: 2
+   :maxdepth: 3
    :titlesonly:
 
    platform

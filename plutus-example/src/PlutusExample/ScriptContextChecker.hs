@@ -49,11 +49,12 @@ import Cardano.Ledger.Crypto (StandardCrypto)
 import Cardano.Slotting.EpochInfo (EpochInfo, hoistEpochInfo)
 import Cardano.Slotting.Time (SystemStart)
 import Control.Monad.Trans.Except
+import Ledger qualified as Plutus
+import Ledger.Typed.Scripts qualified as Scripts
 import Ouroboros.Consensus.HardFork.Combinator.AcrossEras qualified as Consensus
 import Ouroboros.Consensus.HardFork.History qualified as Consensus
 import Ouroboros.Network.Protocol.LocalStateQuery.Type (AcquireFailure)
-import Plutus.Script.Utils.V1.Typed.Scripts qualified as Scripts
-import Plutus.V1.Ledger.Api qualified as Plutus
+import Plutus.V1.Ledger.DCert qualified as Plutus
 import PlutusTx qualified
 import PlutusTx.AssocMap qualified as AMap
 import PlutusTx.IsData.Class
@@ -85,6 +86,11 @@ data MyCustomRedeemer
 
 PlutusTx.unstableMakeIsData ''MyCustomDatum
 PlutusTx.unstableMakeIsData ''MyCustomRedeemer
+
+data ScriptContextTest
+instance Scripts.ValidatorTypes ScriptContextTest where
+    type instance DatumType ScriptContextTest    = MyCustomDatum
+    type instance RedeemerType ScriptContextTest = MyCustomRedeemer
 
 {-# INLINABLE mkValidator #-}
 mkValidator :: MyCustomDatum-> MyCustomRedeemer -> Plutus.ScriptContext -> Bool
@@ -150,11 +156,15 @@ mkValidator _datum (MyCustomRedeemer txouts txins minted txValidRange _fee datum
    sPurpose :: Plutus.ScriptPurpose
    sPurpose = Plutus.scriptContextPurpose scriptContext
 
-validator :: Plutus.Validator
-validator = Plutus.mkValidatorScript
+inst :: Scripts.TypedValidator ScriptContextTest
+inst = Scripts.mkTypedValidator @ScriptContextTest
+    $$(PlutusTx.compile [|| mkValidator ||])
     $$(PlutusTx.compile [|| wrap ||])
   where
-    wrap = Scripts.mkUntypedValidator mkValidator
+    wrap = Scripts.wrapValidator @MyCustomDatum @MyCustomRedeemer
+
+validator :: Plutus.Validator
+validator = Scripts.validatorScript inst
 
 script :: Plutus.Script
 script = Plutus.unValidatorScript validator
@@ -400,9 +410,10 @@ mkPolicy (MyCustomRedeemer _ _ minted txValidRange _fee _ _ signatories mPurpose
    txInfo = Plutus.scriptContextTxInfo scriptContext
 
 policy :: Scripts.MintingPolicy
-policy = Plutus.mkMintingPolicyScript $$(PlutusTx.compile [|| wrap ||])
+policy = Plutus.mkMintingPolicyScript
+           $$(PlutusTx.compile [|| wrap ||])
  where
-   wrap = Scripts.mkUntypedMintingPolicy mkPolicy
+   wrap = Scripts.wrapMintingPolicy mkPolicy
 
 plutusMintingScript :: Plutus.Script
 plutusMintingScript =

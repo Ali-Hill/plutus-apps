@@ -71,7 +71,6 @@ module Plutus.Contract.Test(
     , minLogLevel
     , emulatorConfig
     , changeInitialWalletValue
-    , increaseTransactionLimits
     -- * Etc
     , goldenPir
     ) where
@@ -89,8 +88,8 @@ import Control.Monad.Freer.Reader
 import Control.Monad.Freer.Writer (Writer (..), tell)
 import Control.Monad.IO.Class (MonadIO (liftIO))
 import Data.Default (Default (..))
-import Data.Foldable (fold, toList, traverse_)
-import Data.Map qualified as Map
+import Data.Foldable (fold, traverse_)
+import Data.Map qualified as M
 import Data.Maybe (fromJust, mapMaybe)
 import Data.OpenUnion
 import Data.Proxy (Proxy (..))
@@ -120,6 +119,7 @@ import Plutus.Contract.Types (Contract (..), IsContract (..), ResumableResult, s
 import PlutusTx (CompiledCode, FromData (..), getPir)
 import PlutusTx.Prelude qualified as P
 
+import Ledger (Validator)
 import Ledger qualified
 import Ledger.Address (Address)
 import Ledger.Generators (GeneratorModel, Mockchain (..))
@@ -127,14 +127,11 @@ import Ledger.Generators qualified as Gen
 import Ledger.Index (ScriptValidationEvent, ValidationError)
 import Ledger.Slot (Slot)
 import Ledger.Value (Value)
-import Plutus.V1.Ledger.Scripts (Validator)
-import Plutus.V1.Ledger.Scripts qualified as Ledger
 
 import Data.IORef
 import Plutus.Contract.Test.Coverage
-import Plutus.Contract.Test.MissingLovelace (calculateDelta)
 import Plutus.Contract.Trace as X
-import Plutus.Trace.Emulator (EmulatorConfig (..), EmulatorTrace, params, runEmulatorStream)
+import Plutus.Trace.Emulator (EmulatorConfig (..), EmulatorTrace, runEmulatorStream)
 import Plutus.Trace.Emulator.Types (ContractConstraints, ContractInstanceLog, ContractInstanceState (..),
                                     ContractInstanceTag, UserThreadMsg)
 import PlutusTx.Coverage
@@ -146,7 +143,7 @@ import Wallet.Emulator.Folds (EmulatorFoldErr (..), Outcome (..), describeError,
 import Wallet.Emulator.Folds qualified as Folds
 import Wallet.Emulator.Stream (filterLogLevel, foldEmulatorStreamM, initialChainState, initialDist)
 
-type TestEffects = '[Reader InitialDistribution, Error EmulatorFoldErr, Writer (Doc Void), Writer CoverageData]
+type TestEffects = '[Reader InitialDistribution, Error EmulatorFoldErr, Writer (Doc Void), Writer CoverageReport]
 newtype TracePredicateF a = TracePredicate (forall effs. Members TestEffects effs => FoldM (Eff effs) EmulatorEvent a)
   deriving (Functor)
 instance Applicative TracePredicateF where
@@ -186,11 +183,6 @@ defaultCheckOptions =
 changeInitialWalletValue :: Wallet -> (Value -> Value) -> CheckOptions -> CheckOptions
 changeInitialWalletValue wallet = over (emulatorConfig . initialChainState . _Left . ix wallet)
 
--- | Set higher limits on transaction size and execution units.
--- This can be used to work around @MaxTxSizeUTxO@ and @ExUnitsTooBigUTxO@ errors.
--- Note that if you need this your Plutus script will probably not validate on Mainnet.
-increaseTransactionLimits :: CheckOptions -> CheckOptions
-increaseTransactionLimits = over (emulatorConfig . params) Ledger.increaseTransactionLimits
 
 -- | Check if the emulator trace meets the condition
 checkPredicate ::
@@ -239,7 +231,7 @@ checkPredicateInner :: forall m.
     -> EmulatorTrace ()
     -> (String -> m ()) -- ^ Print out debug information in case of test failures
     -> (Bool -> m ()) -- ^ assert
-    -> (CoverageData -> m ())
+    -> (CoverageReport -> m ())
     -> m ()
 checkPredicateInner opts@CheckOptions{_emulatorConfig} predicate action annot assert cover =
     checkPredicateInnerStream opts predicate (S.void $ runEmulatorStream _emulatorConfig action) annot assert cover
@@ -251,17 +243,17 @@ checkPredicateInnerStream :: forall m.
     -> (forall effs. S.Stream (S.Of (LogMessage EmulatorEvent)) (Eff effs) ())
     -> (String -> m ()) -- ^ Print out debug information in case of test failures
     -> (Bool -> m ()) -- ^ assert
-    -> (CoverageData -> m ())
+    -> (CoverageReport -> m ())
     -> m ()
 checkPredicateInnerStream CheckOptions{_minLogLevel, _emulatorConfig} (TracePredicate predicate) theStream annot assert cover = do
     let dist = _emulatorConfig ^. initialChainState . to initialDist
         consumedStream :: Eff (TestEffects :++: '[m]) Bool
         consumedStream = S.fst' <$> foldEmulatorStreamM (liftA2 (&&) predicate generateCoverage) theStream
 
-        generateCoverage = flip postMapM (L.generalize Folds.emulatorLog) $ (True <$) . tell @CoverageData . getCoverageData
+        generateCoverage = flip postMapM (L.generalize Folds.emulatorLog) $ (True <$) . tell @CoverageReport . getCoverageReport
 
     result <- runM
-                $ interpretM @(Writer CoverageData) @m (\case { Tell r -> cover r })
+                $ interpretM @(Writer CoverageReport) @m (\case { Tell r -> cover r })
                 $ interpretM @(Writer (Doc Void)) @m (\case { Tell d -> annot $ Text.unpack $ renderStrict $ layoutPretty defaultLayoutOptions d })
                 $ runError
                 $ runReader dist
@@ -284,11 +276,7 @@ checkPredicateInnerStream CheckOptions{_minLogLevel, _emulatorConfig} (TracePred
                 assert False
             Right r -> assert r
 
--- | A version of 'checkPredicateGen' with configurable 'CheckOptions'.
---
---   Note that the 'InitialChainState' in the 'EmulatorConfig' of the
---   'CheckOptions' will be replaced with the 'mockchainInitialTxPool' generated
---   by the model.
+-- | A version of 'checkPredicateGen' with configurable 'CheckOptions'
 checkPredicateGenOptions ::
     CheckOptions
     -> GeneratorModel
@@ -385,22 +373,22 @@ valueAtAddress address check = TracePredicate $
 getTxOutDatum ::
   forall d.
   (FromData d) =>
-  Ledger.CardanoTx ->
-  Ledger.TxOut ->
+  Ledger.TxOutRef ->
+  Ledger.TxOutTx ->
   Maybe d
-getTxOutDatum _ (Ledger.TxOut _ _ Nothing) = Nothing
-getTxOutDatum tx' (Ledger.TxOut _ _ (Just datumHash)) =
-    Map.lookup datumHash (Ledger.getCardanoTxData tx') >>= (Ledger.getDatum >>> fromBuiltinData @d)
+getTxOutDatum _ (Ledger.TxOutTx _ (Ledger.TxOut _ _ Nothing)) = Nothing
+getTxOutDatum _ (Ledger.TxOutTx tx' (Ledger.TxOut _ _ (Just datumHash))) =
+    Ledger.lookupDatum tx' datumHash >>= (Ledger.getDatum >>> fromBuiltinData @d)
 
 dataAtAddress :: forall d . FromData d => Address -> ([d] -> Bool) -> TracePredicate
 dataAtAddress address check = TracePredicate $
     flip postMapM (L.generalize $ Folds.utxoAtAddress address) $ \utxo -> do
       let
-        datums = mapMaybe (uncurry $ getTxOutDatum @d) $ toList utxo
+        datums = mapMaybe (uncurry $ getTxOutDatum @d) $ M.toList utxo
         result = check datums
       unless result $ do
           tell @(Doc Void) ("Data at address" <+> pretty address <+> "was"
-              <+> foldMap (foldMap pretty . Ledger.getCardanoTxData . fst) utxo)
+              <+> foldMap (foldMap pretty . Ledger.txData . Ledger.txOutTxTx) utxo)
       pure result
 
 waitingForSlot
@@ -577,12 +565,11 @@ walletFundsExactChange :: Wallet -> Value -> TracePredicate
 walletFundsExactChange = walletFundsChangeImpl True
 
 walletFundsChangeImpl :: Bool -> Wallet -> Value -> TracePredicate
-walletFundsChangeImpl exact w dlt' = TracePredicate $
-    flip postMapM (L.generalize $ (,,) <$> Folds.walletFunds w <*> Folds.walletFees w <*> Folds.walletsAdjustedTxEvents) $ \(finalValue', fees, allWalletsTxOutCosts) -> do
+walletFundsChangeImpl exact w dlt = TracePredicate $
+    flip postMapM (L.generalize $ (,) <$> Folds.walletFunds w <*> Folds.walletFees w) $ \(finalValue', fees) -> do
         dist <- ask @InitialDistribution
         let initialValue = fold (dist ^. at w)
             finalValue = finalValue' P.+ if exact then mempty else fees
-            dlt = calculateDelta dlt' (Ada.fromValue initialValue) (Ada.fromValue finalValue) allWalletsTxOutCosts
             result = initialValue P.+ dlt == finalValue
         unless result $ do
             tell @(Doc Void) $ vsep $

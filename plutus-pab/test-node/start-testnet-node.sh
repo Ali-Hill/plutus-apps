@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 
 cardano-node run \
     --config testnet/testnet-config.json \

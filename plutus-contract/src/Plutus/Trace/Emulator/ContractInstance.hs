@@ -52,7 +52,7 @@ import Data.Maybe (listToMaybe, mapMaybe)
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import Ledger.Blockchain (OnChainTx (Invalid, Valid))
-import Ledger.Tx (Address, TxIn (txInRef), TxOut (TxOut, txOutAddress), TxOutRef, getCardanoTxId)
+import Ledger.Tx (Address, TxIn (txInRef), TxOut (TxOut, txOutAddress), TxOutRef, txId)
 import Plutus.ChainIndex (ChainIndexQueryEffect, ChainIndexTx (ChainIndexTx, _citxOutputs, _citxTxId),
                           ChainIndexTxOutputs (InvalidTx, ValidTx), RollbackState (Committed),
                           TxOutState (Spent, Unspent), TxValidity (TxInvalid, TxValid), _ValidTx, citxInputs,
@@ -250,16 +250,15 @@ handleBlockchainQueries =
     RequestHandler.handleUnbalancedTransactions
     <> RequestHandler.handlePendingTransactions
     <> RequestHandler.handleChainIndexQueries
-    <> RequestHandler.handleOwnAddressesQueries
+    <> RequestHandler.handleOwnPaymentPubKeyHashQueries
     <> RequestHandler.handleOwnInstanceIdQueries
     <> RequestHandler.handleSlotNotifications
-    <> RequestHandler.handleCurrentPABSlotQueries
-    <> RequestHandler.handleCurrentChainIndexSlotQueries
+    <> RequestHandler.handleCurrentSlotQueries
     <> RequestHandler.handleTimeNotifications
     <> RequestHandler.handleCurrentTimeQueries
     <> RequestHandler.handleTimeToSlotConversions
     <> RequestHandler.handleYieldedUnbalancedTx
-    <> RequestHandler.handleAdjustUnbalancedTx
+
 
 decodeEvent ::
     forall effs.
@@ -312,8 +311,8 @@ updateTxStatus txns = do
     -- Check whether the contract instance is waiting for a status change of any
     -- of the new transactions. If that is the case, call 'addResponse' to send the
     -- response.
-    let txWithStatus (Invalid tx) = (getCardanoTxId tx, TxInvalid)
-        txWithStatus (Valid tx)   = (getCardanoTxId tx, TxValid)
+    let txWithStatus (Invalid tx) = (txId tx, TxInvalid)
+        txWithStatus (Valid tx)   = (txId tx, TxValid)
         statusMap = Map.fromList $ fmap txWithStatus txns
     hks <- mapMaybe (traverse (preview E._AwaitTxStatusChangeReq)) <$> getHooks @w @s @e
     let mpReq Request{rqID, itID, rqRequest=txid} =
@@ -342,7 +341,7 @@ updateTxOutStatus txns = do
     -- Check whether the contract instance is waiting for a status change of a
     -- transaction output of any of the new transactions. If that is the case,
     -- call 'addResponse' to sent the response.
-    let getSpentOutputs = map txInRef . view citxInputs
+    let getSpentOutputs = Set.toList . Set.map txInRef . view citxInputs
         -- If the tx is invalid, there is not outputs
         txWithTxOutStatus tx@ChainIndexTx {_citxTxId, _citxOutputs = InvalidTx} =
           fmap (, Committed TxInvalid (Spent _citxTxId)) $ getSpentOutputs tx
@@ -532,6 +531,6 @@ indexBlock :: [ChainIndexTx] -> IndexedBlock
 indexBlock = foldMap indexTx where
   indexTx otx =
     IndexedBlock
-      { ibUtxoSpent = Map.fromSet (const otx) $ Set.fromList $ map txInRef $ view citxInputs otx
+      { ibUtxoSpent = Map.fromSet (const otx) $ Set.map txInRef $ view citxInputs otx
       , ibUtxoProduced = Map.fromListWith (<>) $ view (citxOutputs . _ValidTx) otx >>= (\TxOut{txOutAddress} -> [(txOutAddress, otx :| [])])
       }

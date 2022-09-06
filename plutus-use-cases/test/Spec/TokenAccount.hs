@@ -10,6 +10,7 @@ import Control.Monad (void)
 import Control.Monad.Freer (run)
 import Control.Monad.Freer.Error (runError)
 import Data.Default (Default (..))
+import Ledger qualified
 import Ledger.Ada qualified as Ada
 import Ledger.Value (TokenName, Value)
 import Plutus.Contract (Contract)
@@ -47,8 +48,8 @@ tests = testGroup "token account"
     , checkPredicate "Transfer & redeem all funds"
         (assertNoFailedTransactions
         .&&. assertNotDone contract (Trace.walletInstanceTag w1) "contract should not have any errors"
-        .&&. walletFundsChange w1 (Ada.adaValueOf (-10))
-        .&&. walletFundsChange w2 (theToken <> Ada.adaValueOf 10)
+        .&&. walletFundsChange w1 (Ada.toValue (-Ledger.minAdaTxOut) <> Ada.adaValueOf (-10))
+        .&&. walletFundsChange w2 (theToken <> Ada.toValue Ledger.minAdaTxOut <> Ada.adaValueOf 10)
         )
         tokenAccountTrace
 

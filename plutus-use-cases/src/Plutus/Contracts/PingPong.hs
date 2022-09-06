@@ -40,6 +40,7 @@ import GHC.Generics (Generic)
 import Ledger.Ada qualified as Ada
 import Ledger.Constraints (TxConstraints)
 import Ledger.Typed.Scripts qualified as Scripts
+import Ledger.Typed.Tx (TypedScriptTxOut (..))
 import PlutusTx qualified
 import PlutusTx.Prelude hiding (Applicative (..), check)
 
@@ -106,7 +107,7 @@ typedValidator = Scripts.mkTypedValidator @(SM.StateMachine PingPongState Input)
     $$(PlutusTx.compile [|| mkValidator ||])
     $$(PlutusTx.compile [|| wrap ||])
     where
-        wrap = Scripts.mkUntypedValidator @PingPongState @Input
+        wrap = Scripts.wrapValidator @PingPongState @Input
 
 machineInstance :: SM.StateMachineInstance PingPongState Input
 machineInstance = SM.StateMachineInstance machine typedValidator
@@ -123,9 +124,10 @@ run ::
     -> Promise w PingPongSchema PingPongError ()
     -> Contract w PingPongSchema PingPongError ()
 run expectedState action = do
-    let go Nothing = throwError StoppedUnexpectedly
+    let extractState = tyTxOutData . SM.ocsTxOut
+        go Nothing = throwError StoppedUnexpectedly
         go (Just currentState)
-            | SM.getStateData currentState == expectedState = awaitPromise action
+            | extractState currentState == expectedState = awaitPromise action
             | otherwise = runWaitForUpdate >>= go
     maybeState <- SM.getOnChainState client
     let datum = fmap fst maybeState
@@ -156,14 +158,14 @@ combined = forever (selectList [initialise, ping, pong, runStop, wait]) where
         newState <- runWaitForUpdate
         case newState of
             Nothing -> logWarn @Haskell.String "runWaitForUpdate: Nothing"
-            Just ocs -> do
-                logInfo $ "new state: " <> Haskell.show (SM.getStateData ocs)
-                tell (Last $ Just $ SM.getStateData ocs)
+            Just SM.OnChainState{SM.ocsTxOut=TypedScriptTxOut{tyTxOutData=s}} -> do
+                logInfo $ "new state: " <> Haskell.show s
+                tell (Last $ Just s)
 
 simplePingPongAuto :: Contract (Last PingPongState) PingPongSchema PingPongError ()
 simplePingPongAuto = do
   logInfo @Haskell.String "Initialising PingPongAuto"
-  void $ SM.runInitialise client Pinged (Ada.lovelaceValueOf 2)
+  void $ (SM.runInitialise client Pinged (Ada.lovelaceValueOf 2))
   logInfo @Haskell.String "Waiting for PONG"
   awaitPromise pong
   logInfo @Haskell.String "Waiting for PING"

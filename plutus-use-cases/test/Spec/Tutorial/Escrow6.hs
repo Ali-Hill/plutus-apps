@@ -16,7 +16,7 @@
 
 module Spec.Tutorial.Escrow6(prop_Escrow, prop_FinishEscrow, prop_FinishFast,
                              prop_NoLockedFunds, prop_NoLockedFundsFast, prop_CrashTolerance,
-                             check_propEscrowWithCoverage, EscrowModel) where
+                             check_propEscrowWithCoverage, certification, EscrowModel, covIdx) where
 
 import Control.Lens hiding (both, elements)
 import Control.Monad (void, when)
@@ -26,7 +26,7 @@ import Data.Foldable
 import Data.Map (Map)
 import Data.Map qualified as Map
 
-import Ledger (Slot (..), minAdaTxOut)
+import Ledger (Datum, Slot (..), minAdaTxOut)
 import Ledger.Ada qualified as Ada
 import Ledger.TimeSlot (SlotConfig (..))
 import Ledger.Value (Value, geq)
@@ -35,8 +35,11 @@ import Plutus.Contract.Test
 import Plutus.Contract.Test.ContractModel
 import Plutus.Contract.Test.ContractModel.CrashTolerance
 import Plutus.Contract.Test.Coverage
-import Plutus.V1.Ledger.Api (Datum)
 import Plutus.V1.Ledger.Time
+--import Data.List
+--import Data.Function
+import Plutus.Contract.Test.Certification
+
 
 import Plutus.Contracts.Escrow hiding (Action (..))
 import Plutus.Trace.Emulator qualified as Trace
@@ -45,7 +48,7 @@ import PlutusTx.Monoid (inv)
 import Test.QuickCheck
 
 data EscrowModel = EscrowModel { _contributions :: Map Wallet Value
-                               , _targets       :: Map Wallet Value
+                               , _targets       :: [(Wallet, Value)]
                                , _refundSlot    :: Slot
                                , _phase         :: Phase
                                } deriving (Eq, Show, Data)
@@ -68,7 +71,7 @@ instance ContractModel EscrowModel where
     WalletKey :: Wallet -> ContractInstanceKey EscrowModel () EscrowSchema EscrowError (EscrowParams Datum)
 
   initialState = EscrowModel { _contributions = Map.empty
-                             , _targets       = Map.empty
+                             , _targets       = []
                              , _refundSlot    = 0
                              , _phase         = Initial
                              }
@@ -86,7 +89,7 @@ instance ContractModel EscrowModel where
   nextState a = case a of
     Init s wns -> do
       phase   .= Running
-      targets .= Map.fromList [(w, Ada.adaValueOf (fromInteger n)) | (w,n) <- wns]
+      targets .= [(w, Ada.adaValueOf (fromInteger n)) | (w,n) <- wns]
       refundSlot .= s
     Pay w v -> do
       withdraw w (Ada.adaValueOf $ fromInteger v)
@@ -95,8 +98,8 @@ instance ContractModel EscrowModel where
     Redeem w -> do
       targets <- viewContractState targets
       contribs <- viewContractState contributions
-      sequence_ [ deposit w v | (w, v) <- Map.toList targets ]
-      let leftoverValue = fold contribs <> inv (fold targets)
+      sequence_ [ deposit w v | (w, v) <- targets ]
+      let leftoverValue = fold contribs <> inv (fold (Map.fromList targets))
       deposit w leftoverValue
       contributions .= Map.empty
       wait 1
@@ -117,7 +120,7 @@ instance ContractModel EscrowModel where
                 && s > 1
                 && and [Ada.adaValueOf (fromInteger n) `geq` Ada.toValue minAdaTxOut | (_,n) <- tgts]
     Redeem _    -> currentPhase == Running
-                && fold (s ^. contractState . contributions) `geq` fold (s ^. contractState . targets)
+                && fold (s ^. contractState . contributions) `geq` fold (Map.fromList (s ^. contractState . targets))
     Pay _ v     -> currentPhase == Running
                 && Ada.adaValueOf (fromInteger v) `geq` Ada.toValue minAdaTxOut
     Refund w    -> currentPhase == Refunding
@@ -144,7 +147,7 @@ instance ContractModel EscrowModel where
     | otherwise
       = frequency $ [ (3, Pay <$> elements testWallets <*> choose (1, 30)) ] ++
                     [ (1, Redeem <$> elements testWallets)
-                    | (s ^. contractState . contributions . to fold) `geq` (s ^. contractState . targets . to fold)
+                    | (s ^. contractState . contributions . to fold) `geq` fold (Map.fromList (s ^. contractState . targets))
                     ]  ++
                     [ (1, Refund <$> elements testWallets) ]
 
@@ -180,7 +183,7 @@ escrowParams' :: Slot -> [(Wallet,Value)] -> EscrowParams d
 escrowParams' s tgts' =
   EscrowParams
     { escrowTargets  = [ payToPaymentPubKeyTarget (mockWalletPaymentPubKeyHash w) v
-                       | (w,v) <- tgts' ]
+                       | (w,v) <- tgts' ]-- sortBy (compare `on` fst) tgts' ]
     , escrowDeadline = scSlotZeroTime def + POSIXTime (getSlot s * scSlotLength def)
     }
 
@@ -240,7 +243,7 @@ instance CrashTolerance EscrowModel where
 
   restartArguments s WalletKey{} = escrowParams' slot tgts
     where slot = s ^. contractState . refundSlot
-          tgts = Map.toList (s ^. contractState . targets)
+          tgts = (s ^. contractState . targets)
 
 prop_CrashTolerance :: Actions (WithCrashTolerance EscrowModel) -> Property
 prop_CrashTolerance = propRunActions_
@@ -249,4 +252,14 @@ check_propEscrowWithCoverage :: IO ()
 check_propEscrowWithCoverage = do
   cr <- quickCheckWithCoverage stdArgs (set coverageIndex covIdx $ defaultCoverageOptions) $ \covopts ->
     withMaxSuccess 1000 $ propRunActionsWithOptions @EscrowModel defaultCheckOptionsContractModel covopts (const (pure True))
-  writeCoverageReport "Escrow" cr
+  writeCoverageReport "Escrow" covIdx cr
+
+noLockProofLight :: NoLockedFundsProofLight EscrowModel
+noLockProofLight = NoLockedFundsProofLight{nlfplMainStrategy = nlfpMainStrategy noLockProof}
+
+-- | Certification.
+certification :: Certification EscrowModel
+certification = defaultCertification {
+    certNoLockedFundsLight = Just noLockProofLight,
+    certCoverageIndex      = covIdx
+  }

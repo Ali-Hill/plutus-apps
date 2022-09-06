@@ -49,7 +49,8 @@ import Cardano.Protocol.Socket.Type
 
 import Cardano.Chain (MockNodeServerChainState (..), addTxToPool, chainNewestFirst, channel, currentSlot, getChannel,
                       getTip, handleControlChain, tip, txPool)
-import Ledger (Block, CardanoTx (..), Params, Slot (..), Tx (..))
+import Ledger (Block, CardanoTx (..), Slot (..), Tx (..))
+import Ledger.TimeSlot (SlotConfig)
 import Wallet.Emulator.Chain qualified as Chain
 
 data CommandChannel = CommandChannel
@@ -145,16 +146,16 @@ handleCommand ::
  => Trace IO PABServerLogMsg
  -> CommandChannel
  -> MVar MockNodeServerChainState
- -> Params
+ -> SlotConfig
  -> m ()
-handleCommand trace CommandChannel {ccCommand, ccResponse} mvChainState params =
+handleCommand trace CommandChannel {ccCommand, ccResponse} mvChainState slotCfg =
     liftIO (atomically $ readTQueue ccCommand) >>= \case
         AddTx tx     -> do
             liftIO $ modifyMVar_ mvChainState (pure . over txPool (EmulatorTx tx :))
         ModifySlot f -> liftIO $ do
             state <- liftIO $ takeMVar mvChainState
             (s, nextState') <- liftIO $ Chain.modifySlot f
-                  & interpret (handleControlChain params)
+                  & interpret (handleControlChain slotCfg)
                   & interpret (LM.handleLogMsgTraceMap ProcessingChainEvent trace)
                   & runState state
                   & runM
@@ -164,7 +165,7 @@ handleCommand trace CommandChannel {ccCommand, ccResponse} mvChainState params =
         ProcessBlock -> liftIO $ do
             state <- liftIO $ takeMVar mvChainState
             (block, nextState') <- liftIO $ Chain.processBlock
-                  & interpret (handleControlChain params)
+                  & interpret (handleControlChain slotCfg)
                   & interpret (LM.handleLogMsgTraceMap ProcessingChainEvent trace)
                   & runState state
                   & runM
@@ -180,14 +181,14 @@ runServerNode ::
  -> FilePath
  -> Integer
  -> MockNodeServerChainState
- -> Params
+ -> SlotConfig
  -> m ServerHandler
-runServerNode trace shSocketPath k initialState params = liftIO $ do
+runServerNode trace shSocketPath k initialState slotCfg = liftIO $ do
     serverState      <- newMVar initialState
     shCommandChannel <- CommandChannel <$> newTQueueIO <*> newTQueueIO
     globalChannel    <- getChannel serverState
     void $ forkIO . void    $ protocolLoop        shSocketPath     serverState
-    void $ forkIO . forever $ handleCommand trace shCommandChannel serverState params
+    void $ forkIO . forever $ handleCommand trace shCommandChannel serverState slotCfg
     void                    $ pruneChain k globalChannel
     pure $ ServerHandler { shSocketPath, shCommandChannel }
 

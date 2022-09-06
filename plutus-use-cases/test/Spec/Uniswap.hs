@@ -38,21 +38,23 @@ import Ledger.Value qualified as Value
 import Data.Data
 import Data.Foldable
 import Data.List
+import Data.Maybe
+import Data.Text qualified as Text
+
 import Data.Map (Map)
 import Data.Map qualified as Map
-import Data.Maybe
-import Data.Monoid (Last (..))
-import Data.Semigroup qualified as Semigroup
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.String
-import Data.Text qualified as Text
+
 import Data.Void
 
-import Prettyprinter
 import Test.QuickCheck hiding ((.&&.))
 import Test.Tasty
 import Test.Tasty.QuickCheck (testProperty)
+
+import Data.Monoid (Last (..))
+import Data.Semigroup qualified as Semigroup
 
 import Ledger.Constraints
 
@@ -88,10 +90,7 @@ open :: Getter PoolModel Bool
 open = to $ \ p -> p ^. coinAAmount > 0 -- If one is bigger than zero the other one is too
 
 prop_Uniswap :: Actions UniswapModel -> Property
-prop_Uniswap = propRunActionsWithOptions
-  (defaultCheckOptionsContractModel & increaseTransactionLimits)
-  defaultCoverageOptions
-  (\ _ -> pure True)
+prop_Uniswap = propRunActions_
 
 deriving instance Eq (ContractInstanceKey UniswapModel w s e params)
 deriving instance Show (ContractInstanceKey UniswapModel w s e params)
@@ -141,7 +140,7 @@ getBToken = max
 --   the emulated wallets
 setupTokens :: Contract (Maybe (Semigroup.Last Currency.OneShotCurrency)) Currency.CurrencySchema Currency.CurrencyError ()
 setupTokens = do
-    ownPK <- Contract.ownFirstPaymentPubKeyHash
+    ownPK <- Contract.ownPaymentPubKeyHash
     cur   <- Currency.mintContract ownPK [(fromString tn, fromIntegral (length wallets) * amount) | tn <- tokenNames]
     let cs = Currency.currencySymbol cur
         v  = mconcat [Value.singleton cs (fromString tn) amount | tn <- tokenNames]
@@ -150,7 +149,7 @@ setupTokens = do
         let pkh = mockWalletPaymentPubKeyHash w
         when (pkh /= ownPK) $ do
             cs <- mkTxConstraints @Void mempty (mustPayToPubKey pkh v)
-            Contract.adjustUnbalancedTx cs >>= submitTxConfirmed
+            submitTxConfirmed . adjustUnbalancedTx $ cs
 
     tell $ Just $ Semigroup.Last cur
   where
@@ -163,7 +162,6 @@ tokenNames :: [String]
 tokenNames = ["A", "B", "C", "D"]
 
 instance ContractModel UniswapModel where
-  -- TODO: add negative tests!
   data Action UniswapModel = SetupTokens
                            -- ^ Give some tokens to wallets `w1..w4`
                            | Start
@@ -256,7 +254,6 @@ instance ContractModel UniswapModel where
         (tA, tB) <- elements [(t1, t2), (t2, t1)]
         return . bad $ RemoveLiquidity w tA tB a
 
-      -- TODO: make an evil version of this endpoint
       close = do
         w <- elements $ wallets \\ [w1]
         PoolIndex t1 t2 <- elements $ s ^. contractState . pools . to Map.keys
@@ -481,7 +478,7 @@ instance ContractModel UniswapModel where
 
   perform h tokenSem s act = case act of
     SetupTokens -> do
-      delay 40
+      delay 20
       Trace.observableState (h SetupKey) >>= \case
         Just (Semigroup.Last cur) -> sequence_ [ registerToken tn (Value.assetClass (Currency.currencySymbol cur) $ fromString tn) | tn <- ["A", "B", "C", "D"]]
         _                         -> Trace.throwError $ GenericError "failed to create currency"
@@ -601,17 +598,12 @@ prop_CheckNoLockedFundsProofFast :: Property
 prop_CheckNoLockedFundsProofFast = checkNoLockedFundsProofFast noLockProof
 
 check_propUniswapWithCoverage :: IO ()
-check_propUniswapWithCoverage = void $ do
-  cr <- quickCheckWithCoverage (stdArgs { maxSuccess = 1000 })
-                                 (set endpointCoverageReq epReqs $ set coverageIndex covIdx $ defaultCoverageOptions)
-                                 $ \covopts -> propRunActionsWithOptions @UniswapModel
-                                              defaultCheckOptionsContractModel
-                                              covopts
-                                              (const (pure True))
-  writeCoverageReport "Uniswap" cr
+check_propUniswapWithCoverage = do
+  cr <- quickCheckWithCoverage stdArgs (set endpointCoverageReq epReqs $ set coverageIndex covIdx $ defaultCoverageOptions) $ \covopts ->
+    withMaxSuccess 1000 $ propRunActionsWithOptions @UniswapModel defaultCheckOptionsContractModel covopts (const (pure True))
+  writeCoverageReport "Uniswap" covIdx cr
   where
     epReqs t ep
-      | True = 0
       | t == Trace.walletInstanceTag w1 = 0
       | ep == "create"                  = 20
       | ep == "swap"                    = 15
@@ -625,7 +617,7 @@ prop_Whitelist = checkErrorWhitelist defaultWhitelist
 
 tests :: TestTree
 tests = testGroup "uniswap" [
-    checkPredicateOptions (iterate increaseTransactionLimits defaultCheckOptions !! 4) "can create a liquidity pool and add liquidity"
+    checkPredicate "can create a liquidity pool and add liquidity"
         (assertNotDone Uniswap.setupTokens
                        (Trace.walletInstanceTag w1)
                        "setupTokens contract should be still running"
@@ -642,8 +634,8 @@ runTestsWithCoverage = do
   ref <- newCoverageRef
   defaultMain (coverageTests ref)
     `catch` \(e :: SomeException) -> do
-                covdata <- readCoverageRef ref
-                putStrLn . show $ pretty (CoverageReport covIdx covdata)
+                report <- readCoverageRef ref
+                putStrLn . show $ pprCoverageReport covIdx report
                 throwIO e
   where
     coverageTests ref = testGroup "game state machine tests"

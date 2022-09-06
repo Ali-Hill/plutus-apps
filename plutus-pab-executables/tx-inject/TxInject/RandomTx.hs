@@ -10,7 +10,6 @@ module TxInject.RandomTx(
     ) where
 
 import Control.Monad.Primitive (PrimMonad, PrimState)
-import Data.Default (def)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Map qualified as Map
 import Data.Maybe (fromMaybe)
@@ -24,7 +23,6 @@ import Ledger.Address qualified as Address
 import Ledger.CardanoWallet qualified as CW
 import Ledger.Generators qualified as Generators
 import Ledger.Index (UtxoIndex (..), ValidationCtx (..), runValidation, validateTransaction)
-import Ledger.Params (Params (pSlotConfig))
 import Ledger.Slot (Slot (..))
 import Ledger.Tx (Tx, TxOut (..))
 import Ledger.Tx qualified as Tx
@@ -89,8 +87,8 @@ generateTx gen slot (UtxoIndex utxo) = do
     tx <- Gen.sample $
       Generators.genValidTransactionSpending sourceTxIns sourceAda
     slotCfg <- Gen.sample Generators.genSlotConfig
-    let (validationResult, _) =
-          runValidation (validateTransaction slot tx) (ValidationCtx (UtxoIndex utxo) (def { pSlotConfig = slotCfg }))
+    let ((validationResult, _), _) =
+          runValidation (validateTransaction slot tx) (ValidationCtx (UtxoIndex utxo) slotCfg)
     case validationResult of
       Nothing -> pure tx
       Just  _ -> generateTx gen slot (UtxoIndex utxo)

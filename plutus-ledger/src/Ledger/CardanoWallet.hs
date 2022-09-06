@@ -19,15 +19,13 @@ module Ledger.CardanoWallet(
     fromSeed,
     fromSeed',
     -- ** Keys
-    mockWalletAddress,
     paymentPrivateKey,
     paymentPubKeyHash,
-    paymentPubKey,
-    stakePubKeyHash,
-    stakePubKey
+    paymentPubKey
     ) where
 
 import Cardano.Crypto.Wallet qualified as Crypto
+import Cardano.Wallet.Primitive.Types qualified as CW
 import Codec.Serialise (serialise)
 import Crypto.Hash qualified as Crypto
 import Data.Aeson (FromJSON, ToJSON)
@@ -40,12 +38,9 @@ import Data.Maybe (fromMaybe)
 import Data.Text qualified as T
 import GHC.Generics (Generic)
 import Ledger (PaymentPrivateKey (PaymentPrivateKey), PaymentPubKey (PaymentPubKey, unPaymentPubKey),
-               PaymentPubKeyHash (PaymentPubKeyHash), StakePubKeyHash)
-import Ledger.Address (PaymentPubKeyHash (unPaymentPubKeyHash), StakePubKey (StakePubKey, unStakePubKey),
-                       StakePubKeyHash (StakePubKeyHash, unStakePubKeyHash))
+               PaymentPubKeyHash (PaymentPubKeyHash))
 import Ledger.Crypto (PubKey (..))
 import Ledger.Crypto qualified as Crypto
-import Plutus.V1.Ledger.Api (Address (Address), Credential (PubKeyCredential), StakingCredential (StakingHash))
 import Plutus.V1.Ledger.Bytes (LedgerBytes (getLedgerBytes))
 import Servant.API (FromHttpApiData, ToHttpApiData)
 
@@ -63,7 +58,7 @@ instance Hashable MockPrivateKey where
 -- | Emulated wallet with a key and a passphrase
 data MockWallet =
     MockWallet
-        { mwWalletId   :: Crypto.Digest Crypto.Blake2b_160
+        { mwWalletId   :: CW.WalletId
         , mwPaymentKey :: MockPrivateKey
         , mwStakeKey   :: Maybe MockPrivateKey
         , mwPrintAs    :: Maybe String
@@ -89,8 +84,8 @@ fromSeedInternal seedGen bs = MockWallet{mwWalletId, mwPaymentKey, mwStakeKey, m
     missing = max 0 (32 - BS.length bs)
     bs' = bs <> BS.replicate missing 0
     k = seedGen bs'
-    mwWalletId =
-        fromMaybe (error "Ledger.CardanoWallet.fromSeed: digestFromByteString")
+    mwWalletId = CW.WalletId
+        $ fromMaybe (error "Ledger.CardanoWallet.fromSeed: digestFromByteString")
         $ Crypto.digestFromByteString
         $ Crypto.hashWith Crypto.Blake2b_160
         $ getLedgerBytes
@@ -114,11 +109,6 @@ knownMockWallets = fromWalletNumber . WalletNumber <$> [1..10]
 knownMockWallet :: Integer -> MockWallet
 knownMockWallet = (knownMockWallets !!) . pred . fromInteger
 
-mockWalletAddress :: MockWallet -> Address
-mockWalletAddress mw =
-    Address (PubKeyCredential $ unPaymentPubKeyHash $ paymentPubKeyHash mw)
-            (StakingHash . PubKeyCredential . unStakePubKeyHash <$> stakePubKeyHash mw)
-
 -- | Mock wallet's private key
 paymentPrivateKey :: MockWallet -> PaymentPrivateKey
 paymentPrivateKey = PaymentPrivateKey . unMockPrivateKey . mwPaymentKey
@@ -130,11 +120,3 @@ paymentPubKeyHash = PaymentPubKeyHash . Crypto.pubKeyHash . unPaymentPubKey . pa
 -- | The mock wallet's payment public key
 paymentPubKey :: MockWallet -> PaymentPubKey
 paymentPubKey = PaymentPubKey . Crypto.toPublicKey . unMockPrivateKey . mwPaymentKey
-
--- | The mock wallet's stake public key hash
-stakePubKeyHash :: MockWallet -> Maybe StakePubKeyHash
-stakePubKeyHash w = StakePubKeyHash . Crypto.pubKeyHash . unStakePubKey <$> stakePubKey w
-
--- | The mock wallet's stake public key
-stakePubKey :: MockWallet -> Maybe StakePubKey
-stakePubKey w = StakePubKey . Crypto.toPublicKey . unMockPrivateKey <$> mwStakeKey w

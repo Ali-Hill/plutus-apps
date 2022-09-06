@@ -38,20 +38,16 @@ import Control.Concurrent (forkIO)
 import Control.Concurrent.STM (STM)
 import Control.Concurrent.STM qualified as STM
 import Control.Lens (preview)
-import Control.Lens.Operators
 import Control.Monad (forM_, void)
-import Control.Monad.Freer (Eff, LastMember, Member, raise, type (~>))
+import Control.Monad.Freer (Eff, LastMember, Member, type (~>))
 import Control.Monad.Freer.Error (Error)
 import Control.Monad.Freer.Extras.Log (LogMessage, LogMsg, LogObserve, logDebug, logInfo)
 import Control.Monad.Freer.Reader (Reader, ask, runReader)
 import Control.Monad.IO.Class (MonadIO (liftIO))
 import Data.Aeson (Value)
-import Data.IORef (IORef, readIORef)
 import Data.Maybe (fromMaybe)
 import Data.Proxy (Proxy (Proxy))
 import Data.Text qualified as Text
-import Marconi.Index.TxConfirmationStatus (TCSIndex)
-import RewindableIndex.Index.VSplit qualified as Ix
 
 import Plutus.Contract.Effects (ActiveEndpoint (aeDescription),
                                 PABReq (AwaitUtxoProducedReq, AwaitUtxoSpentReq, ExposeEndpointReq),
@@ -69,13 +65,8 @@ import Wallet.Effects (NodeClientEffect, WalletEffect)
 import Wallet.Emulator.LogMessages (TxBalanceMsg)
 import Wallet.Emulator.Wallet qualified as Wallet
 
-import Control.Monad.Freer.NonDet (NonDet)
-import Data.Monoid (Sum (Sum))
-import Ledger (TxId, TxOutRef (..))
-import Plutus.ChainIndex (ChainIndexQueryEffect, Depth (..), RollbackState (..), TxConfirmedState (..), TxOutState (..),
-                          TxOutStatus, TxStatus, TxValidity (..), transactionOutputState)
-import Plutus.ChainIndex.UtxoState (UtxoState (_usTxUtxoData), utxoState)
-import Plutus.PAB.Core.ContractInstance.STM (Activity (Done, Stopped), BlockchainEnv (..),
+import Plutus.ChainIndex (ChainIndexQueryEffect, RollbackState (Unknown))
+import Plutus.PAB.Core.ContractInstance.STM (Activity (Done, Stopped), BlockchainEnv,
                                              InstanceState (InstanceState, issStop), InstancesState,
                                              callEndpointOnInstance, emptyInstanceState)
 import Plutus.PAB.Core.ContractInstance.STM qualified as InstanceState
@@ -185,22 +176,9 @@ processAwaitSlotRequestsSTM =
     maybeToHandler (extract Contract.Effects._AwaitSlotReq)
     >>> (RequestHandler $ \targetSlot_ -> fmap AwaitSlotResp . InstanceState.awaitSlot targetSlot_ <$> ask)
 
-processAwaitTimeRequestsSTM ::
+processTxStatusChangeRequestsSTM ::
     forall effs.
     ( Member (Reader BlockchainEnv) effs
-    )
-    => RequestHandler effs PABReq (STM PABResp)
-processAwaitTimeRequestsSTM =
-    maybeToHandler (extract Contract.Effects._AwaitTimeReq) >>>
-        (RequestHandler $ \time ->
-            fmap AwaitTimeResp . InstanceState.awaitTime time <$> ask
-        )
-
-processTxStatusChangeRequestsSTM ::
-    forall m effs.
-    ( LastMember m effs
-    , MonadIO m
-    , Member (Reader BlockchainEnv) (NonDet : effs)
     )
     => RequestHandler effs PABReq (STM PABResp)
 processTxStatusChangeRequestsSTM =
@@ -209,39 +187,11 @@ processTxStatusChangeRequestsSTM =
     where
         handler txId = do
             env <- ask
-            case InstanceState.beTxChanges env of
-              Left _      ->
-                  pure (AwaitTxStatusChangeResp txId <$> InstanceState.waitForTxStatusChange Unknown txId env)
-              Right ixRef -> do
-                  txStatus <- raise . liftIO $ processTxStatusChangeRequestIO ixRef env txId
-                  pure (AwaitTxStatusChangeResp txId <$> txStatus)
-
-processTxStatusChangeRequestIO
-  :: IORef TCSIndex
-  -> BlockchainEnv
-  -> TxId
-  -> IO (STM TxStatus)
-processTxStatusChangeRequestIO ixRef env txId = do
-    ix           <- readIORef ixRef
-    _blockNumber <- STM.readTVarIO $ InstanceState.beLastSyncedBlockNo env
-    events       <- Ix.getEvents (ix ^. Ix.storage)
-    queryResult  <- (ix ^. Ix.query) ix txId events
-    pure . pure $ case queryResult of
-        -- On this branch the transaction has not yet been indexed. This means
-        -- that the transaction status has not changed from `Unknown` which is
-        -- why we wait and re-poll.
-        Nothing -> Unknown
-        -- If we get any kind of update we can return. Due to the way the indexer
-        -- works we can compute if the tx has been confirmed or not.
-        Just (TxConfirmedState (Sum 0) _ _) -> Committed TxValid ()
-        Just (TxConfirmedState (Sum n) _ _) ->
-            TentativelyConfirmed (Depth n) TxValid ()
+            pure (AwaitTxStatusChangeResp txId <$> InstanceState.waitForTxStatusChange Unknown txId env)
 
 processTxOutStatusChangeRequestsSTM ::
-    forall m effs.
-    ( LastMember m effs
-    , MonadIO m
-    , Member (Reader BlockchainEnv) effs
+    forall effs.
+    ( Member (Reader BlockchainEnv) effs
     )
     => RequestHandler effs PABReq (STM PABResp)
 processTxOutStatusChangeRequestsSTM =
@@ -250,35 +200,7 @@ processTxOutStatusChangeRequestsSTM =
     where
         handler txOutRef = do
             env <- ask
-            case InstanceState.beTxChanges env of
-              Left _ ->
-                pure (AwaitTxOutStatusChangeResp txOutRef <$> InstanceState.waitForTxOutStatusChange Unknown txOutRef env)
-              Right txChange -> do
-                 txOutStatus <- raise . liftIO $ processTxOutStatusChangeRequestsIO txChange env txOutRef
-                 pure (AwaitTxOutStatusChangeResp txOutRef <$> txOutStatus)
-
-processTxOutStatusChangeRequestsIO
-  :: IORef TCSIndex
-  -> BlockchainEnv
-  -> TxOutRef
-  -> IO (STM TxOutStatus)
-processTxOutStatusChangeRequestsIO tcsIx BlockchainEnv{beTxOutChanges} txOutRef = do
-  txOutBalance  <- _usTxUtxoData . utxoState <$> STM.atomically (STM.readTVar beTxOutChanges)
-  case transactionOutputState txOutBalance txOutRef of
-    Nothing             -> pure empty
-    Just s@(Spent txId) -> queryTx s txId
-    Just s@(Unspent)    -> queryTx s $ txOutRefId txOutRef
-  where
-    queryTx :: TxOutState -> TxId -> IO (STM TxOutStatus)
-    queryTx s txId = do
-      ix <- readIORef tcsIx
-      events <- Ix.getEvents (ix ^. Ix.storage)
-      queryResult <- (ix ^. Ix.query) ix txId events
-      pure . pure $ case queryResult of
-        Nothing -> Unknown
-        Just (TxConfirmedState (Sum 0) _ _) -> Committed TxValid s
-        Just (TxConfirmedState (Sum n) _ _) ->
-          TentativelyConfirmed (Depth n) TxValid s
+            pure (AwaitTxOutStatusChangeResp txOutRef <$> InstanceState.waitForTxOutStatusChange Unknown txOutRef env)
 
 processUtxoSpentRequestsSTM ::
     forall effs.
@@ -313,12 +235,19 @@ processEndpointRequestsSTM =
     maybeToHandler (traverse (extract Contract.Effects._ExposeEndpointReq))
     >>> (RequestHandler $ \q@Request{rqID, itID, rqRequest} -> fmap (Response rqID itID) (fmap (ExposeEndpointResp (aeDescription rqRequest)) . InstanceState.awaitEndpointResponse q <$> ask))
 
+processAwaitTimeRequestsSTM ::
+    forall effs.
+    ( Member (Reader BlockchainEnv) effs
+    )
+    => RequestHandler effs PABReq (STM PABResp)
+processAwaitTimeRequestsSTM =
+    maybeToHandler (extract Contract.Effects._AwaitTimeReq)
+    >>> (RequestHandler $ \time -> fmap AwaitTimeResp . InstanceState.awaitTime time <$> ask)
+
 -- | 'RequestHandler' that uses TVars to wait for events
 stmRequestHandler ::
-    forall m effs.
-    ( LastMember m effs
-    , MonadIO m
-    , Member ChainIndexQueryEffect effs
+    forall effs.
+    ( Member ChainIndexQueryEffect effs
     , Member WalletEffect effs
     , Member NodeClientEffect effs
     , Member (LogMsg RequestHandlerLogMsg) effs
@@ -332,24 +261,22 @@ stmRequestHandler = fmap sequence (wrapHandler (fmap pure nonBlockingRequests) <
 
     -- requests that can be handled by 'WalletEffect', 'ChainIndexQueryEffect', etc.
     nonBlockingRequests =
-        RequestHandler.handleOwnAddressesQueries @effs
+        RequestHandler.handleOwnPaymentPubKeyHashQueries @effs
         <> RequestHandler.handleChainIndexQueries @effs
         <> RequestHandler.handleUnbalancedTransactions @effs
         <> RequestHandler.handlePendingTransactions @effs
         <> RequestHandler.handleOwnInstanceIdQueries @effs
-        <> RequestHandler.handleCurrentPABSlotQueries @effs
-        <> RequestHandler.handleCurrentChainIndexSlotQueries @effs
+        <> RequestHandler.handleCurrentSlotQueries @effs
         <> RequestHandler.handleCurrentTimeQueries @effs
         <> RequestHandler.handleYieldedUnbalancedTx @effs
-        <> RequestHandler.handleAdjustUnbalancedTx @effs
 
     -- requests that wait for changes to happen
     blockingRequests =
         wrapHandler (processAwaitSlotRequestsSTM @effs)
-        <> wrapHandler (processAwaitTimeRequestsSTM @effs)
-        <> wrapHandler (processTxStatusChangeRequestsSTM @_ @effs)
-        <> wrapHandler (processTxOutStatusChangeRequestsSTM @_ @effs)
+        <> wrapHandler (processTxStatusChangeRequestsSTM @effs)
+        <> wrapHandler (processTxOutStatusChangeRequestsSTM @effs)
         <> processEndpointRequestsSTM @effs
+        <> wrapHandler (processAwaitTimeRequestsSTM @effs)
         <> processUtxoSpentRequestsSTM @effs
         <> processUtxoProducedRequestsSTM @effs
 
@@ -427,7 +354,7 @@ stmInstanceLoop def instanceId = do
             let ContractResponse{err} = resp
             ask >>= liftIO . STM.atomically . InstanceState.setActivity (Done err)
         _ -> do
-            response <- respondToRequestsSTM @_ @t instanceId currentState
+            response <- respondToRequestsSTM @t instanceId currentState
             let rsp' = Right <$> response
                 stop = Left <$> STM.takeTMVar issStop
             event <- liftIO $ STM.atomically (stop <|> rsp')
@@ -464,10 +391,8 @@ updateState ContractResponse{newState = State{observableState}, hooks} = do
 -- | Run the STM-based request handler on a non-empty list
 --   of requests.
 respondToRequestsSTM ::
-    forall m t effs.
-    ( LastMember m effs
-    , MonadIO m
-    , Member ChainIndexQueryEffect effs
+    forall t effs.
+    ( Member ChainIndexQueryEffect effs
     , Member WalletEffect effs
     , Member NodeClientEffect effs
     , Member (LogMsg RequestHandlerLogMsg) effs

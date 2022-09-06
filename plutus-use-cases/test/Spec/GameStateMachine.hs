@@ -16,9 +16,8 @@
 {-# LANGUAGE TypeApplications     #-}
 {-# LANGUAGE TypeFamilies         #-}
 {-# LANGUAGE UndecidableInstances #-}
-{-# OPTIONS_GHC -Wno-unused-top-binds #-}
 module Spec.GameStateMachine
-  ( tests, successTrace, successTrace2, traceLeaveTwoAdaInScript, failTrace
+  ( tests, successTrace, successTrace2, traceLeaveOneAdaInScript, failTrace
   , runTestsWithCoverage
   , prop_Game, propGame', prop_GameWhitelist
   , check_prop_Game_with_coverage
@@ -28,7 +27,7 @@ module Spec.GameStateMachine
   , prop_SanityCheckAssertions
   , prop_GameCrashTolerance
   , certification
-  , gameParam
+  , covIndex
   ) where
 
 import Control.Exception hiding (handle)
@@ -36,10 +35,7 @@ import Control.Lens
 import Control.Monad
 import Control.Monad.Freer.Extras.Log (LogLevel (..))
 import Data.Data
-import Data.Map qualified as Map
 import Data.Maybe
-import Data.Set qualified as Set
-import Prettyprinter
 import Test.QuickCheck as QC hiding (checkCoverage, (.&&.))
 import Test.Tasty hiding (after)
 import Test.Tasty.HUnit qualified as HUnit
@@ -57,15 +53,13 @@ import Plutus.Contract.Test.Certification
 import Plutus.Contract.Test.ContractModel
 import Plutus.Contract.Test.ContractModel.CrashTolerance
 import Plutus.Contract.Test.Coverage
-import Plutus.Contracts.GameStateMachine as G hiding (Guess)
+import Plutus.Contracts.GameStateMachine as G
 import Plutus.Trace.Emulator as Trace
+import PlutusTx qualified
 import PlutusTx.Coverage
 
 gameParam :: G.GameParam
 gameParam = G.GameParam (mockWalletPaymentPubKeyHash w1) (TimeSlot.scSlotZeroTime def)
-
-options :: CheckOptions
-options = defaultCheckOptionsContractModel & (increaseTransactionLimits . increaseTransactionLimits)
 
 --
 -- * QuickCheck model
@@ -150,6 +144,8 @@ instance ContractModel GameModel where
 
     nextState (GiveToken w) = do
         w0 <- fromJust <$> viewContractState hasToken
+        withdraw w0 $ Ada.toValue Ledger.minAdaTxOut
+        deposit w $ Ada.toValue Ledger.minAdaTxOut
         transfer w0 w guessTokenVal
         hasToken .= Just w
         wait 1
@@ -205,7 +201,7 @@ instance CrashTolerance GameModel where
 
 -- | The main property. 'propRunActions_' checks that balances match the model after each test.
 prop_Game :: Actions GameModel -> Property
-prop_Game = propRunActionsWithOptions options defaultCoverageOptions (\ _ -> pure True)
+prop_Game = propRunActions_
 
 prop_GameWhitelist :: Actions GameModel -> Property
 prop_GameWhitelist = checkErrorWhitelist defaultWhitelist
@@ -218,11 +214,14 @@ prop_SanityCheckAssertions = propSanityCheckAssertions
 
 check_prop_Game_with_coverage :: IO ()
 check_prop_Game_with_coverage = do
-  cr <- quickCheckWithCoverage stdArgs (set coverageIndex covIdx defaultCoverageOptions) $ \covopts ->
+  cr <- quickCheckWithCoverage stdArgs (set coverageIndex covIndex defaultCoverageOptions) $ \covopts ->
     propRunActionsWithOptions @GameModel defaultCheckOptionsContractModel
                                          covopts
                                          (const (pure True))
-  writeCoverageReport "GameStateMachine" cr
+  writeCoverageReport "GameStateMachine" covIndex cr
+
+covIndex :: CoverageIndex
+covIndex = covIdx gameParam
 
 propGame' :: LogLevel -> Actions GameModel -> Property
 propGame' l = propRunActionsWithOptions
@@ -231,7 +230,7 @@ propGame' l = propRunActionsWithOptions
                 (\ _ -> pure True)
 
 prop_GameCrashTolerance :: Actions (WithCrashTolerance GameModel) -> Property
-prop_GameCrashTolerance = propRunActionsWithOptions options defaultCoverageOptions (\ _ -> pure True)
+prop_GameCrashTolerance = propRunActions_
 
 wallets :: [Wallet]
 wallets = [w1, w2, w3]
@@ -278,7 +277,7 @@ noLockedFunds = do
     w      <- forAllQ $ elementsQ wallets
     secret <- viewContractState currentSecret
     val    <- viewContractState gameValue
-    when (val >= Ada.getLovelace Ledger.minAdaTxOut) $ do
+    when (val > Ada.getLovelace Ledger.minAdaTxOut) $ do
         monitor $ label "Unlocking funds"
         action $ GiveToken w
         action $ Guess w secret "" val
@@ -308,39 +307,38 @@ noLockProof = defaultNLFP {
             when hasTok $ action (Guess w secret "" val)
 
 prop_CheckNoLockedFundsProof :: Property
-prop_CheckNoLockedFundsProof = checkNoLockedFundsProofWithOptions options noLockProof
+prop_CheckNoLockedFundsProof = checkNoLockedFundsProof noLockProof
 
 -- * Unit tests
 
 tests :: TestTree
 tests =
     testGroup "game state machine with secret arguments tests"
-    [ checkPredicateOptions options "run a successful game trace"
-        (walletFundsChange w2 (Ada.adaValueOf 3 <> guessTokenVal)
+    [ checkPredicate "run a successful game trace"
+        (walletFundsChange w2 (Ada.toValue Ledger.minAdaTxOut <> Ada.adaValueOf 3 <> guessTokenVal)
         .&&. valueAtAddress (Scripts.validatorAddress $ G.typedValidator gameParam) (Ada.adaValueOf 5 ==)
-        .&&. walletFundsChange w1 (Ada.adaValueOf (-8)))
+        .&&. walletFundsChange w1 (Ada.toValue (-Ledger.minAdaTxOut) <> Ada.adaValueOf (-8)))
         successTrace
 
-    , checkPredicateOptions options "run a 2nd successful game trace"
+    , checkPredicate "run a 2nd successful game trace"
         (walletFundsChange w2 (Ada.adaValueOf 3)
         .&&. valueAtAddress (Scripts.validatorAddress $ G.typedValidator gameParam) (Ada.adaValueOf 0 ==)
-        .&&. walletFundsChange w1 (Ada.adaValueOf (-8))
-        .&&. walletFundsChange w3 (Ada.adaValueOf 5 <> guessTokenVal))
+        .&&. walletFundsChange w1 (Ada.toValue (-Ledger.minAdaTxOut) <> Ada.adaValueOf (-8))
+        .&&. walletFundsChange w3 (Ada.toValue Ledger.minAdaTxOut <> Ada.adaValueOf 5 <> guessTokenVal))
         successTrace2
 
-    , checkPredicateOptions options "run a successful game trace where we try to leave 1 Ada in the script address"
-        (walletFundsChange w1 (Ada.toValue (-2_000_000) <> guessTokenVal)
-        .&&. valueAtAddress (Scripts.validatorAddress $ G.typedValidator gameParam) (Ada.toValue 2_000_000 ==))
-        traceLeaveTwoAdaInScript
+    , checkPredicate "run a successful game trace where we try to leave 1 Ada in the script address"
+        (walletFundsChange w1 (Ada.toValue (-Ledger.minAdaTxOut) <> guessTokenVal)
+        .&&. valueAtAddress (Scripts.validatorAddress $ G.typedValidator gameParam) (Ada.toValue Ledger.minAdaTxOut ==))
+        traceLeaveOneAdaInScript
 
-    , checkPredicateOptions options "run a failed trace"
-        (walletFundsChange w2 (Ada.toValue 2_000_000 <> guessTokenVal)
+    , checkPredicate "run a failed trace"
+        (walletFundsChange w2 (Ada.toValue Ledger.minAdaTxOut <> guessTokenVal)
         .&&. valueAtAddress (Scripts.validatorAddress $ G.typedValidator gameParam) (Ada.adaValueOf 8 ==)
-        .&&. walletFundsChange w1 (Ada.toValue (-2_000_000) <> Ada.adaValueOf (-8)))
+        .&&. walletFundsChange w1 (Ada.toValue (-Ledger.minAdaTxOut) <> Ada.adaValueOf (-8)))
         failTrace
 
-    -- TODO: turn this on again when reproducibility issue in core is fixed
-    -- , goldenPir "test/Spec/gameStateMachine.pir" $$(PlutusTx.compile [|| mkValidator ||])
+    , goldenPir "test/Spec/gameStateMachine.pir" $$(PlutusTx.compile [|| mkValidator ||])
 
     , HUnit.testCaseSteps "script size is reasonable" $ \step ->
         reasonable' step (Scripts.validatorScript $ G.typedValidator gameParam) 49000
@@ -351,16 +349,7 @@ tests =
     , testProperty "sanity check the contract model" prop_SanityCheckModel
 
     , testProperty "game state machine crash tolerance" $ withMaxSuccess 20 prop_GameCrashTolerance
-
-    , HUnit.testCase "we ignore at least two program locations"
-        $ HUnit.assertBool "its less than 2"
-          $ length ignoredProgramPoints > 1
     ]
-
-ignoredProgramPoints :: [CoverageAnnotation]
-ignoredProgramPoints =
-  let metadataMap = covIdx ^. coverageMetadata in
-  Map.keys . Map.filter (Set.member IgnoredAnnotation . _metadataSet) $ metadataMap
 
 initialVal :: Value
 initialVal = Ada.adaValueOf 10
@@ -371,7 +360,7 @@ runTestsWithCoverage = do
   defaultMain (coverageTests ref)
     `catch` \(e :: SomeException) -> do
                 report <- readCoverageRef ref
-                putStrLn . show $ pretty (CoverageReport covIdx report)
+                putStrLn . show $ pprCoverageReport (covIdx gameParam) report
                 throwIO e
   where
     coverageTests ref = testGroup "game state machine tests"
@@ -430,13 +419,13 @@ successTrace2 = do
     void $ Trace.waitNSlots 1
 
 -- | Tests whether the contract correctly handles the case where we leave less
--- than 3 Ada in the script address after guessing.
-traceLeaveTwoAdaInScript :: EmulatorTrace ()
-traceLeaveTwoAdaInScript = do
+-- than 2 Ada in the script address after guessing.
+traceLeaveOneAdaInScript :: EmulatorTrace ()
+traceLeaveOneAdaInScript = do
     hdl <- Trace.activateContractWallet w1 G.contract
     Trace.callEndpoint @"lock" hdl LockArgs { lockArgsGameParam = gameParam
                                             , lockArgsSecret = secretArg "hello"
-                                            , lockArgsValue = Ada.adaValueOf 9
+                                            , lockArgsValue = Ada.adaValueOf 8
                                             }
     _ <- Trace.waitNSlots 2
     _ <- Trace.callEndpoint @"guess" hdl GuessArgs { guessArgsGameParam = gameParam
@@ -456,7 +445,7 @@ failTrace = do
                                             , lockArgsValue = Ada.adaValueOf 8
                                             }
     _ <- Trace.waitNSlots 2
-    _ <- Trace.payToWallet w1 w2 (Ada.toValue 2_000_000 <> guessTokenVal)
+    _ <- Trace.payToWallet w1 w2 guessTokenVal
     _ <- Trace.waitNSlots 1
     hdl2 <- Trace.activateContractWallet w2 G.contract
     _ <- Trace.callEndpoint @"guess" hdl2 GuessArgs { guessArgsGameParam = gameParam
@@ -476,7 +465,7 @@ certification :: Certification GameModel
 certification = defaultCertification {
     certNoLockedFunds      = Just noLockProof,
     certUnitTests          = Just unitTest,
-    certCoverageIndex      = covIdx,
+    certCoverageIndex      = covIdx gameParam,
     certCrashTolerance     = Just Instance
   }
   where

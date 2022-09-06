@@ -14,6 +14,7 @@
 {-# OPTIONS_GHC -fno-omit-interface-pragmas #-}
 {-# OPTIONS_GHC -fno-specialise #-}
 {-# OPTIONS_GHC -fno-spec-constr #-}
+{-# OPTIONS_GHC -g -fplugin-opt PlutusTx.Plugin:coverage-all #-} --added for coverage
 -- | A basic governance contract in Plutus.
 module Plutus.Contracts.Governance (
     -- $governance
@@ -28,7 +29,12 @@ module Plutus.Contracts.Governance (
     , GovState(..)
     , Voting(..)
     , GovError
+    , votingValue
+    , ownsVotingToken
+    -- * Coverage
+    , covIdx
     ) where
+
 
 import Control.Lens (makeClassyPrisms, review)
 import Control.Monad
@@ -38,7 +44,7 @@ import Data.Semigroup (Sum (..))
 import Data.String (fromString)
 import Data.Text (Text)
 import GHC.Generics (Generic)
-import Ledger (POSIXTime, PaymentPubKeyHash, TokenName)
+import Ledger (MintingPolicyHash, POSIXTime, PaymentPubKeyHash, TokenName)
 import Ledger.Ada qualified as Ada
 import Ledger.Constraints (TxConstraints)
 import Ledger.Constraints qualified as Constraints
@@ -48,11 +54,14 @@ import Ledger.Value qualified as Value
 import Plutus.Contract
 import Plutus.Contract.StateMachine (AsSMContractError, State (..), StateMachine (..), Void)
 import Plutus.Contract.StateMachine qualified as SM
-import Plutus.V1.Ledger.Scripts (MintingPolicyHash)
 import PlutusTx qualified
 import PlutusTx.AssocMap qualified as AssocMap
 import PlutusTx.Prelude
 import Prelude qualified as Haskell
+import PlutusTx.Coverage --added for coverage
+import PlutusTx.Code --added for coverage
+import Ledger.Typed.Tx (TypedScriptTxOut (..)) --added for onchainstate
+
 
 -- $governance
 -- * When the contract starts it produces a number of tokens that represent voting rights.
@@ -91,6 +100,7 @@ data GovInput
     | ProposeChange Proposal
     | AddVote TokenName Bool
     | FinishVoting
+    | Check
     deriving stock (Haskell.Show, Generic)
     deriving anyclass (ToJSON, FromJSON)
 
@@ -101,6 +111,7 @@ data GovInput
 type Schema =
     Endpoint "new-law" ByteString
         .\/ Endpoint "add-vote" (TokenName, Bool)
+        .\/ Endpoint "check-law" ByteString
 
 -- | The governace contract parameters.
 data Params = Params
@@ -143,7 +154,7 @@ typedValidator = Scripts.mkTypedValidatorParam @GovernanceMachine
     $$(PlutusTx.compile [|| mkValidator ||])
     $$(PlutusTx.compile [|| wrap ||])
     where
-        wrap = Scripts.mkUntypedValidator
+        wrap = Scripts.wrapValidator
 
 client :: Params -> SM.StateMachineClient GovState GovInput
 client params = SM.mkStateMachineClient $ SM.StateMachineInstance (machine params) (typedValidator params)
@@ -187,6 +198,8 @@ transition Params{..} State{ stateData = s, stateValue} i = case (s, i) of
 
     _ -> Nothing
 
+-- Look at state machine library. 
+
 -- | The main contract for creating a new law and for voting on proposals.
 contract ::
     AsGovError e
@@ -194,7 +207,7 @@ contract ::
     -> Contract () Schema e ()
 contract params = forever $ mapError (review _GovError) endpoints where
     theClient = client params
-    endpoints = selectList [initLaw, addVote]
+    endpoints = selectList [initLaw, addVote, checkLaw]
 
     addVote = endpoint @"add-vote" $ \(tokenName, vote) ->
         void $ SM.runStep theClient (AddVote tokenName vote)
@@ -204,6 +217,26 @@ contract params = forever $ mapError (review _GovError) endpoints where
         void $ SM.runInitialise theClient (GovState (toBuiltin bsLaw) mph Nothing) (Ada.lovelaceValueOf 1)
         let tokens = Haskell.zipWith (const (mkTokenName (baseTokenName params))) (initialHolders params) [1..]
         void $ SM.runStep theClient $ MintTokens tokens
+
+    checkLaw = endpoint @"check-law" $ \l -> do 
+                SM.getOnChainState theClient >>= \s
+                    -> case s of 
+                        -- Just (SM.OnChainState{SM.ocsTxOut=TypedScriptTxOut{tyTxOutData=(GovState law mph Nothing)}}, _)
+                        Just (SM.OnChainState{SM.ocsTxOut=TypedScriptTxOut{tyTxOutData=(GovState law mph Nothing)}}, _)
+                            -> void $ SM.runStep theClient $ Check
+                        _ -> error ()
+                        -- void $ SM.runStep theClient $ Check
+                        --void $ SM.runStep theClient $ Check
+
+{-
+    checkLaw = endpoint @"check-law" $ \l -> do  
+                SM.getOnChainState theClient >>= \s
+                    -> case s of 
+                        Just ((GovState law mph Nothing), FinishVoting) 
+                            -> void $ SM.runStep theClient $ Check
+                        _ -> void $ SM.runStep theClient $ Check
+-}
+    --getOnChainState
 
 -- | The contract for proposing changes to a law.
 proposalContract ::
@@ -231,3 +264,6 @@ PlutusTx.unstableMakeIsData ''GovState
 PlutusTx.makeLift ''GovState
 PlutusTx.unstableMakeIsData ''GovInput
 PlutusTx.makeLift ''GovInput
+
+covIdx :: CoverageIndex
+covIdx = getCovIdx $$(PlutusTx.compile [|| mkValidator ||])

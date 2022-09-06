@@ -16,7 +16,7 @@ module Wallet.Emulator.Stream(
     , initialChainState
     , initialDist
     , initialState
-    , params
+    , slotConfig
     , runTraceStream
     -- * Stream manipulation
     , takeUntilSlot
@@ -60,7 +60,8 @@ import Wallet.Emulator.MultiAgent (EmulatorState, EmulatorTimeEvent (EmulatorTim
                                    MultiAgentEffect, chainEvent, eteEvent)
 import Wallet.Emulator.Wallet (Wallet, mockWalletAddress)
 
-import Ledger.Params (Params)
+-- TODO: Move these two to 'Wallet.Emulator.XXX'?
+import Ledger.TimeSlot (SlotConfig)
 import Plutus.Contract.Trace (InitialDistribution, defaultDist, knownWallets)
 import Plutus.Trace.Emulator.ContractInstance (EmulatorRuntimeError)
 
@@ -118,7 +119,7 @@ runTraceStream :: forall effs.
             , Error EmulatorRuntimeError
             ] ()
     -> Stream (Of (LogMessage EmulatorEvent)) (Eff effs) (Maybe EmulatorErr, EmulatorState)
-runTraceStream conf@EmulatorConfig{_params} =
+runTraceStream conf@EmulatorConfig{_slotConfig} =
     fmap (first (either Just (const Nothing)))
     . S.hoist (pure . run)
     . runStream @(LogMessage EmulatorEvent) @_ @'[]
@@ -130,7 +131,7 @@ runTraceStream conf@EmulatorConfig{_params} =
     . wrapError ChainIndexErr
     . wrapError AssertionErr
     . wrapError InstanceErr
-    . EM.processEmulated _params
+    . EM.processEmulated _slotConfig
     . subsume
     . subsume @(State EmulatorState)
     . raiseEnd
@@ -138,14 +139,14 @@ runTraceStream conf@EmulatorConfig{_params} =
 data EmulatorConfig =
     EmulatorConfig
         { _initialChainState :: InitialChainState -- ^ State of the blockchain at the beginning of the simulation. Can be given as a map of funds to wallets, or as a block of transactions.
-        , _params            :: Params -- ^ Set the protocol parameters, network ID and slot configuration for the emulator.
+        , _slotConfig        :: SlotConfig -- ^ Set the start time of slot 0 and the length of one slot
         } deriving (Eq, Show)
 
 type InitialChainState = Either InitialDistribution [Tx]
 
 -- | The wallets' initial funds
 initialDist :: InitialChainState -> InitialDistribution
-initialDist = either id (walletFunds . map (Valid . EmulatorTx)) where
+initialDist = either id (walletFunds . map Valid) where
     walletFunds :: Block -> Map Wallet Value
     walletFunds theBlock =
         let values = AM.values $ AM.fromChain [theBlock]
@@ -155,7 +156,7 @@ initialDist = either id (walletFunds . map (Valid . EmulatorTx)) where
 instance Default EmulatorConfig where
   def = EmulatorConfig
           { _initialChainState = Left defaultDist
-          , _params = def
+          , _slotConfig = def
           }
 
 initialState :: EmulatorConfig -> EM.EmulatorState

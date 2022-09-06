@@ -17,7 +17,10 @@
       stackage = sources.stackage-nix;
     };
   }
-, packages ? import ./nix { inherit system sources crossSystem config sourcesOverride haskellNix enableHaskellProfiling; }
+, packages ? import ./nix { inherit system sources crossSystem config sourcesOverride haskellNix checkMaterialization enableHaskellProfiling; }
+  # Whether to check that the pinned shas for haskell.nix are correct. We want this to be
+  # false, generally, since it does more work, but we set it to true in the CI
+, checkMaterialization ? false
   # Whether to build our Haskell packages (and their dependencies) with profiling enabled.
 , enableHaskellProfiling ? false
 }:
@@ -43,7 +46,7 @@ rec {
       inherit (plutus-apps) purs-tidy;
       inherit (plutus-apps.lib) buildPursPackage buildNodeModules filterNpm gitignore-nix;
       inherit haskell webCommon;
-    }) client server start-backend generate-purescript;
+    }) client server start-backend generate-purescript generated-purescript;
   };
 
   # TODO: Fails for now because of webpack can't include `nami-wallet` lib in it's bundle.
@@ -53,7 +56,7 @@ rec {
       inherit (plutus-apps) purs-tidy;
       inherit pkgs haskell webCommon;
       inherit (plutus-apps.lib) buildPursPackage buildNodeModules filterNpm gitignore-nix;
-    }) client pab-setup-invoker pab-nami-demo-invoker pab-nami-demo-generator start-backend;
+    }) client pab-setup-invoker pab-nami-demo-invoker pab-nami-demo-generator generate-purescript generated-purescript start-backend;
   };
 
   plutus-use-cases = pkgs.recurseIntoAttrs (pkgs.callPackage ./plutus-use-cases {
@@ -64,16 +67,14 @@ rec {
 
   plutus-chain-index = plutus-apps.haskell.packages.plutus-chain-index.components.exes.plutus-chain-index;
 
-  marconi = plutus-apps.haskell.packages.plutus-chain-index.components.exes.marconi;
-
-  create-script-context = plutus-apps.haskell.packages.plutus-example.components.exes.create-script-context;
-
   tests = import ./nix/tests/default.nix {
     inherit pkgs docs;
     inherit (plutus-apps.lib) gitignore-nix;
-    inherit (plutus-apps) fixStylishHaskell fix-purs-tidy fixPngOptimization fixCabalFmt;
+    inherit (plutus-apps) fixStylishHaskell fix-purs-tidy fixPngOptimization;
     inherit plutus-playground web-ghc;
     src = ./.;
+    play-generated = plutus-playground.generated-purescript;
+    nami-generated = pab-nami-demo.generated-purescript;
   };
 
   docs = import ./nix/docs.nix { inherit pkgs plutus-apps; };

@@ -8,7 +8,6 @@
 module Wallet.Emulator.LogMessages(
   RequestHandlerLogMsg(..)
   , TxBalanceMsg(..)
-  , _AdjustingUnbalancedTx
   , _BalancingUnbalancedTx
   , _ValidationFailed
   ) where
@@ -21,7 +20,6 @@ import Ledger.Constraints.OffChain (UnbalancedTx)
 import Ledger.Index (ScriptValidationEvent, ValidationError, ValidationPhase)
 import Ledger.Slot (Slot)
 import Ledger.Value (Value)
-import Plutus.V1.Ledger.Ada qualified as Ada
 import Prettyprinter (Pretty (..), colon, hang, viaShow, vsep, (<+>))
 import Wallet.Emulator.Error (WalletAPIError)
 
@@ -30,11 +28,8 @@ data RequestHandlerLogMsg =
     | StartWatchingContractAddresses
     | HandleTxFailed WalletAPIError
     | UtxoAtFailed Address
-    | AdjustingUnbalancedTx [Ada.Ada]
     deriving stock (Eq, Show, Generic)
     deriving anyclass (ToJSON, FromJSON)
-
-makePrisms ''RequestHandlerLogMsg
 
 instance Pretty RequestHandlerLogMsg where
     pretty = \case
@@ -43,7 +38,6 @@ instance Pretty RequestHandlerLogMsg where
         StartWatchingContractAddresses -> "Start watching contract addresses"
         HandleTxFailed e -> "handleTx failed:" <+> viaShow e
         UtxoAtFailed addr -> "UtxoAt failed:" <+> pretty addr
-        AdjustingUnbalancedTx vl -> "Adjusting an unbalanced transaction:" <+> pretty vl
 
 data TxBalanceMsg =
     BalancingUnbalancedTx UnbalancedTx

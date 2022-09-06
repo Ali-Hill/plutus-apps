@@ -19,7 +19,7 @@ import Codec.Serialise
 import Data.ByteString.Lazy qualified as LBS
 import Data.ByteString.Short qualified as SBS
 
-import Plutus.Script.Utils.V1.Typed.Scripts qualified as Scripts
+import Ledger.Typed.Scripts qualified as Scripts
 import Plutus.V1.Ledger.Scripts qualified as Plutus
 import PlutusTx qualified
 import PlutusTx.Prelude hiding (Semigroup (..), unless, (.))
@@ -41,10 +41,21 @@ validateSum n s _ = isGoodSum n s
 isGoodSum :: Integer -> Integer -> Bool
 isGoodSum n s = smartSum n == s
 
+
+data SmartSum
+instance Scripts.ValidatorTypes SmartSum where
+    type instance RedeemerType SmartSum = Integer
+    type instance DatumType SmartSum = Integer
+
+sumInstance :: Scripts.TypedValidator SmartSum
+sumInstance = Scripts.mkTypedValidator @SmartSum
+    $$(PlutusTx.compile [|| validateSum ||])
+    $$(PlutusTx.compile [|| wrap ||])
+      where
+        wrap = Scripts.wrapValidator @Integer @Integer
+
 validator :: Plutus.Validator
-validator = Plutus.mkValidatorScript $$(PlutusTx.compile [|| wrap ||])
- where
-     wrap = Scripts.mkUntypedValidator validateSum
+validator = Scripts.validatorScript sumInstance
 
 script :: Plutus.Script
 script = Plutus.unValidatorScript validator

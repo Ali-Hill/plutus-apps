@@ -19,9 +19,8 @@ import GHC.Generics (Generic)
 import Schema (ToSchema)
 
 import Ledger (PaymentPubKeyHash, Value)
-import Ledger.Constraints (mustPayToPubKey)
-import Plutus.Contract (ContractError, Endpoint, Promise, adjustUnbalancedTx, endpoint, logInfo, mkTxConstraints,
-                        yieldUnbalancedTx)
+import Ledger.Constraints (adjustUnbalancedTx, mustPayToPubKey)
+import Plutus.Contract (ContractError, Endpoint, Promise, endpoint, logInfo, mkTxConstraints, yieldUnbalancedTx)
 
 data PayToWalletParams =
     PayToWalletParams
@@ -38,5 +37,5 @@ payToWallet = endpoint @"PayToWallet" $ \PayToWalletParams{amount, pkh} -> do
     logInfo @String "Calling PayToWallet endpoint"
     utx <- mkTxConstraints @Void mempty (mustPayToPubKey pkh amount)
     logInfo @String $ "Yielding the unbalanced transaction " <> show utx
-    adjustUnbalancedTx utx >>= yieldUnbalancedTx
+    yieldUnbalancedTx $ adjustUnbalancedTx utx
 

@@ -26,8 +26,6 @@ module Plutus.Contracts.GameStateMachine(
     contract
     , typedValidator
     , GameParam(..)
-    , GameState(..)
-    , GameInput(..)
     , GuessToken
     , mkValidator
     , mintingPolicy
@@ -44,7 +42,7 @@ import Control.Monad (void)
 import Data.Aeson (FromJSON, ToJSON)
 import Data.ByteString.Char8 qualified as C
 import GHC.Generics (Generic)
-import Ledger (POSIXTime, PaymentPubKeyHash, ScriptContext, TokenName, Value)
+import Ledger (MintingPolicyHash, POSIXTime, PaymentPubKeyHash, TokenName, Value)
 import Ledger.Ada qualified as Ada
 import Ledger.Constraints (TxConstraints)
 import Ledger.Constraints qualified as Constraints
@@ -55,16 +53,14 @@ import Plutus.Contract (AsContractError (_ContractError), Contract, ContractErro
 import Plutus.Contract.Secrets (SecretArgument, escape_sha2_256, extractSecret)
 import Plutus.Contract.StateMachine (State (State, stateData, stateValue), Void)
 import Plutus.Contract.StateMachine qualified as SM
-import Plutus.V1.Ledger.Scripts (MintingPolicyHash)
 import PlutusTx qualified
-import PlutusTx.Prelude (Bool (False, True), BuiltinByteString, Eq, Maybe (Just, Nothing), check, sha2_256, toBuiltin,
+import PlutusTx.Code (getCovIdx)
+import PlutusTx.Coverage (CoverageIndex)
+import PlutusTx.Prelude (Bool (False, True), BuiltinByteString, Eq, Maybe (Just, Nothing), sha2_256, toBuiltin,
                          traceIfFalse, ($), (&&), (-), (.), (<$>), (<>), (==), (>>))
 import Schema (ToSchema)
 
-import Plutus.Contract.Test.Coverage.Analysis
-import PlutusTx.Coverage
 import Prelude qualified as Haskell
-
 
 -- | Datatype for creating a parameterized validator.
 data GameParam = GameParam
@@ -231,7 +227,12 @@ typedValidator = Scripts.mkTypedValidatorParam @GameStateMachine
     $$(PlutusTx.compile [|| mkValidator ||])
     $$(PlutusTx.compile [|| wrap ||])
     where
-        wrap = Scripts.mkUntypedValidator
+        wrap = Scripts.wrapValidator
+
+-- TODO: Ideas welcome for how to make this interface suck less.
+-- Doing it this way actually generates coverage locations that we don't care about(!)
+covIdx :: GameParam -> CoverageIndex
+covIdx gp = getCovIdx ($$(PlutusTx.compile [|| mkValidator ||]) `PlutusTx.applyCode` PlutusTx.liftCode gp)
 
 mintingPolicy :: GameParam -> Scripts.MintingPolicy
 mintingPolicy gp = Scripts.forwardingMintingPolicy $ typedValidator gp
@@ -257,12 +258,6 @@ guess = endpoint @"guess" $ \GuessArgs{guessArgsGameParam, guessArgsOldSecret, g
     void
         $ SM.runStep (client guessArgsGameParam)
             (Guess guessedSecret newSecret guessArgsValueTakenOut)
-
-cc :: PlutusTx.CompiledCode (GameParam -> GameState -> GameInput -> ScriptContext -> ())
-cc = $$(PlutusTx.compile [|| \a b c d -> check (mkValidator a b c d) ||])
-
-covIdx :: CoverageIndex
-covIdx = computeRefinedCoverageIndex cc
 
 PlutusTx.unstableMakeIsData ''GameState
 PlutusTx.makeLift ''GameState

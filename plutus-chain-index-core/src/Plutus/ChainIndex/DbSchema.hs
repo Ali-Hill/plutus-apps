@@ -36,15 +36,12 @@ import Database.Beam (Beamable, Columnar, Database, DatabaseSettings, FromBacken
 import Database.Beam.Migrate (CheckedDatabaseSettings, defaultMigratableDbSettings, renameCheckedEntity,
                               unCheckDatabase)
 import Database.Beam.Sqlite (Sqlite)
-import Ledger (BlockId (..), ChainIndexTxOut (..), Slot)
+import Ledger (AssetClass, BlockId (..), ChainIndexTxOut (..), Datum, DatumHash (..), MintingPolicy,
+               MintingPolicyHash (..), Redeemer, RedeemerHash (..), Script, ScriptHash (..), Slot, StakeValidator,
+               StakeValidatorHash (..), TxId (..), TxOut, TxOutRef (..), Validator, ValidatorHash (..))
 import Plutus.ChainIndex.Tx (ChainIndexTx)
 import Plutus.ChainIndex.Types (BlockNumber (..), Tip (..))
-import Plutus.V1.Ledger.Api (Datum, DatumHash (..), MintingPolicy, MintingPolicyHash (..), Redeemer, RedeemerHash (..),
-                             Script, StakeValidator, StakeValidatorHash (..), TxId (..), TxOut, TxOutRef (..),
-                             Validator, ValidatorHash (..))
-import Plutus.V1.Ledger.Credential (Credential)
-import Plutus.V1.Ledger.Scripts (ScriptHash (..))
-import Plutus.V1.Ledger.Value (AssetClass)
+import Plutus.V1.Ledger.Api (Credential)
 import PlutusTx.Builtins.Internal (BuiltinByteString (..))
 
 data DatumRowT f = DatumRow
@@ -79,17 +76,6 @@ type RedeemerRow = RedeemerRowT Identity
 instance Table RedeemerRowT where
     data PrimaryKey RedeemerRowT f = RedeemerRowId (Columnar f ByteString) deriving (Generic, Beamable)
     primaryKey = RedeemerRowId . _redeemerRowHash
-
-data TxRowT f = TxRow
-    { _txRowTxId :: Columnar f ByteString
-    , _txRowTx   :: Columnar f ByteString
-    } deriving (Generic, Beamable)
-
-type TxRow = TxRowT Identity
-
-instance Table TxRowT where
-    data PrimaryKey TxRowT f = TxRowId (Columnar f ByteString) deriving (Generic, Beamable)
-    primaryKey = TxRowId . _txRowTxId
 
 data AddressRowT f = AddressRow
     { _addressRowCred   :: Columnar f ByteString
@@ -178,7 +164,6 @@ data Db f = Db
     { datumRows          :: f (TableEntity DatumRowT)
     , scriptRows         :: f (TableEntity ScriptRowT)
     , redeemerRows       :: f (TableEntity RedeemerRowT)
-    , txRows             :: f (TableEntity TxRowT)
     , utxoOutRefRows     :: f (TableEntity UtxoRowT)
     , addressRows        :: f (TableEntity AddressRowT)
     , assetClassRows     :: f (TableEntity AssetClassRowT)
@@ -191,7 +176,6 @@ type AllTables (c :: * -> Constraint) f =
     ( c (f (TableEntity DatumRowT))
     , c (f (TableEntity ScriptRowT))
     , c (f (TableEntity RedeemerRowT))
-    , c (f (TableEntity TxRowT))
     , c (f (TableEntity UtxoRowT))
     , c (f (TableEntity AddressRowT))
     , c (f (TableEntity AssetClassRowT))
@@ -211,7 +195,6 @@ checkedSqliteDb = defaultMigratableDbSettings
     { datumRows   = renameCheckedEntity (const "datums")
     , scriptRows  = renameCheckedEntity (const "scripts")
     , redeemerRows = renameCheckedEntity (const "redeemers")
-    , txRows = renameCheckedEntity (const "txs")
     , utxoOutRefRows = renameCheckedEntity (const "utxo_out_refs")
     , addressRows = renameCheckedEntity (const "addresses")
     , assetClassRows = renameCheckedEntity (const "asset_classes")
@@ -295,11 +278,6 @@ instance HasDbType (RedeemerHash, Redeemer) where
     type DbType (RedeemerHash, Redeemer) = RedeemerRow
     toDbValue (hash, redeemer) = RedeemerRow (toDbValue hash) (toDbValue redeemer)
     fromDbValue (RedeemerRow hash redeemer) = (fromDbValue hash, fromDbValue redeemer)
-
-instance HasDbType (TxId, ChainIndexTx) where
-    type DbType (TxId, ChainIndexTx) = TxRow
-    toDbValue (txId, tx) = TxRow (toDbValue txId) (toDbValue tx)
-    fromDbValue (TxRow txId tx) = (fromDbValue txId, fromDbValue tx)
 
 instance HasDbType (Credential, TxOutRef) where
     type DbType (Credential, TxOutRef) = AddressRow

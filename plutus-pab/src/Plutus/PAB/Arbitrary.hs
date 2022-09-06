@@ -12,6 +12,7 @@ import Control.Monad (replicateM)
 import Data.Aeson (Value)
 import Data.Aeson qualified as Aeson
 import Data.ByteString (ByteString)
+import Ledger (ValidatorHash (ValidatorHash))
 import Ledger qualified
 import Ledger.Address (Address (..), PaymentPubKey, PaymentPubKeyHash, StakePubKey, StakePubKeyHash)
 import Ledger.Bytes (LedgerBytes)
@@ -23,11 +24,9 @@ import Ledger.Slot (Slot)
 import Ledger.Tx (RedeemerPtr, ScriptTag, Tx, TxIn, TxInType, TxOut, TxOutRef)
 import Ledger.Tx.CardanoAPI (ToCardanoError)
 import Ledger.TxId (TxId)
+import Ledger.Typed.Tx (ConnectionError, WrongOutTypeError)
 import Plutus.Contract.Effects (ActiveEndpoint (..), PABReq (..), PABResp (..))
 import Plutus.Contract.StateMachine (ThreadToken)
-import Plutus.Script.Utils.V1.Typed.Scripts (ConnectionError, WrongOutTypeError)
-import Plutus.V1.Ledger.Api (ValidatorHash (ValidatorHash))
-import Plutus.V1.Ledger.Scripts qualified as Ledger
 import PlutusTx qualified
 import PlutusTx.AssocMap qualified as AssocMap
 import PlutusTx.Prelude qualified as PlutusTx
@@ -194,7 +193,7 @@ instance Arbitrary PlutusTx.Data where
         arbitraryMap n = do
            -- NOTE: A pair always has at least 2 constructors/nodes so we divide by 2
           (n', m) <- segmentRange ((n - 1) `div` 2)
-          PlutusTx.Map <$> replicateM m (arbitraryPair n')
+          PlutusTx.Map <$> replicateM m (arbitraryPair $ n')
 
         arbitraryPair n = do
           (,) <$> arbitraryData half <*> arbitraryData half
@@ -261,11 +260,10 @@ instance Arbitrary PABReq where
     arbitrary =
         oneof
             [ AwaitSlotReq <$> arbitrary
-            , pure CurrentPABSlotReq
-            , pure CurrentChainIndexSlotReq
+            , pure CurrentSlotReq
             , pure OwnContractInstanceIdReq
             , ExposeEndpointReq <$> arbitrary
-            , pure OwnAddressesReq
+            , pure OwnPaymentPublicKeyHashReq
             -- TODO This would need an Arbitrary Tx instance:
             -- , BalanceTxRequest <$> arbitrary
             -- , WriteBalancedTxRequest <$> arbitrary
@@ -300,7 +298,7 @@ instance Arbitrary ActiveEndpoint where
 -- 'Maybe' because we can't (yet) create a generator for every request
 -- type.
 genResponse :: PABReq -> Maybe (Gen PABResp)
-genResponse (AwaitSlotReq slot)   = Just . pure . AwaitSlotResp $ slot
-genResponse (ExposeEndpointReq _) = Just $ ExposeEndpointResp <$> arbitrary <*> (EndpointValue <$> arbitrary)
-genResponse OwnAddressesReq       = Just $ OwnAddressesResp <$> arbitrary
-genResponse _                     = Nothing
+genResponse (AwaitSlotReq slot)        = Just . pure . AwaitSlotResp $ slot
+genResponse (ExposeEndpointReq _)      = Just $ ExposeEndpointResp <$> arbitrary <*> (EndpointValue <$> arbitrary)
+genResponse OwnPaymentPublicKeyHashReq = Just $ OwnPaymentPublicKeyHashResp <$> arbitrary
+genResponse _                          = Nothing

@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 rm -f ./primary.db
 cabal build plutus-pab
 cabal exec plutus-pab -- --config=./config.yaml migrate primary.db

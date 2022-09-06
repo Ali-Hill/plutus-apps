@@ -1,0 +1,43 @@
+v1 error
+--I assumed this was because the slot was set lower
+
+ [Init (Wallet 1),
+  NewLaw (Wallet 3) "lawv2",
+  WaitUntil (Slot {getSlot = 24}),
+  StartProposal (Wallet 4) "lawv1" "TestLawToken4" (Slot {getSlot = 22}),
+  CheckLaw (Wallet 9)]
+
+v2 
+
+--this has error on empty case
+ [Init (Wallet 8),
+  NewLaw (Wallet 8) "lawv2",
+  StartProposal (Wallet 7) "lawv3" "TestLawToken7" (Slot {getSlot = 209}),
+  WaitUntil (Slot {getSlot = 209}),
+  AddVote (Wallet 5) "TestLawToken5" True,
+  WaitUntil (Slot {getSlot = 212}),
+  CheckLaw (Wallet 10)]
+
+-- this shouldn't work as it should be after the deadline however I believe that 
+-- this is a specific issue with slot->endposixtime. 
+
+--
+ [Init (Wallet 8),
+  NewLaw (Wallet 9) "lawv1",
+  StartProposal (Wallet 1) "lawv3" "TestLawToken1" (Slot {getSlot = 60}),
+  WaitUntil (Slot {getSlot = 60}),
+  AddVote (Wallet 10) "TestLawToken10" False,
+  WaitUntil (Slot {getSlot = 63}),
+  CheckLaw (Wallet 3)]
+
+-- this has error on nonempty case
+ [Init (Wallet 5),
+  NewLaw (Wallet 7) "lawv3",
+  StartProposal (Wallet 2) "lawv2" "TestLawToken2" (Slot {getSlot = 162}),
+  WaitUntil (Slot {getSlot = 165}),
+  CheckLaw (Wallet 5)]
+
+-- potentially there is a _ -> Nothing case hit when you addvote on the same slot that it finishes in. 
+
+212-209=3 
+165-162=3

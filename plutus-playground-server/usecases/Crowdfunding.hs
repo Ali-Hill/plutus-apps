@@ -26,18 +26,18 @@ import Control.Monad (void)
 import Data.Default (Default (def))
 import Data.Text (Text)
 import Ledger (POSIXTime, POSIXTimeRange, PaymentPubKeyHash (unPaymentPubKeyHash), ScriptContext (..), TxInfo (..),
-               getCardanoTxId)
+               Validator, getCardanoTxId)
 import Ledger qualified
+import Ledger.Contexts qualified as V
 import Ledger.Interval qualified as Interval
+import Ledger.Scripts qualified as Scripts
 import Ledger.TimeSlot qualified as TimeSlot
 import Ledger.Typed.Scripts qualified as Scripts hiding (validatorHash)
 import Ledger.Value (Value)
 import Playground.Contract
 import Plutus.Contract
 import Plutus.Contract.Constraints qualified as Constraints
-import Plutus.Script.Utils.V1.Scripts qualified as Scripts
-import Plutus.V1.Ledger.Api (Validator)
-import Plutus.V1.Ledger.Contexts qualified as V
+import Plutus.Contract.Typed.Tx qualified as Typed
 import PlutusTx qualified
 import PlutusTx.Prelude hiding (Applicative (..), Semigroup (..))
 import Prelude (Semigroup (..))
@@ -106,7 +106,7 @@ typedValidator = Scripts.mkTypedValidatorParam @Crowdfunding
     $$(PlutusTx.compile [|| mkValidator ||])
     $$(PlutusTx.compile [|| wrap ||])
     where
-        wrap = Scripts.mkUntypedValidator
+        wrap = Scripts.wrapValidator
 
 {-# INLINABLE validRefund #-}
 validRefund :: Campaign -> PaymentPubKeyHash -> TxInfo -> Bool
@@ -142,7 +142,7 @@ contributionScript :: Campaign -> Validator
 contributionScript = Scripts.validatorScript . typedValidator
 
 -- | The address of a [[Campaign]]
-campaignAddress :: Campaign -> ValidatorHash
+campaignAddress :: Campaign -> Ledger.ValidatorHash
 campaignAddress = Scripts.validatorHash . contributionScript
 
 -- | The crowdfunding contract for the 'Campaign'.
@@ -163,12 +163,12 @@ theCampaign startTime = Campaign
 --   refund if the funding was not collected.
 contribute :: AsContractError e => Campaign -> Promise () CrowdfundingSchema e ()
 contribute cmp = endpoint @"contribute" $ \Contribution{contribValue} -> do
-    contributor <- ownFirstPaymentPubKeyHash
+    contributor <- ownPaymentPubKeyHash
     let inst = typedValidator cmp
         tx = Constraints.mustPayToTheScript contributor contribValue
                 <> Constraints.mustValidateIn (Interval.to (campaignDeadline cmp))
-    txid <- fmap getCardanoTxId $ mkTxConstraints (Constraints.plutusV1TypedValidatorLookups inst) tx
-        >>= adjustUnbalancedTx >>= submitUnbalancedTx
+    txid <- fmap getCardanoTxId $ mkTxConstraints (Constraints.typedValidatorLookups inst) tx
+        >>= submitUnbalancedTx . Constraints.adjustUnbalancedTx
 
     utxo <- watchAddressUntilTime (Scripts.validatorAddress inst) (campaignCollectionDeadline cmp)
 
@@ -177,15 +177,15 @@ contribute cmp = endpoint @"contribute" $ \Contribution{contribValue} -> do
     -- then we can claim a refund.
 
     let flt Ledger.TxOutRef{txOutRefId} _ = txid Haskell.== txOutRefId
-        tx' = Constraints.collectFromTheScriptFilter flt utxo Refund
+        tx' = Typed.collectFromScriptFilter flt utxo Refund
                 <> Constraints.mustValidateIn (refundRange cmp)
                 <> Constraints.mustBeSignedBy contributor
     if Constraints.modifiesUtxoSet tx'
     then do
         logInfo @Text "Claiming refund"
-        void $ mkTxConstraints (Constraints.plutusV1TypedValidatorLookups inst
+        void $ mkTxConstraints (Constraints.typedValidatorLookups inst
                              <> Constraints.unspentOutputs utxo) tx'
-            >>= adjustUnbalancedTx >>= submitUnbalancedTx
+            >>= submitUnbalancedTx . Constraints.adjustUnbalancedTx
     else pure ()
 
 -- | The campaign owner's branch of the contract for a given 'Campaign'. It
@@ -202,7 +202,7 @@ scheduleCollection cmp =
         _ <- awaitTime $ campaignDeadline cmp
         unspentOutputs <- utxosAt (Scripts.validatorAddress inst)
 
-        let tx = Constraints.collectFromTheScript unspentOutputs Collect
+        let tx = Typed.collectFromScript unspentOutputs Collect
                 <> Constraints.mustValidateIn (collectionRange cmp)
         void $ submitTxConstraintsSpending inst unspentOutputs tx
 

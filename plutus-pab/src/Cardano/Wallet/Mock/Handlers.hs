@@ -23,7 +23,6 @@ import Cardano.Node.Types (ChainSyncHandle)
 import Cardano.Protocol.Socket.Mock.Client qualified as MockClient
 import Cardano.Wallet.Mock.Types (MultiWalletEffect (..), WalletEffects, WalletInfo (..), WalletMsg (..), Wallets,
                                   fromWalletState)
-import Cardano.Wallet.Primitive.Types as CWP
 import Control.Concurrent (MVar)
 import Control.Concurrent.MVar (putMVar, takeMVar)
 import Control.Lens (at, (?~))
@@ -43,7 +42,6 @@ import Data.ByteString.Lazy qualified as BSL
 import Data.ByteString.Lazy.Char8 qualified as BSL8
 import Data.ByteString.Lazy.Char8 qualified as Char8
 import Data.Function ((&))
-import Data.List.NonEmpty qualified as NonEmpty
 import Data.Map qualified as Map
 import Data.Text (Text, pack)
 import Data.Text.Encoding (encodeUtf8)
@@ -51,7 +49,7 @@ import Ledger.Ada qualified as Ada
 import Ledger.Address (PaymentPubKeyHash)
 import Ledger.CardanoWallet (MockWallet)
 import Ledger.CardanoWallet qualified as CW
-import Ledger.Params (Params)
+import Ledger.TimeSlot (SlotConfig)
 import Ledger.Tx (CardanoTx)
 import Plutus.ChainIndex (ChainIndexQueryEffect)
 import Plutus.ChainIndex.Client qualified as ChainIndex
@@ -65,7 +63,7 @@ import Servant.Server (err500)
 import Wallet.API (WalletAPIError (..))
 import Wallet.API qualified as WAPI
 import Wallet.Effects (NodeClientEffect)
-import Wallet.Emulator.LogMessages (RequestHandlerLogMsg, TxBalanceMsg)
+import Wallet.Emulator.LogMessages (TxBalanceMsg)
 import Wallet.Emulator.Wallet qualified as Wallet
 
 newtype Seed = Seed ScrubbedBytes
@@ -89,13 +87,11 @@ distributeNewWalletFunds :: forall effs.
     ( Member WAPI.WalletEffect effs
     , Member (Error WalletAPIError) effs
     , Member (LogMsg Text) effs
-    , Member (LogMsg RequestHandlerLogMsg) effs
     )
-    => Params
-    -> Maybe Ada.Ada
+    => Maybe Ada.Ada
     -> PaymentPubKeyHash
     -> Eff effs CardanoTx
-distributeNewWalletFunds params funds = WAPI.payToPaymentPublicKeyHash params WAPI.defaultSlotRange
+distributeNewWalletFunds funds = WAPI.payToPaymentPublicKeyHash WAPI.defaultSlotRange
     (maybe (Ada.adaValueOf 10_000) Ada.toValue funds)
 
 newWallet :: forall m effs. (LastMember m effs, MonadIO m) => Eff effs MockWallet
@@ -115,8 +111,8 @@ handleMultiWallet :: forall m effs.
     , LastMember m effs
     , MonadIO m
     )
-    => Params -> MultiWalletEffect ~> Eff effs
-handleMultiWallet params = \case
+    => MultiWalletEffect ~> Eff effs
+handleMultiWallet = \case
     MultiWallet (Wallet.Wallet _ walletId) action -> do
         wallets <- get @Wallets
         case Map.lookup walletId wallets of
@@ -132,10 +128,9 @@ handleMultiWallet params = \case
     CreateWallet funds -> do
         wallets <- get @Wallets
         mockWallet <- newWallet
-        let walletId = Wallet.WalletId . CWP.WalletId $ CW.mwWalletId mockWallet
+        let walletId = Wallet.WalletId (CW.mwWalletId mockWallet)
             wallets' = Map.insert walletId (Wallet.fromMockWallet mockWallet) wallets
             pkh = CW.paymentPubKeyHash mockWallet
-            addr = CW.mockWalletAddress mockWallet
         put wallets'
         -- For some reason this doesn't work with (Wallet 1)/privateKey1,
         -- works just fine with (Wallet 2)/privateKey2
@@ -143,14 +138,9 @@ handleMultiWallet params = \case
         let sourceWallet = Wallet.fromMockWallet (CW.knownMockWallet 2)
         _ <- evalState sourceWallet $
             interpret (mapLog @TxBalanceMsg @WalletMsg Balancing)
-            $ interpret (mapLog @RequestHandlerLogMsg @WalletMsg RequestHandling)
             $ interpret Wallet.handleWallet
-            $ distributeNewWalletFunds params funds pkh
-        return $ WalletInfo
-            { wiWallet = Wallet.toMockWallet mockWallet
-            , wiPaymentPubKeyHash = pkh
-            , wiAddresses = NonEmpty.fromList [addr]
-            }
+            $ distributeNewWalletFunds funds pkh
+        return $ WalletInfo{wiWallet = Wallet.toMockWallet mockWallet, wiPaymentPubKeyHash = pkh}
     GetWalletInfo wllt -> do
         wallets <- get @Wallets
         return $ fmap fromWalletState $ Map.lookup wllt wallets
@@ -164,17 +154,17 @@ processWalletEffects ::
     -> ChainSyncHandle -- ^ node client
     -> ClientEnv          -- ^ chain index client
     -> MVar Wallets   -- ^ wallets state
-    -> Params
+    -> SlotConfig
     -> Eff (WalletEffects IO) a -- ^ wallet effect
     -> m a
-processWalletEffects trace txSendHandle chainSyncHandle chainIndexEnv mVarState params action = do
+processWalletEffects trace txSendHandle chainSyncHandle chainIndexEnv mVarState slotCfg action = do
     oldState <- liftIO $ takeMVar mVarState
     result <- liftIO $ runWalletEffects trace
                                         txSendHandle
                                         chainSyncHandle
                                         chainIndexEnv
                                         oldState
-                                        params
+                                        slotCfg
                                         action
     case result of
         Left e -> do
@@ -191,13 +181,13 @@ runWalletEffects ::
     -> ChainSyncHandle -- ^ node client
     -> ClientEnv -- ^ chain index client
     -> Wallets -- ^ current state
-    -> Params
+    -> SlotConfig
     -> Eff (WalletEffects IO) a -- ^ wallet effect
     -> IO (Either ServerError (a, Wallets))
-runWalletEffects trace txSendHandle chainSyncHandle chainIndexEnv wallets params action =
-    reinterpret (handleMultiWallet params) action
+runWalletEffects trace txSendHandle chainSyncHandle chainIndexEnv wallets slotCfg action =
+    reinterpret handleMultiWallet action
     & interpret (LM.handleLogMsgTrace trace)
-    & reinterpret2 (NodeClient.handleNodeClientClient params)
+    & reinterpret2 (NodeClient.handleNodeClientClient slotCfg)
     & runReader chainSyncHandle
     & runReader (Just txSendHandle)
     & reinterpret ChainIndex.handleChainIndexClient
@@ -223,8 +213,6 @@ runWalletEffects trace txSendHandle chainSyncHandle chainIndexEnv wallets params
 fromWalletAPIError :: WalletAPIError -> ServerError
 fromWalletAPIError (InsufficientFunds text) =
     err401 {errBody = BSL.fromStrict $ encodeUtf8 text}
-fromWalletAPIError e@NoPaymentPubKeyHashError =
-    err404 {errBody = BSL8.pack $ show e}
 fromWalletAPIError e@(PaymentPrivateKeyNotFound _) =
     err404 {errBody = BSL8.pack $ show e}
 fromWalletAPIError e@(ValidationError _) =

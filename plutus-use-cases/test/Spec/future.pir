@@ -149,10 +149,15 @@
                 (fun
                   (con bytestring)
                   (fun
-                    [ Maybe (con bytestring) ]
+                    (con data)
                     (fun
-                      (con data)
-                      (fun
+                      [
+                        [
+                          (lam
+                            k (type) (lam v (type) [ List [ [ Tuple2 k ] v ] ])
+                          )
+                          (con bytestring)
+                        ]
                         [
                           [
                             (lam
@@ -162,20 +167,10 @@
                             )
                             (con bytestring)
                           ]
-                          [
-                            [
-                              (lam
-                                k
-                                (type)
-                                (lam v (type) [ List [ [ Tuple2 k ] v ] ])
-                              )
-                              (con bytestring)
-                            ]
-                            (con integer)
-                          ]
+                          (con integer)
                         ]
-                        TxConstraint
-                      )
+                      ]
+                      TxConstraint
                     )
                   )
                 )
@@ -274,9 +269,6 @@
           )
           (let
             (nonrec)
-            (typebind
-              (tyvardecl TxConstraintFun (type)) (all a (type) (fun a a))
-            )
             (datatypebind
               (datatype
                 (tyvardecl TxConstraints (fun (type) (fun (type) (type))))
@@ -287,13 +279,10 @@
                   (fun
                     [ List TxConstraint ]
                     (fun
-                      [ List TxConstraintFun ]
+                      [ List [ ScriptInputConstraint i ] ]
                       (fun
-                        [ List [ ScriptInputConstraint i ] ]
-                        (fun
-                          [ List [ ScriptOutputConstraint o ] ]
-                          [ [ TxConstraints i ] o ]
-                        )
+                        [ List [ ScriptOutputConstraint o ] ]
+                        [ [ TxConstraints i ] o ]
                       )
                     )
                   )
@@ -336,19 +325,12 @@
             (datatypebind
               (datatype
                 (tyvardecl
-                  UTuple4
-                  (fun (type) (fun (type) (fun (type) (fun (type) (type)))))
+                  UTuple3 (fun (type) (fun (type) (fun (type) (type))))
                 )
-                (tyvardecl a (type))
-                (tyvardecl b (type))
-                (tyvardecl c (type))
-                (tyvardecl d (type))
-                UTuple4_match
+                (tyvardecl a (type)) (tyvardecl b (type)) (tyvardecl c (type))
+                UTuple3_match
                 (vardecl
-                  UTuple4
-                  (fun
-                    a (fun b (fun c (fun d [ [ [ [ UTuple4 a ] b ] c ] d ])))
-                  )
+                  UTuple3 (fun a (fun b (fun c [ [ [ UTuple3 a ] b ] c ])))
                 )
               )
             )
@@ -432,10 +414,7 @@
                             [ [ TxConstraints i ] o ]
                             [
                               [
-                                [
-                                  [ UTuple4 [ List TxConstraint ] ]
-                                  [ List TxConstraintFun ]
-                                ]
+                                [ UTuple3 [ List TxConstraint ] ]
                                 [ List [ ScriptInputConstraint i ] ]
                               ]
                               [ List [ ScriptOutputConstraint o ] ]
@@ -460,184 +439,21 @@
                           [
                             [
                               [
-                                [
+                                {
                                   {
-                                    {
-                                      {
-                                        { UTuple4 [ List TxConstraint ] }
-                                        [ List TxConstraintFun ]
-                                      }
-                                      [ List [ ScriptInputConstraint i ] ]
-                                    }
-                                    [ List [ ScriptOutputConstraint o ] ]
+                                    { UTuple3 [ List TxConstraint ] }
+                                    [ List [ ScriptInputConstraint i ] ]
                                   }
-                                  [
-                                    {
-                                      [ { { TxConstraints_match i } o } w ]
-                                      [ List TxConstraint ]
-                                    }
-                                    (lam
-                                      ds
-                                      [ List TxConstraint ]
-                                      (lam
-                                        ds
-                                        [ List TxConstraintFun ]
-                                        (lam
-                                          ds
-                                          [ List [ ScriptInputConstraint i ] ]
-                                          (lam
-                                            ds
-                                            [
-                                              List [ ScriptOutputConstraint o ]
-                                            ]
-                                            [
-                                              [
-                                                [
-                                                  {
-                                                    { foldr TxConstraint }
-                                                    [ List TxConstraint ]
-                                                  }
-                                                  { Cons TxConstraint }
-                                                ]
-                                                [
-                                                  {
-                                                    [
-                                                      {
-                                                        {
-                                                          TxConstraints_match i
-                                                        }
-                                                        o
-                                                      }
-                                                      w
-                                                    ]
-                                                    [ List TxConstraint ]
-                                                  }
-                                                  (lam
-                                                    ds
-                                                    [ List TxConstraint ]
-                                                    (lam
-                                                      ds
-                                                      [ List TxConstraintFun ]
-                                                      (lam
-                                                        ds
-                                                        [
-                                                          List
-                                                          [
-                                                            ScriptInputConstraint
-                                                            i
-                                                          ]
-                                                        ]
-                                                        (lam
-                                                          ds
-                                                          [
-                                                            List
-                                                            [
-                                                              ScriptOutputConstraint
-                                                              o
-                                                            ]
-                                                          ]
-                                                          ds
-                                                        )
-                                                      )
-                                                    )
-                                                  )
-                                                ]
-                                              ]
-                                              ds
-                                            ]
-                                          )
-                                        )
-                                      )
-                                    )
-                                  ]
-                                ]
+                                  [ List [ ScriptOutputConstraint o ] ]
+                                }
                                 [
                                   {
                                     [ { { TxConstraints_match i } o } w ]
-                                    [ List TxConstraintFun ]
+                                    [ List TxConstraint ]
                                   }
                                   (lam
                                     ds
                                     [ List TxConstraint ]
-                                    (lam
-                                      ds
-                                      [ List TxConstraintFun ]
-                                      (lam
-                                        ds
-                                        [ List [ ScriptInputConstraint i ] ]
-                                        (lam
-                                          ds
-                                          [ List [ ScriptOutputConstraint o ] ]
-                                          [
-                                            [
-                                              [
-                                                {
-                                                  { foldr TxConstraintFun }
-                                                  [ List TxConstraintFun ]
-                                                }
-                                                { Cons TxConstraintFun }
-                                              ]
-                                              [
-                                                {
-                                                  [
-                                                    {
-                                                      { TxConstraints_match i }
-                                                      o
-                                                    }
-                                                    w
-                                                  ]
-                                                  [ List TxConstraintFun ]
-                                                }
-                                                (lam
-                                                  ds
-                                                  [ List TxConstraint ]
-                                                  (lam
-                                                    ds
-                                                    [ List TxConstraintFun ]
-                                                    (lam
-                                                      ds
-                                                      [
-                                                        List
-                                                        [
-                                                          ScriptInputConstraint
-                                                          i
-                                                        ]
-                                                      ]
-                                                      (lam
-                                                        ds
-                                                        [
-                                                          List
-                                                          [
-                                                            ScriptOutputConstraint
-                                                            o
-                                                          ]
-                                                        ]
-                                                        ds
-                                                      )
-                                                    )
-                                                  )
-                                                )
-                                              ]
-                                            ]
-                                            ds
-                                          ]
-                                        )
-                                      )
-                                    )
-                                  )
-                                ]
-                              ]
-                              [
-                                {
-                                  [ { { TxConstraints_match i } o } w ]
-                                  [ List [ ScriptInputConstraint i ] ]
-                                }
-                                (lam
-                                  ds
-                                  [ List TxConstraint ]
-                                  (lam
-                                    ds
-                                    [ List TxConstraintFun ]
                                     (lam
                                       ds
                                       [ List [ ScriptInputConstraint i ] ]
@@ -648,18 +464,10 @@
                                           [
                                             [
                                               {
-                                                {
-                                                  foldr
-                                                  [ ScriptInputConstraint i ]
-                                                }
-                                                [
-                                                  List
-                                                  [ ScriptInputConstraint i ]
-                                                ]
+                                                { foldr TxConstraint }
+                                                [ List TxConstraint ]
                                               }
-                                              {
-                                                Cons [ ScriptInputConstraint i ]
-                                              }
+                                              { Cons TxConstraint }
                                             ]
                                             [
                                               {
@@ -669,100 +477,11 @@
                                                   }
                                                   w
                                                 ]
-                                                [
-                                                  List
-                                                  [ ScriptInputConstraint i ]
-                                                ]
+                                                [ List TxConstraint ]
                                               }
                                               (lam
                                                 ds
                                                 [ List TxConstraint ]
-                                                (lam
-                                                  ds
-                                                  [ List TxConstraintFun ]
-                                                  (lam
-                                                    ds
-                                                    [
-                                                      List
-                                                      [
-                                                        ScriptInputConstraint i
-                                                      ]
-                                                    ]
-                                                    (lam
-                                                      ds
-                                                      [
-                                                        List
-                                                        [
-                                                          ScriptOutputConstraint
-                                                          o
-                                                        ]
-                                                      ]
-                                                      ds
-                                                    )
-                                                  )
-                                                )
-                                              )
-                                            ]
-                                          ]
-                                          ds
-                                        ]
-                                      )
-                                    )
-                                  )
-                                )
-                              ]
-                            ]
-                            [
-                              {
-                                [ { { TxConstraints_match i } o } w ]
-                                [ List [ ScriptOutputConstraint o ] ]
-                              }
-                              (lam
-                                ds
-                                [ List TxConstraint ]
-                                (lam
-                                  ds
-                                  [ List TxConstraintFun ]
-                                  (lam
-                                    ds
-                                    [ List [ ScriptInputConstraint i ] ]
-                                    (lam
-                                      ds
-                                      [ List [ ScriptOutputConstraint o ] ]
-                                      [
-                                        [
-                                          [
-                                            {
-                                              {
-                                                foldr
-                                                [ ScriptOutputConstraint o ]
-                                              }
-                                              [
-                                                List
-                                                [ ScriptOutputConstraint o ]
-                                              ]
-                                            }
-                                            {
-                                              Cons [ ScriptOutputConstraint o ]
-                                            }
-                                          ]
-                                          [
-                                            {
-                                              [
-                                                { { TxConstraints_match i } o }
-                                                w
-                                              ]
-                                              [
-                                                List
-                                                [ ScriptOutputConstraint o ]
-                                              ]
-                                            }
-                                            (lam
-                                              ds
-                                              [ List TxConstraint ]
-                                              (lam
-                                                ds
-                                                [ List TxConstraintFun ]
                                                 (lam
                                                   ds
                                                   [
@@ -781,12 +500,139 @@
                                                   )
                                                 )
                                               )
+                                            ]
+                                          ]
+                                          ds
+                                        ]
+                                      )
+                                    )
+                                  )
+                                ]
+                              ]
+                              [
+                                {
+                                  [ { { TxConstraints_match i } o } w ]
+                                  [ List [ ScriptInputConstraint i ] ]
+                                }
+                                (lam
+                                  ds
+                                  [ List TxConstraint ]
+                                  (lam
+                                    ds
+                                    [ List [ ScriptInputConstraint i ] ]
+                                    (lam
+                                      ds
+                                      [ List [ ScriptOutputConstraint o ] ]
+                                      [
+                                        [
+                                          [
+                                            {
+                                              {
+                                                foldr
+                                                [ ScriptInputConstraint i ]
+                                              }
+                                              [
+                                                List [ ScriptInputConstraint i ]
+                                              ]
+                                            }
+                                            { Cons [ ScriptInputConstraint i ] }
+                                          ]
+                                          [
+                                            {
+                                              [
+                                                { { TxConstraints_match i } o }
+                                                w
+                                              ]
+                                              [
+                                                List [ ScriptInputConstraint i ]
+                                              ]
+                                            }
+                                            (lam
+                                              ds
+                                              [ List TxConstraint ]
+                                              (lam
+                                                ds
+                                                [
+                                                  List
+                                                  [ ScriptInputConstraint i ]
+                                                ]
+                                                (lam
+                                                  ds
+                                                  [
+                                                    List
+                                                    [ ScriptOutputConstraint o ]
+                                                  ]
+                                                  ds
+                                                )
+                                              )
                                             )
                                           ]
                                         ]
                                         ds
                                       ]
                                     )
+                                  )
+                                )
+                              ]
+                            ]
+                            [
+                              {
+                                [ { { TxConstraints_match i } o } w ]
+                                [ List [ ScriptOutputConstraint o ] ]
+                              }
+                              (lam
+                                ds
+                                [ List TxConstraint ]
+                                (lam
+                                  ds
+                                  [ List [ ScriptInputConstraint i ] ]
+                                  (lam
+                                    ds
+                                    [ List [ ScriptOutputConstraint o ] ]
+                                    [
+                                      [
+                                        [
+                                          {
+                                            {
+                                              foldr [ ScriptOutputConstraint o ]
+                                            }
+                                            [
+                                              List [ ScriptOutputConstraint o ]
+                                            ]
+                                          }
+                                          { Cons [ ScriptOutputConstraint o ] }
+                                        ]
+                                        [
+                                          {
+                                            [
+                                              { { TxConstraints_match i } o } w
+                                            ]
+                                            [
+                                              List [ ScriptOutputConstraint o ]
+                                            ]
+                                          }
+                                          (lam
+                                            ds
+                                            [ List TxConstraint ]
+                                            (lam
+                                              ds
+                                              [
+                                                List [ ScriptInputConstraint i ]
+                                              ]
+                                              (lam
+                                                ds
+                                                [
+                                                  List
+                                                  [ ScriptOutputConstraint o ]
+                                                ]
+                                                ds
+                                              )
+                                            )
+                                          )
+                                        ]
+                                      ]
+                                      ds
+                                    ]
                                   )
                                 )
                               )
@@ -858,10 +704,7 @@
                               ]
                               [
                                 [
-                                  [
-                                    [ UTuple4 [ List TxConstraint ] ]
-                                    [ List TxConstraintFun ]
-                                  ]
+                                  [ UTuple3 [ List TxConstraint ] ]
                                   [ List [ ScriptInputConstraint i ] ]
                                 ]
                                 [ List [ ScriptOutputConstraint o ] ]
@@ -910,44 +753,21 @@
                             [
                               [
                                 [
-                                  [
+                                  {
                                     {
-                                      {
-                                        {
-                                          { UTuple4 [ List TxConstraint ] }
-                                          [ List TxConstraintFun ]
-                                        }
-                                        [ List [ ScriptInputConstraint i ] ]
-                                      }
-                                      [ List [ ScriptOutputConstraint o ] ]
+                                      { UTuple3 [ List TxConstraint ] }
+                                      [ List [ ScriptInputConstraint i ] ]
                                     }
+                                    [ List [ ScriptOutputConstraint o ] ]
+                                  }
+                                  [
                                     [
                                       [
-                                        [
-                                          {
-                                            { foldr TxConstraint }
-                                            [ List TxConstraint ]
-                                          }
-                                          { Cons TxConstraint }
-                                        ]
-                                        [
-                                          { build TxConstraint }
-                                          (abs
-                                            a
-                                            (type)
-                                            (lam
-                                              c
-                                              (fun TxConstraint (fun a a))
-                                              (lam
-                                                n
-                                                a
-                                                [
-                                                  [ c [ MustIncludeDatum w ] ] n
-                                                ]
-                                              )
-                                            )
-                                          )
-                                        ]
+                                        {
+                                          { foldr TxConstraint }
+                                          [ List TxConstraint ]
+                                        }
+                                        { Cons TxConstraint }
                                       ]
                                       [
                                         { build TxConstraint }
@@ -960,45 +780,39 @@
                                             (lam
                                               n
                                               a
-                                              [
-                                                [
-                                                  c
-                                                  [
-                                                    [
-                                                      [
-                                                        [
-                                                          MustPayToOtherScript w
-                                                        ]
-                                                        {
-                                                          Nothing
-                                                          (con bytestring)
-                                                        }
-                                                      ]
-                                                      w
-                                                    ]
-                                                    w
-                                                  ]
-                                                ]
-                                                n
-                                              ]
+                                              [ [ c [ MustIncludeDatum w ] ] n ]
                                             )
                                           )
                                         )
                                       ]
                                     ]
-                                  ]
-                                  [
                                     [
-                                      [
-                                        {
-                                          { foldr TxConstraintFun }
-                                          [ List TxConstraintFun ]
-                                        }
-                                        { Cons TxConstraintFun }
-                                      ]
-                                      { Nil TxConstraintFun }
+                                      { build TxConstraint }
+                                      (abs
+                                        a
+                                        (type)
+                                        (lam
+                                          c
+                                          (fun TxConstraint (fun a a))
+                                          (lam
+                                            n
+                                            a
+                                            [
+                                              [
+                                                c
+                                                [
+                                                  [
+                                                    [ MustPayToOtherScript w ] w
+                                                  ]
+                                                  w
+                                                ]
+                                              ]
+                                              n
+                                            ]
+                                          )
+                                        )
+                                      )
                                     ]
-                                    { Nil TxConstraintFun }
                                   ]
                                 ]
                                 [
@@ -1621,56 +1435,49 @@
                                                             [
                                                               [
                                                                 [
+                                                                  {
+                                                                    {
+                                                                      TxConstraints
+                                                                      i
+                                                                    }
+                                                                    o
+                                                                  }
                                                                   [
                                                                     {
-                                                                      {
-                                                                        TxConstraints
-                                                                        i
-                                                                      }
-                                                                      o
+                                                                      build
+                                                                      TxConstraint
                                                                     }
-                                                                    [
-                                                                      {
-                                                                        build
-                                                                        TxConstraint
-                                                                      }
-                                                                      (abs
-                                                                        a
-                                                                        (type)
-                                                                        (lam
-                                                                          c
+                                                                    (abs
+                                                                      a
+                                                                      (type)
+                                                                      (lam
+                                                                        c
+                                                                        (fun
+                                                                          TxConstraint
                                                                           (fun
-                                                                            TxConstraint
-                                                                            (fun
-                                                                              a
-                                                                              a
-                                                                            )
-                                                                          )
-                                                                          (lam
-                                                                            n
-                                                                            a
-                                                                            [
-                                                                              [
-                                                                                c
-                                                                                [
-                                                                                  [
-                                                                                    MustHashDatum
-                                                                                    ww
-                                                                                  ]
-                                                                                  ww
-                                                                                ]
-                                                                              ]
-                                                                              n
-                                                                            ]
+                                                                            a a
                                                                           )
                                                                         )
+                                                                        (lam
+                                                                          n
+                                                                          a
+                                                                          [
+                                                                            [
+                                                                              c
+                                                                              [
+                                                                                [
+                                                                                  MustHashDatum
+                                                                                  ww
+                                                                                ]
+                                                                                ww
+                                                                              ]
+                                                                            ]
+                                                                            n
+                                                                          ]
+                                                                        )
                                                                       )
-                                                                    ]
+                                                                    )
                                                                   ]
-                                                                  {
-                                                                    Nil
-                                                                    TxConstraintFun
-                                                                  }
                                                                 ]
                                                                 {
                                                                   Nil
@@ -7118,22 +6925,16 @@
                                                                                     [
                                                                                       [
                                                                                         [
-                                                                                          [
+                                                                                          {
                                                                                             {
-                                                                                              {
-                                                                                                TxConstraints
-                                                                                                Void
-                                                                                              }
+                                                                                              TxConstraints
                                                                                               Void
                                                                                             }
-                                                                                            {
-                                                                                              Nil
-                                                                                              TxConstraint
-                                                                                            }
-                                                                                          ]
+                                                                                            Void
+                                                                                          }
                                                                                           {
                                                                                             Nil
-                                                                                            TxConstraintFun
+                                                                                            TxConstraint
                                                                                           }
                                                                                         ]
                                                                                         {
@@ -8371,16 +8172,10 @@
                                                                                                           {
                                                                                                             {
                                                                                                               {
-                                                                                                                {
-                                                                                                                  UTuple4_match
-                                                                                                                  [
-                                                                                                                    List
-                                                                                                                    TxConstraint
-                                                                                                                  ]
-                                                                                                                }
+                                                                                                                UTuple3_match
                                                                                                                 [
                                                                                                                   List
-                                                                                                                  TxConstraintFun
+                                                                                                                  TxConstraint
                                                                                                                 ]
                                                                                                               }
                                                                                                               [
@@ -8590,16 +8385,10 @@
                                                                                                                                   {
                                                                                                                                     {
                                                                                                                                       {
-                                                                                                                                        {
-                                                                                                                                          UTuple4_match
-                                                                                                                                          [
-                                                                                                                                            List
-                                                                                                                                            TxConstraint
-                                                                                                                                          ]
-                                                                                                                                        }
+                                                                                                                                        UTuple3_match
                                                                                                                                         [
                                                                                                                                           List
-                                                                                                                                          TxConstraintFun
+                                                                                                                                          TxConstraint
                                                                                                                                         ]
                                                                                                                                       }
                                                                                                                                       [
@@ -8766,6 +8555,116 @@
                                                                                                                                       )
                                                                                                                                     )
                                                                                                                                     (termbind
+                                                                                                                                      (nonstrict)
+                                                                                                                                      (vardecl
+                                                                                                                                        w
+                                                                                                                                        [
+                                                                                                                                          [
+                                                                                                                                            TxConstraints
+                                                                                                                                            Void
+                                                                                                                                          ]
+                                                                                                                                          Void
+                                                                                                                                        ]
+                                                                                                                                      )
+                                                                                                                                      [
+                                                                                                                                        {
+                                                                                                                                          [
+                                                                                                                                            {
+                                                                                                                                              {
+                                                                                                                                                {
+                                                                                                                                                  UTuple3_match
+                                                                                                                                                  [
+                                                                                                                                                    List
+                                                                                                                                                    TxConstraint
+                                                                                                                                                  ]
+                                                                                                                                                }
+                                                                                                                                                [
+                                                                                                                                                  List
+                                                                                                                                                  [
+                                                                                                                                                    ScriptInputConstraint
+                                                                                                                                                    Void
+                                                                                                                                                  ]
+                                                                                                                                                ]
+                                                                                                                                              }
+                                                                                                                                              [
+                                                                                                                                                List
+                                                                                                                                                [
+                                                                                                                                                  ScriptOutputConstraint
+                                                                                                                                                  Void
+                                                                                                                                                ]
+                                                                                                                                              ]
+                                                                                                                                            }
+                                                                                                                                            [
+                                                                                                                                              [
+                                                                                                                                                [
+                                                                                                                                                  {
+                                                                                                                                                    {
+                                                                                                                                                      wmustPayToOtherScript
+                                                                                                                                                      Void
+                                                                                                                                                    }
+                                                                                                                                                    Void
+                                                                                                                                                  }
+                                                                                                                                                  ww
+                                                                                                                                                ]
+                                                                                                                                                unitDatum
+                                                                                                                                              ]
+                                                                                                                                              ww
+                                                                                                                                            ]
+                                                                                                                                          ]
+                                                                                                                                          [
+                                                                                                                                            [
+                                                                                                                                              TxConstraints
+                                                                                                                                              Void
+                                                                                                                                            ]
+                                                                                                                                            Void
+                                                                                                                                          ]
+                                                                                                                                        }
+                                                                                                                                        (lam
+                                                                                                                                          ww
+                                                                                                                                          [
+                                                                                                                                            List
+                                                                                                                                            TxConstraint
+                                                                                                                                          ]
+                                                                                                                                          (lam
+                                                                                                                                            ww
+                                                                                                                                            [
+                                                                                                                                              List
+                                                                                                                                              [
+                                                                                                                                                ScriptInputConstraint
+                                                                                                                                                Void
+                                                                                                                                              ]
+                                                                                                                                            ]
+                                                                                                                                            (lam
+                                                                                                                                              ww
+                                                                                                                                              [
+                                                                                                                                                List
+                                                                                                                                                [
+                                                                                                                                                  ScriptOutputConstraint
+                                                                                                                                                  Void
+                                                                                                                                                ]
+                                                                                                                                              ]
+                                                                                                                                              [
+                                                                                                                                                [
+                                                                                                                                                  [
+                                                                                                                                                    {
+                                                                                                                                                      {
+                                                                                                                                                        TxConstraints
+                                                                                                                                                        Void
+                                                                                                                                                      }
+                                                                                                                                                      Void
+                                                                                                                                                    }
+                                                                                                                                                    ww
+                                                                                                                                                  ]
+                                                                                                                                                  ww
+                                                                                                                                                ]
+                                                                                                                                                ww
+                                                                                                                                              ]
+                                                                                                                                            )
+                                                                                                                                          )
+                                                                                                                                        )
+                                                                                                                                      ]
+                                                                                                                                    )
+                                                                                                                                    (termbind
                                                                                                                                       (strict)
                                                                                                                                       (vardecl
                                                                                                                                         ww
@@ -8831,145 +8730,28 @@
                                                                                                                                         delta
                                                                                                                                       ]
                                                                                                                                     )
-                                                                                                                                    [
-                                                                                                                                      [
-                                                                                                                                        {
-                                                                                                                                          {
-                                                                                                                                            wc
-                                                                                                                                            Void
-                                                                                                                                          }
-                                                                                                                                          Void
-                                                                                                                                        }
+                                                                                                                                    (termbind
+                                                                                                                                      (nonstrict)
+                                                                                                                                      (vardecl
+                                                                                                                                        w
                                                                                                                                         [
-                                                                                                                                          {
-                                                                                                                                            [
-                                                                                                                                              {
-                                                                                                                                                {
-                                                                                                                                                  {
-                                                                                                                                                    {
-                                                                                                                                                      UTuple4_match
-                                                                                                                                                      [
-                                                                                                                                                        List
-                                                                                                                                                        TxConstraint
-                                                                                                                                                      ]
-                                                                                                                                                    }
-                                                                                                                                                    [
-                                                                                                                                                      List
-                                                                                                                                                      TxConstraintFun
-                                                                                                                                                    ]
-                                                                                                                                                  }
-                                                                                                                                                  [
-                                                                                                                                                    List
-                                                                                                                                                    [
-                                                                                                                                                      ScriptInputConstraint
-                                                                                                                                                      Void
-                                                                                                                                                    ]
-                                                                                                                                                  ]
-                                                                                                                                                }
-                                                                                                                                                [
-                                                                                                                                                  List
-                                                                                                                                                  [
-                                                                                                                                                    ScriptOutputConstraint
-                                                                                                                                                    Void
-                                                                                                                                                  ]
-                                                                                                                                                ]
-                                                                                                                                              }
-                                                                                                                                              [
-                                                                                                                                                [
-                                                                                                                                                  [
-                                                                                                                                                    {
-                                                                                                                                                      {
-                                                                                                                                                        wmustPayToOtherScript
-                                                                                                                                                        Void
-                                                                                                                                                      }
-                                                                                                                                                      Void
-                                                                                                                                                    }
-                                                                                                                                                    ww
-                                                                                                                                                  ]
-                                                                                                                                                  unitDatum
-                                                                                                                                                ]
-                                                                                                                                                ww
-                                                                                                                                              ]
-                                                                                                                                            ]
-                                                                                                                                            [
-                                                                                                                                              [
-                                                                                                                                                TxConstraints
-                                                                                                                                                Void
-                                                                                                                                              ]
-                                                                                                                                              Void
-                                                                                                                                            ]
-                                                                                                                                          }
-                                                                                                                                          (lam
-                                                                                                                                            ww
-                                                                                                                                            [
-                                                                                                                                              List
-                                                                                                                                              TxConstraint
-                                                                                                                                            ]
-                                                                                                                                            (lam
-                                                                                                                                              ww
-                                                                                                                                              [
-                                                                                                                                                List
-                                                                                                                                                TxConstraintFun
-                                                                                                                                              ]
-                                                                                                                                              (lam
-                                                                                                                                                ww
-                                                                                                                                                [
-                                                                                                                                                  List
-                                                                                                                                                  [
-                                                                                                                                                    ScriptInputConstraint
-                                                                                                                                                    Void
-                                                                                                                                                  ]
-                                                                                                                                                ]
-                                                                                                                                                (lam
-                                                                                                                                                  ww
-                                                                                                                                                  [
-                                                                                                                                                    List
-                                                                                                                                                    [
-                                                                                                                                                      ScriptOutputConstraint
-                                                                                                                                                      Void
-                                                                                                                                                    ]
-                                                                                                                                                  ]
-                                                                                                                                                  [
-                                                                                                                                                    [
-                                                                                                                                                      [
-                                                                                                                                                        [
-                                                                                                                                                          {
-                                                                                                                                                            {
-                                                                                                                                                              TxConstraints
-                                                                                                                                                              Void
-                                                                                                                                                            }
-                                                                                                                                                            Void
-                                                                                                                                                          }
-                                                                                                                                                          ww
-                                                                                                                                                        ]
-                                                                                                                                                        ww
-                                                                                                                                                      ]
-                                                                                                                                                      ww
-                                                                                                                                                    ]
-                                                                                                                                                    ww
-                                                                                                                                                  ]
-                                                                                                                                                )
-                                                                                                                                              )
-                                                                                                                                            )
-                                                                                                                                          )
+                                                                                                                                          [
+                                                                                                                                            TxConstraints
+                                                                                                                                            Void
+                                                                                                                                          ]
+                                                                                                                                          Void
                                                                                                                                         ]
-                                                                                                                                      ]
+                                                                                                                                      )
                                                                                                                                       [
                                                                                                                                         {
                                                                                                                                           [
                                                                                                                                             {
                                                                                                                                               {
                                                                                                                                                 {
-                                                                                                                                                  {
-                                                                                                                                                    UTuple4_match
-                                                                                                                                                    [
-                                                                                                                                                      List
-                                                                                                                                                      TxConstraint
-                                                                                                                                                    ]
-                                                                                                                                                  }
+                                                                                                                                                  UTuple3_match
                                                                                                                                                   [
                                                                                                                                                     List
-                                                                                                                                                    TxConstraintFun
+                                                                                                                                                    TxConstraint
                                                                                                                                                   ]
                                                                                                                                                 }
                                                                                                                                                 [
@@ -9023,10 +8805,210 @@
                                                                                                                                             ww
                                                                                                                                             [
                                                                                                                                               List
-                                                                                                                                              TxConstraintFun
+                                                                                                                                              [
+                                                                                                                                                ScriptInputConstraint
+                                                                                                                                                Void
+                                                                                                                                              ]
                                                                                                                                             ]
                                                                                                                                             (lam
                                                                                                                                               ww
+                                                                                                                                              [
+                                                                                                                                                List
+                                                                                                                                                [
+                                                                                                                                                  ScriptOutputConstraint
+                                                                                                                                                  Void
+                                                                                                                                                ]
+                                                                                                                                              ]
+                                                                                                                                              [
+                                                                                                                                                [
+                                                                                                                                                  [
+                                                                                                                                                    {
+                                                                                                                                                      {
+                                                                                                                                                        TxConstraints
+                                                                                                                                                        Void
+                                                                                                                                                      }
+                                                                                                                                                      Void
+                                                                                                                                                    }
+                                                                                                                                                    ww
+                                                                                                                                                  ]
+                                                                                                                                                  ww
+                                                                                                                                                ]
+                                                                                                                                                ww
+                                                                                                                                              ]
+                                                                                                                                            )
+                                                                                                                                          )
+                                                                                                                                        )
+                                                                                                                                      ]
+                                                                                                                                    )
+                                                                                                                                    [
+                                                                                                                                      [
+                                                                                                                                        [
+                                                                                                                                          {
+                                                                                                                                            {
+                                                                                                                                              {
+                                                                                                                                                UTuple3
+                                                                                                                                                [
+                                                                                                                                                  List
+                                                                                                                                                  TxConstraint
+                                                                                                                                                ]
+                                                                                                                                              }
+                                                                                                                                              [
+                                                                                                                                                List
+                                                                                                                                                [
+                                                                                                                                                  ScriptInputConstraint
+                                                                                                                                                  Void
+                                                                                                                                                ]
+                                                                                                                                              ]
+                                                                                                                                            }
+                                                                                                                                            [
+                                                                                                                                              List
+                                                                                                                                              [
+                                                                                                                                                ScriptOutputConstraint
+                                                                                                                                                Void
+                                                                                                                                              ]
+                                                                                                                                            ]
+                                                                                                                                          }
+                                                                                                                                          [
+                                                                                                                                            {
+                                                                                                                                              [
+                                                                                                                                                {
+                                                                                                                                                  {
+                                                                                                                                                    TxConstraints_match
+                                                                                                                                                    Void
+                                                                                                                                                  }
+                                                                                                                                                  Void
+                                                                                                                                                }
+                                                                                                                                                w
+                                                                                                                                              ]
+                                                                                                                                              [
+                                                                                                                                                List
+                                                                                                                                                TxConstraint
+                                                                                                                                              ]
+                                                                                                                                            }
+                                                                                                                                            (lam
+                                                                                                                                              ds
+                                                                                                                                              [
+                                                                                                                                                List
+                                                                                                                                                TxConstraint
+                                                                                                                                              ]
+                                                                                                                                              (lam
+                                                                                                                                                ds
+                                                                                                                                                [
+                                                                                                                                                  List
+                                                                                                                                                  [
+                                                                                                                                                    ScriptInputConstraint
+                                                                                                                                                    Void
+                                                                                                                                                  ]
+                                                                                                                                                ]
+                                                                                                                                                (lam
+                                                                                                                                                  ds
+                                                                                                                                                  [
+                                                                                                                                                    List
+                                                                                                                                                    [
+                                                                                                                                                      ScriptOutputConstraint
+                                                                                                                                                      Void
+                                                                                                                                                    ]
+                                                                                                                                                  ]
+                                                                                                                                                  [
+                                                                                                                                                    [
+                                                                                                                                                      [
+                                                                                                                                                        {
+                                                                                                                                                          {
+                                                                                                                                                            foldr
+                                                                                                                                                            TxConstraint
+                                                                                                                                                          }
+                                                                                                                                                          [
+                                                                                                                                                            List
+                                                                                                                                                            TxConstraint
+                                                                                                                                                          ]
+                                                                                                                                                        }
+                                                                                                                                                        {
+                                                                                                                                                          Cons
+                                                                                                                                                          TxConstraint
+                                                                                                                                                        }
+                                                                                                                                                      ]
+                                                                                                                                                      [
+                                                                                                                                                        {
+                                                                                                                                                          [
+                                                                                                                                                            {
+                                                                                                                                                              {
+                                                                                                                                                                TxConstraints_match
+                                                                                                                                                                Void
+                                                                                                                                                              }
+                                                                                                                                                              Void
+                                                                                                                                                            }
+                                                                                                                                                            w
+                                                                                                                                                          ]
+                                                                                                                                                          [
+                                                                                                                                                            List
+                                                                                                                                                            TxConstraint
+                                                                                                                                                          ]
+                                                                                                                                                        }
+                                                                                                                                                        (lam
+                                                                                                                                                          ds
+                                                                                                                                                          [
+                                                                                                                                                            List
+                                                                                                                                                            TxConstraint
+                                                                                                                                                          ]
+                                                                                                                                                          (lam
+                                                                                                                                                            ds
+                                                                                                                                                            [
+                                                                                                                                                              List
+                                                                                                                                                              [
+                                                                                                                                                                ScriptInputConstraint
+                                                                                                                                                                Void
+                                                                                                                                                              ]
+                                                                                                                                                            ]
+                                                                                                                                                            (lam
+                                                                                                                                                              ds
+                                                                                                                                                              [
+                                                                                                                                                                List
+                                                                                                                                                                [
+                                                                                                                                                                  ScriptOutputConstraint
+                                                                                                                                                                  Void
+                                                                                                                                                                ]
+                                                                                                                                                              ]
+                                                                                                                                                              ds
+                                                                                                                                                            )
+                                                                                                                                                          )
+                                                                                                                                                        )
+                                                                                                                                                      ]
+                                                                                                                                                    ]
+                                                                                                                                                    ds
+                                                                                                                                                  ]
+                                                                                                                                                )
+                                                                                                                                              )
+                                                                                                                                            )
+                                                                                                                                          ]
+                                                                                                                                        ]
+                                                                                                                                        [
+                                                                                                                                          {
+                                                                                                                                            [
+                                                                                                                                              {
+                                                                                                                                                {
+                                                                                                                                                  TxConstraints_match
+                                                                                                                                                  Void
+                                                                                                                                                }
+                                                                                                                                                Void
+                                                                                                                                              }
+                                                                                                                                              w
+                                                                                                                                            ]
+                                                                                                                                            [
+                                                                                                                                              List
+                                                                                                                                              [
+                                                                                                                                                ScriptInputConstraint
+                                                                                                                                                Void
+                                                                                                                                              ]
+                                                                                                                                            ]
+                                                                                                                                          }
+                                                                                                                                          (lam
+                                                                                                                                            ds
+                                                                                                                                            [
+                                                                                                                                              List
+                                                                                                                                              TxConstraint
+                                                                                                                                            ]
+                                                                                                                                            (lam
+                                                                                                                                              ds
                                                                                                                                               [
                                                                                                                                                 List
                                                                                                                                                 [
@@ -9035,7 +9017,7 @@
                                                                                                                                                 ]
                                                                                                                                               ]
                                                                                                                                               (lam
-                                                                                                                                                ww
+                                                                                                                                                ds
                                                                                                                                                 [
                                                                                                                                                   List
                                                                                                                                                   [
@@ -9046,23 +9028,210 @@
                                                                                                                                                 [
                                                                                                                                                   [
                                                                                                                                                     [
+                                                                                                                                                      {
+                                                                                                                                                        {
+                                                                                                                                                          foldr
+                                                                                                                                                          [
+                                                                                                                                                            ScriptInputConstraint
+                                                                                                                                                            Void
+                                                                                                                                                          ]
+                                                                                                                                                        }
+                                                                                                                                                        [
+                                                                                                                                                          List
+                                                                                                                                                          [
+                                                                                                                                                            ScriptInputConstraint
+                                                                                                                                                            Void
+                                                                                                                                                          ]
+                                                                                                                                                        ]
+                                                                                                                                                      }
+                                                                                                                                                      {
+                                                                                                                                                        Cons
+                                                                                                                                                        [
+                                                                                                                                                          ScriptInputConstraint
+                                                                                                                                                          Void
+                                                                                                                                                        ]
+                                                                                                                                                      }
+                                                                                                                                                    ]
+                                                                                                                                                    [
+                                                                                                                                                      {
+                                                                                                                                                        [
+                                                                                                                                                          {
+                                                                                                                                                            {
+                                                                                                                                                              TxConstraints_match
+                                                                                                                                                              Void
+                                                                                                                                                            }
+                                                                                                                                                            Void
+                                                                                                                                                          }
+                                                                                                                                                          w
+                                                                                                                                                        ]
+                                                                                                                                                        [
+                                                                                                                                                          List
+                                                                                                                                                          [
+                                                                                                                                                            ScriptInputConstraint
+                                                                                                                                                            Void
+                                                                                                                                                          ]
+                                                                                                                                                        ]
+                                                                                                                                                      }
+                                                                                                                                                      (lam
+                                                                                                                                                        ds
+                                                                                                                                                        [
+                                                                                                                                                          List
+                                                                                                                                                          TxConstraint
+                                                                                                                                                        ]
+                                                                                                                                                        (lam
+                                                                                                                                                          ds
+                                                                                                                                                          [
+                                                                                                                                                            List
+                                                                                                                                                            [
+                                                                                                                                                              ScriptInputConstraint
+                                                                                                                                                              Void
+                                                                                                                                                            ]
+                                                                                                                                                          ]
+                                                                                                                                                          (lam
+                                                                                                                                                            ds
+                                                                                                                                                            [
+                                                                                                                                                              List
+                                                                                                                                                              [
+                                                                                                                                                                ScriptOutputConstraint
+                                                                                                                                                                Void
+                                                                                                                                                              ]
+                                                                                                                                                            ]
+                                                                                                                                                            ds
+                                                                                                                                                          )
+                                                                                                                                                        )
+                                                                                                                                                      )
+                                                                                                                                                    ]
+                                                                                                                                                  ]
+                                                                                                                                                  ds
+                                                                                                                                                ]
+                                                                                                                                              )
+                                                                                                                                            )
+                                                                                                                                          )
+                                                                                                                                        ]
+                                                                                                                                      ]
+                                                                                                                                      [
+                                                                                                                                        {
+                                                                                                                                          [
+                                                                                                                                            {
+                                                                                                                                              {
+                                                                                                                                                TxConstraints_match
+                                                                                                                                                Void
+                                                                                                                                              }
+                                                                                                                                              Void
+                                                                                                                                            }
+                                                                                                                                            w
+                                                                                                                                          ]
+                                                                                                                                          [
+                                                                                                                                            List
+                                                                                                                                            [
+                                                                                                                                              ScriptOutputConstraint
+                                                                                                                                              Void
+                                                                                                                                            ]
+                                                                                                                                          ]
+                                                                                                                                        }
+                                                                                                                                        (lam
+                                                                                                                                          ds
+                                                                                                                                          [
+                                                                                                                                            List
+                                                                                                                                            TxConstraint
+                                                                                                                                          ]
+                                                                                                                                          (lam
+                                                                                                                                            ds
+                                                                                                                                            [
+                                                                                                                                              List
+                                                                                                                                              [
+                                                                                                                                                ScriptInputConstraint
+                                                                                                                                                Void
+                                                                                                                                              ]
+                                                                                                                                            ]
+                                                                                                                                            (lam
+                                                                                                                                              ds
+                                                                                                                                              [
+                                                                                                                                                List
+                                                                                                                                                [
+                                                                                                                                                  ScriptOutputConstraint
+                                                                                                                                                  Void
+                                                                                                                                                ]
+                                                                                                                                              ]
+                                                                                                                                              [
+                                                                                                                                                [
+                                                                                                                                                  [
+                                                                                                                                                    {
+                                                                                                                                                      {
+                                                                                                                                                        foldr
+                                                                                                                                                        [
+                                                                                                                                                          ScriptOutputConstraint
+                                                                                                                                                          Void
+                                                                                                                                                        ]
+                                                                                                                                                      }
+                                                                                                                                                      [
+                                                                                                                                                        List
+                                                                                                                                                        [
+                                                                                                                                                          ScriptOutputConstraint
+                                                                                                                                                          Void
+                                                                                                                                                        ]
+                                                                                                                                                      ]
+                                                                                                                                                    }
+                                                                                                                                                    {
+                                                                                                                                                      Cons
+                                                                                                                                                      [
+                                                                                                                                                        ScriptOutputConstraint
+                                                                                                                                                        Void
+                                                                                                                                                      ]
+                                                                                                                                                    }
+                                                                                                                                                  ]
+                                                                                                                                                  [
+                                                                                                                                                    {
                                                                                                                                                       [
                                                                                                                                                         {
                                                                                                                                                           {
-                                                                                                                                                            TxConstraints
+                                                                                                                                                            TxConstraints_match
                                                                                                                                                             Void
                                                                                                                                                           }
                                                                                                                                                           Void
                                                                                                                                                         }
-                                                                                                                                                        ww
+                                                                                                                                                        w
                                                                                                                                                       ]
-                                                                                                                                                      ww
-                                                                                                                                                    ]
-                                                                                                                                                    ww
+                                                                                                                                                      [
+                                                                                                                                                        List
+                                                                                                                                                        [
+                                                                                                                                                          ScriptOutputConstraint
+                                                                                                                                                          Void
+                                                                                                                                                        ]
+                                                                                                                                                      ]
+                                                                                                                                                    }
+                                                                                                                                                    (lam
+                                                                                                                                                      ds
+                                                                                                                                                      [
+                                                                                                                                                        List
+                                                                                                                                                        TxConstraint
+                                                                                                                                                      ]
+                                                                                                                                                      (lam
+                                                                                                                                                        ds
+                                                                                                                                                        [
+                                                                                                                                                          List
+                                                                                                                                                          [
+                                                                                                                                                            ScriptInputConstraint
+                                                                                                                                                            Void
+                                                                                                                                                          ]
+                                                                                                                                                        ]
+                                                                                                                                                        (lam
+                                                                                                                                                          ds
+                                                                                                                                                          [
+                                                                                                                                                            List
+                                                                                                                                                            [
+                                                                                                                                                              ScriptOutputConstraint
+                                                                                                                                                              Void
+                                                                                                                                                            ]
+                                                                                                                                                          ]
+                                                                                                                                                          ds
+                                                                                                                                                        )
+                                                                                                                                                      )
+                                                                                                                                                    )
                                                                                                                                                   ]
-                                                                                                                                                  ww
                                                                                                                                                 ]
-                                                                                                                                              )
+                                                                                                                                                ds
+                                                                                                                                              ]
                                                                                                                                             )
                                                                                                                                           )
                                                                                                                                         )
@@ -9088,46 +9257,36 @@
                                                                                                                                   ww
                                                                                                                                   [
                                                                                                                                     List
-                                                                                                                                    TxConstraintFun
+                                                                                                                                    [
+                                                                                                                                      ScriptInputConstraint
+                                                                                                                                      Void
+                                                                                                                                    ]
                                                                                                                                   ]
                                                                                                                                   (lam
                                                                                                                                     ww
                                                                                                                                     [
                                                                                                                                       List
                                                                                                                                       [
-                                                                                                                                        ScriptInputConstraint
+                                                                                                                                        ScriptOutputConstraint
                                                                                                                                         Void
                                                                                                                                       ]
                                                                                                                                     ]
-                                                                                                                                    (lam
-                                                                                                                                      ww
-                                                                                                                                      [
-                                                                                                                                        List
-                                                                                                                                        [
-                                                                                                                                          ScriptOutputConstraint
-                                                                                                                                          Void
-                                                                                                                                        ]
-                                                                                                                                      ]
+                                                                                                                                    [
                                                                                                                                       [
                                                                                                                                         [
-                                                                                                                                          [
-                                                                                                                                            [
-                                                                                                                                              {
-                                                                                                                                                {
-                                                                                                                                                  TxConstraints
-                                                                                                                                                  Void
-                                                                                                                                                }
-                                                                                                                                                Void
-                                                                                                                                              }
-                                                                                                                                              ww
-                                                                                                                                            ]
-                                                                                                                                            ww
-                                                                                                                                          ]
+                                                                                                                                          {
+                                                                                                                                            {
+                                                                                                                                              TxConstraints
+                                                                                                                                              Void
+                                                                                                                                            }
+                                                                                                                                            Void
+                                                                                                                                          }
                                                                                                                                           ww
                                                                                                                                         ]
                                                                                                                                         ww
                                                                                                                                       ]
-                                                                                                                                    )
+                                                                                                                                      ww
+                                                                                                                                    ]
                                                                                                                                   )
                                                                                                                                 )
                                                                                                                               )
@@ -9160,46 +9319,36 @@
                                                                                                           ww
                                                                                                           [
                                                                                                             List
-                                                                                                            TxConstraintFun
+                                                                                                            [
+                                                                                                              ScriptInputConstraint
+                                                                                                              Void
+                                                                                                            ]
                                                                                                           ]
                                                                                                           (lam
                                                                                                             ww
                                                                                                             [
                                                                                                               List
                                                                                                               [
-                                                                                                                ScriptInputConstraint
+                                                                                                                ScriptOutputConstraint
                                                                                                                 Void
                                                                                                               ]
                                                                                                             ]
-                                                                                                            (lam
-                                                                                                              ww
-                                                                                                              [
-                                                                                                                List
-                                                                                                                [
-                                                                                                                  ScriptOutputConstraint
-                                                                                                                  Void
-                                                                                                                ]
-                                                                                                              ]
+                                                                                                            [
                                                                                                               [
                                                                                                                 [
-                                                                                                                  [
-                                                                                                                    [
-                                                                                                                      {
-                                                                                                                        {
-                                                                                                                          TxConstraints
-                                                                                                                          Void
-                                                                                                                        }
-                                                                                                                        Void
-                                                                                                                      }
-                                                                                                                      ww
-                                                                                                                    ]
-                                                                                                                    ww
-                                                                                                                  ]
+                                                                                                                  {
+                                                                                                                    {
+                                                                                                                      TxConstraints
+                                                                                                                      Void
+                                                                                                                    }
+                                                                                                                    Void
+                                                                                                                  }
                                                                                                                   ww
                                                                                                                 ]
                                                                                                                 ww
                                                                                                               ]
-                                                                                                            )
+                                                                                                              ww
+                                                                                                            ]
                                                                                                           )
                                                                                                         )
                                                                                                       )
@@ -9308,184 +9457,29 @@
                                                                                                                   [
                                                                                                                     [
                                                                                                                       [
-                                                                                                                        [
+                                                                                                                        {
                                                                                                                           {
-                                                                                                                            {
-                                                                                                                              TxConstraints
-                                                                                                                              Void
-                                                                                                                            }
+                                                                                                                            TxConstraints
                                                                                                                             Void
                                                                                                                           }
-                                                                                                                          [
-                                                                                                                            [
-                                                                                                                              [
-                                                                                                                                {
-                                                                                                                                  {
-                                                                                                                                    foldr
-                                                                                                                                    TxConstraint
-                                                                                                                                  }
-                                                                                                                                  [
-                                                                                                                                    List
-                                                                                                                                    TxConstraint
-                                                                                                                                  ]
-                                                                                                                                }
-                                                                                                                                {
-                                                                                                                                  Cons
-                                                                                                                                  TxConstraint
-                                                                                                                                }
-                                                                                                                              ]
-                                                                                                                              [
-                                                                                                                                {
-                                                                                                                                  [
-                                                                                                                                    {
-                                                                                                                                      {
-                                                                                                                                        TxConstraints_match
-                                                                                                                                        Void
-                                                                                                                                      }
-                                                                                                                                      Void
-                                                                                                                                    }
-                                                                                                                                    w
-                                                                                                                                  ]
-                                                                                                                                  [
-                                                                                                                                    List
-                                                                                                                                    TxConstraint
-                                                                                                                                  ]
-                                                                                                                                }
-                                                                                                                                (lam
-                                                                                                                                  ds
-                                                                                                                                  [
-                                                                                                                                    List
-                                                                                                                                    TxConstraint
-                                                                                                                                  ]
-                                                                                                                                  (lam
-                                                                                                                                    ds
-                                                                                                                                    [
-                                                                                                                                      List
-                                                                                                                                      TxConstraintFun
-                                                                                                                                    ]
-                                                                                                                                    (lam
-                                                                                                                                      ds
-                                                                                                                                      [
-                                                                                                                                        List
-                                                                                                                                        [
-                                                                                                                                          ScriptInputConstraint
-                                                                                                                                          Void
-                                                                                                                                        ]
-                                                                                                                                      ]
-                                                                                                                                      (lam
-                                                                                                                                        ds
-                                                                                                                                        [
-                                                                                                                                          List
-                                                                                                                                          [
-                                                                                                                                            ScriptOutputConstraint
-                                                                                                                                            Void
-                                                                                                                                          ]
-                                                                                                                                        ]
-                                                                                                                                        ds
-                                                                                                                                      )
-                                                                                                                                    )
-                                                                                                                                  )
-                                                                                                                                )
-                                                                                                                              ]
-                                                                                                                            ]
-                                                                                                                            [
-                                                                                                                              {
-                                                                                                                                build
-                                                                                                                                TxConstraint
-                                                                                                                              }
-                                                                                                                              (abs
-                                                                                                                                a
-                                                                                                                                (type)
-                                                                                                                                (lam
-                                                                                                                                  c
-                                                                                                                                  (fun
-                                                                                                                                    TxConstraint
-                                                                                                                                    (fun
-                                                                                                                                      a
-                                                                                                                                      a
-                                                                                                                                    )
-                                                                                                                                  )
-                                                                                                                                  (lam
-                                                                                                                                    n
-                                                                                                                                    a
-                                                                                                                                    [
-                                                                                                                                      [
-                                                                                                                                        c
-                                                                                                                                        [
-                                                                                                                                          MustValidateIn
-                                                                                                                                          [
-                                                                                                                                            [
-                                                                                                                                              {
-                                                                                                                                                Interval
-                                                                                                                                                (con
-                                                                                                                                                  integer
-                                                                                                                                                )
-                                                                                                                                              }
-                                                                                                                                              [
-                                                                                                                                                [
-                                                                                                                                                  {
-                                                                                                                                                    LowerBound
-                                                                                                                                                    (con
-                                                                                                                                                      integer
-                                                                                                                                                    )
-                                                                                                                                                  }
-                                                                                                                                                  [
-                                                                                                                                                    {
-                                                                                                                                                      Finite
-                                                                                                                                                      (con
-                                                                                                                                                        integer
-                                                                                                                                                      )
-                                                                                                                                                    }
-                                                                                                                                                    ww
-                                                                                                                                                  ]
-                                                                                                                                                ]
-                                                                                                                                                True
-                                                                                                                                              ]
-                                                                                                                                            ]
-                                                                                                                                            [
-                                                                                                                                              [
-                                                                                                                                                {
-                                                                                                                                                  UpperBound
-                                                                                                                                                  (con
-                                                                                                                                                    integer
-                                                                                                                                                  )
-                                                                                                                                                }
-                                                                                                                                                {
-                                                                                                                                                  PosInf
-                                                                                                                                                  (con
-                                                                                                                                                    integer
-                                                                                                                                                  )
-                                                                                                                                                }
-                                                                                                                                              ]
-                                                                                                                                              True
-                                                                                                                                            ]
-                                                                                                                                          ]
-                                                                                                                                        ]
-                                                                                                                                      ]
-                                                                                                                                      n
-                                                                                                                                    ]
-                                                                                                                                  )
-                                                                                                                                )
-                                                                                                                              )
-                                                                                                                            ]
-                                                                                                                          ]
-                                                                                                                        ]
+                                                                                                                          Void
+                                                                                                                        }
                                                                                                                         [
                                                                                                                           [
                                                                                                                             [
                                                                                                                               {
                                                                                                                                 {
                                                                                                                                   foldr
-                                                                                                                                  TxConstraintFun
+                                                                                                                                  TxConstraint
                                                                                                                                 }
                                                                                                                                 [
                                                                                                                                   List
-                                                                                                                                  TxConstraintFun
+                                                                                                                                  TxConstraint
                                                                                                                                 ]
                                                                                                                               }
                                                                                                                               {
                                                                                                                                 Cons
-                                                                                                                                TxConstraintFun
+                                                                                                                                TxConstraint
                                                                                                                               }
                                                                                                                             ]
                                                                                                                             [
@@ -9502,7 +9496,7 @@
                                                                                                                                 ]
                                                                                                                                 [
                                                                                                                                   List
-                                                                                                                                  TxConstraintFun
+                                                                                                                                  TxConstraint
                                                                                                                                 ]
                                                                                                                               }
                                                                                                                               (lam
@@ -9515,37 +9509,106 @@
                                                                                                                                   ds
                                                                                                                                   [
                                                                                                                                     List
-                                                                                                                                    TxConstraintFun
+                                                                                                                                    [
+                                                                                                                                      ScriptInputConstraint
+                                                                                                                                      Void
+                                                                                                                                    ]
                                                                                                                                   ]
                                                                                                                                   (lam
                                                                                                                                     ds
                                                                                                                                     [
                                                                                                                                       List
                                                                                                                                       [
-                                                                                                                                        ScriptInputConstraint
+                                                                                                                                        ScriptOutputConstraint
                                                                                                                                         Void
                                                                                                                                       ]
                                                                                                                                     ]
-                                                                                                                                    (lam
-                                                                                                                                      ds
-                                                                                                                                      [
-                                                                                                                                        List
-                                                                                                                                        [
-                                                                                                                                          ScriptOutputConstraint
-                                                                                                                                          Void
-                                                                                                                                        ]
-                                                                                                                                      ]
-                                                                                                                                      ds
-                                                                                                                                    )
+                                                                                                                                    ds
                                                                                                                                   )
                                                                                                                                 )
                                                                                                                               )
                                                                                                                             ]
                                                                                                                           ]
-                                                                                                                          {
-                                                                                                                            Nil
-                                                                                                                            TxConstraintFun
-                                                                                                                          }
+                                                                                                                          [
+                                                                                                                            {
+                                                                                                                              build
+                                                                                                                              TxConstraint
+                                                                                                                            }
+                                                                                                                            (abs
+                                                                                                                              a
+                                                                                                                              (type)
+                                                                                                                              (lam
+                                                                                                                                c
+                                                                                                                                (fun
+                                                                                                                                  TxConstraint
+                                                                                                                                  (fun
+                                                                                                                                    a
+                                                                                                                                    a
+                                                                                                                                  )
+                                                                                                                                )
+                                                                                                                                (lam
+                                                                                                                                  n
+                                                                                                                                  a
+                                                                                                                                  [
+                                                                                                                                    [
+                                                                                                                                      c
+                                                                                                                                      [
+                                                                                                                                        MustValidateIn
+                                                                                                                                        [
+                                                                                                                                          [
+                                                                                                                                            {
+                                                                                                                                              Interval
+                                                                                                                                              (con
+                                                                                                                                                integer
+                                                                                                                                              )
+                                                                                                                                            }
+                                                                                                                                            [
+                                                                                                                                              [
+                                                                                                                                                {
+                                                                                                                                                  LowerBound
+                                                                                                                                                  (con
+                                                                                                                                                    integer
+                                                                                                                                                  )
+                                                                                                                                                }
+                                                                                                                                                [
+                                                                                                                                                  {
+                                                                                                                                                    Finite
+                                                                                                                                                    (con
+                                                                                                                                                      integer
+                                                                                                                                                    )
+                                                                                                                                                  }
+                                                                                                                                                  ww
+                                                                                                                                                ]
+                                                                                                                                              ]
+                                                                                                                                              True
+                                                                                                                                            ]
+                                                                                                                                          ]
+                                                                                                                                          [
+                                                                                                                                            [
+                                                                                                                                              {
+                                                                                                                                                UpperBound
+                                                                                                                                                (con
+                                                                                                                                                  integer
+                                                                                                                                                )
+                                                                                                                                              }
+                                                                                                                                              {
+                                                                                                                                                PosInf
+                                                                                                                                                (con
+                                                                                                                                                  integer
+                                                                                                                                                )
+                                                                                                                                              }
+                                                                                                                                            ]
+                                                                                                                                            True
+                                                                                                                                          ]
+                                                                                                                                        ]
+                                                                                                                                      ]
+                                                                                                                                    ]
+                                                                                                                                    n
+                                                                                                                                  ]
+                                                                                                                                )
+                                                                                                                              )
+                                                                                                                            )
+                                                                                                                          ]
                                                                                                                         ]
                                                                                                                       ]
                                                                                                                       [
@@ -9605,28 +9668,21 @@
                                                                                                                                 ds
                                                                                                                                 [
                                                                                                                                   List
-                                                                                                                                  TxConstraintFun
+                                                                                                                                  [
+                                                                                                                                    ScriptInputConstraint
+                                                                                                                                    Void
+                                                                                                                                  ]
                                                                                                                                 ]
                                                                                                                                 (lam
                                                                                                                                   ds
                                                                                                                                   [
                                                                                                                                     List
                                                                                                                                     [
-                                                                                                                                      ScriptInputConstraint
+                                                                                                                                      ScriptOutputConstraint
                                                                                                                                       Void
                                                                                                                                     ]
                                                                                                                                   ]
-                                                                                                                                  (lam
-                                                                                                                                    ds
-                                                                                                                                    [
-                                                                                                                                      List
-                                                                                                                                      [
-                                                                                                                                        ScriptOutputConstraint
-                                                                                                                                        Void
-                                                                                                                                      ]
-                                                                                                                                    ]
-                                                                                                                                    ds
-                                                                                                                                  )
+                                                                                                                                  ds
                                                                                                                                 )
                                                                                                                               )
                                                                                                                             )
@@ -9698,28 +9754,21 @@
                                                                                                                               ds
                                                                                                                               [
                                                                                                                                 List
-                                                                                                                                TxConstraintFun
+                                                                                                                                [
+                                                                                                                                  ScriptInputConstraint
+                                                                                                                                  Void
+                                                                                                                                ]
                                                                                                                               ]
                                                                                                                               (lam
                                                                                                                                 ds
                                                                                                                                 [
                                                                                                                                   List
                                                                                                                                   [
-                                                                                                                                    ScriptInputConstraint
+                                                                                                                                    ScriptOutputConstraint
                                                                                                                                     Void
                                                                                                                                   ]
                                                                                                                                 ]
-                                                                                                                                (lam
-                                                                                                                                  ds
-                                                                                                                                  [
-                                                                                                                                    List
-                                                                                                                                    [
-                                                                                                                                      ScriptOutputConstraint
-                                                                                                                                      Void
-                                                                                                                                    ]
-                                                                                                                                  ]
-                                                                                                                                  ds
-                                                                                                                                )
+                                                                                                                                ds
                                                                                                                               )
                                                                                                                             )
                                                                                                                           )
@@ -10927,16 +10976,10 @@
                                                                                                                                   {
                                                                                                                                     {
                                                                                                                                       {
-                                                                                                                                        {
-                                                                                                                                          UTuple4_match
-                                                                                                                                          [
-                                                                                                                                            List
-                                                                                                                                            TxConstraint
-                                                                                                                                          ]
-                                                                                                                                        }
+                                                                                                                                        UTuple3_match
                                                                                                                                         [
                                                                                                                                           List
-                                                                                                                                          TxConstraintFun
+                                                                                                                                          TxConstraint
                                                                                                                                         ]
                                                                                                                                       }
                                                                                                                                       [
@@ -10993,16 +11036,10 @@
                                                                                                                                                     {
                                                                                                                                                       {
                                                                                                                                                         {
-                                                                                                                                                          {
-                                                                                                                                                            UTuple4_match
-                                                                                                                                                            [
-                                                                                                                                                              List
-                                                                                                                                                              TxConstraint
-                                                                                                                                                            ]
-                                                                                                                                                          }
+                                                                                                                                                          UTuple3_match
                                                                                                                                                           [
                                                                                                                                                             List
-                                                                                                                                                            TxConstraintFun
+                                                                                                                                                            TxConstraint
                                                                                                                                                           ]
                                                                                                                                                         }
                                                                                                                                                         [
@@ -11113,46 +11150,36 @@
                                                                                                                                                     ww
                                                                                                                                                     [
                                                                                                                                                       List
-                                                                                                                                                      TxConstraintFun
+                                                                                                                                                      [
+                                                                                                                                                        ScriptInputConstraint
+                                                                                                                                                        Void
+                                                                                                                                                      ]
                                                                                                                                                     ]
                                                                                                                                                     (lam
                                                                                                                                                       ww
                                                                                                                                                       [
                                                                                                                                                         List
                                                                                                                                                         [
-                                                                                                                                                          ScriptInputConstraint
+                                                                                                                                                          ScriptOutputConstraint
                                                                                                                                                           Void
                                                                                                                                                         ]
                                                                                                                                                       ]
-                                                                                                                                                      (lam
-                                                                                                                                                        ww
-                                                                                                                                                        [
-                                                                                                                                                          List
-                                                                                                                                                          [
-                                                                                                                                                            ScriptOutputConstraint
-                                                                                                                                                            Void
-                                                                                                                                                          ]
-                                                                                                                                                        ]
+                                                                                                                                                      [
                                                                                                                                                         [
                                                                                                                                                           [
-                                                                                                                                                            [
-                                                                                                                                                              [
-                                                                                                                                                                {
-                                                                                                                                                                  {
-                                                                                                                                                                    TxConstraints
-                                                                                                                                                                    Void
-                                                                                                                                                                  }
-                                                                                                                                                                  Void
-                                                                                                                                                                }
-                                                                                                                                                                ww
-                                                                                                                                                              ]
-                                                                                                                                                              ww
-                                                                                                                                                            ]
+                                                                                                                                                            {
+                                                                                                                                                              {
+                                                                                                                                                                TxConstraints
+                                                                                                                                                                Void
+                                                                                                                                                              }
+                                                                                                                                                              Void
+                                                                                                                                                            }
                                                                                                                                                             ww
                                                                                                                                                           ]
                                                                                                                                                           ww
                                                                                                                                                         ]
-                                                                                                                                                      )
+                                                                                                                                                        ww
+                                                                                                                                                      ]
                                                                                                                                                     )
                                                                                                                                                   )
                                                                                                                                                 )
@@ -11168,16 +11195,10 @@
                                                                                                                                                   {
                                                                                                                                                     {
                                                                                                                                                       {
-                                                                                                                                                        {
-                                                                                                                                                          UTuple4_match
-                                                                                                                                                          [
-                                                                                                                                                            List
-                                                                                                                                                            TxConstraint
-                                                                                                                                                          ]
-                                                                                                                                                        }
+                                                                                                                                                        UTuple3_match
                                                                                                                                                         [
                                                                                                                                                           List
-                                                                                                                                                          TxConstraintFun
+                                                                                                                                                          TxConstraint
                                                                                                                                                         ]
                                                                                                                                                       }
                                                                                                                                                       [
@@ -11288,46 +11309,36 @@
                                                                                                                                                   ww
                                                                                                                                                   [
                                                                                                                                                     List
-                                                                                                                                                    TxConstraintFun
+                                                                                                                                                    [
+                                                                                                                                                      ScriptInputConstraint
+                                                                                                                                                      Void
+                                                                                                                                                    ]
                                                                                                                                                   ]
                                                                                                                                                   (lam
                                                                                                                                                     ww
                                                                                                                                                     [
                                                                                                                                                       List
                                                                                                                                                       [
-                                                                                                                                                        ScriptInputConstraint
+                                                                                                                                                        ScriptOutputConstraint
                                                                                                                                                         Void
                                                                                                                                                       ]
                                                                                                                                                     ]
-                                                                                                                                                    (lam
-                                                                                                                                                      ww
-                                                                                                                                                      [
-                                                                                                                                                        List
-                                                                                                                                                        [
-                                                                                                                                                          ScriptOutputConstraint
-                                                                                                                                                          Void
-                                                                                                                                                        ]
-                                                                                                                                                      ]
+                                                                                                                                                    [
                                                                                                                                                       [
                                                                                                                                                         [
-                                                                                                                                                          [
-                                                                                                                                                            [
-                                                                                                                                                              {
-                                                                                                                                                                {
-                                                                                                                                                                  TxConstraints
-                                                                                                                                                                  Void
-                                                                                                                                                                }
-                                                                                                                                                                Void
-                                                                                                                                                              }
-                                                                                                                                                              ww
-                                                                                                                                                            ]
-                                                                                                                                                            ww
-                                                                                                                                                          ]
+                                                                                                                                                          {
+                                                                                                                                                            {
+                                                                                                                                                              TxConstraints
+                                                                                                                                                              Void
+                                                                                                                                                            }
+                                                                                                                                                            Void
+                                                                                                                                                          }
                                                                                                                                                           ww
                                                                                                                                                         ]
                                                                                                                                                         ww
                                                                                                                                                       ]
-                                                                                                                                                    )
+                                                                                                                                                      ww
+                                                                                                                                                    ]
                                                                                                                                                   )
                                                                                                                                                 )
                                                                                                                                               )
@@ -11362,46 +11373,36 @@
                                                                                                                                   ww
                                                                                                                                   [
                                                                                                                                     List
-                                                                                                                                    TxConstraintFun
+                                                                                                                                    [
+                                                                                                                                      ScriptInputConstraint
+                                                                                                                                      Void
+                                                                                                                                    ]
                                                                                                                                   ]
                                                                                                                                   (lam
                                                                                                                                     ww
                                                                                                                                     [
                                                                                                                                       List
                                                                                                                                       [
-                                                                                                                                        ScriptInputConstraint
+                                                                                                                                        ScriptOutputConstraint
                                                                                                                                         Void
                                                                                                                                       ]
                                                                                                                                     ]
-                                                                                                                                    (lam
-                                                                                                                                      ww
-                                                                                                                                      [
-                                                                                                                                        List
-                                                                                                                                        [
-                                                                                                                                          ScriptOutputConstraint
-                                                                                                                                          Void
-                                                                                                                                        ]
-                                                                                                                                      ]
+                                                                                                                                    [
                                                                                                                                       [
                                                                                                                                         [
-                                                                                                                                          [
-                                                                                                                                            [
-                                                                                                                                              {
-                                                                                                                                                {
-                                                                                                                                                  TxConstraints
-                                                                                                                                                  Void
-                                                                                                                                                }
-                                                                                                                                                Void
-                                                                                                                                              }
-                                                                                                                                              ww
-                                                                                                                                            ]
-                                                                                                                                            ww
-                                                                                                                                          ]
+                                                                                                                                          {
+                                                                                                                                            {
+                                                                                                                                              TxConstraints
+                                                                                                                                              Void
+                                                                                                                                            }
+                                                                                                                                            Void
+                                                                                                                                          }
                                                                                                                                           ww
                                                                                                                                         ]
                                                                                                                                         ww
                                                                                                                                       ]
-                                                                                                                                    )
+                                                                                                                                      ww
+                                                                                                                                    ]
                                                                                                                                   )
                                                                                                                                 )
                                                                                                                               )

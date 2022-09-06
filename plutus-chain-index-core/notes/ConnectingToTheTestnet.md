@@ -14,7 +14,7 @@ You need to download the configurations for the node, genesis blocks and the top
 I am using a shell script to start the node that I will paste here:
 
 ```shell
-#!/usr/bin/env bash
+#!/bin/bash
 
 cardano-node -- run \
     --config ./alonzo-purple-config.json \

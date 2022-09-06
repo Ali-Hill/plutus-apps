@@ -35,7 +35,6 @@ import Test.Tasty.Golden (goldenVsString)
 import Test.Tasty.HUnit qualified as HUnit
 import Test.Tasty.QuickCheck hiding ((.&&.))
 
-import Data.List (isSubsequenceOf)
 import Ledger (Value)
 import Ledger qualified
 import Ledger.Ada qualified as Ada
@@ -79,7 +78,7 @@ tests = testGroup "crowdfunding"
             slotCfg <- Trace.getSlotConfig
             void (Trace.activateContractWallet w1 $ theContract $ TimeSlot.scSlotZeroTime slotCfg)
 
-    , checkPredicate "make contribution"
+    , checkPredicateOptions defaultCheckOptions "make contribution"
         (walletFundsChange w1 (Ada.adaValueOf (-10)))
         $ let contribution = Ada.adaValueOf 10
           in makeContribution w1 contribution >> void Trace.nextSlot
@@ -90,12 +89,7 @@ tests = testGroup "crowdfunding"
 
     , checkPredicate "cannot collect money too late"
         (walletFundsChange w1 PlutusTx.zero
-        .&&. assertFailedTransaction (\_ err _ ->
-            case err of
-                Ledger.CardanoLedgerValidationError msg ->
-                    "OutsideValidityIntervalUTxO" `isSubsequenceOf` msg
-                _ -> False
-            ))
+        .&&. assertNoFailedTransactions)
         $ do
             ContractHandle{chInstanceId} <- startCampaign
             makeContribution w2 (Ada.adaValueOf 10)

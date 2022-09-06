@@ -23,13 +23,12 @@ import Data.Foldable
 import Data.Map (Map)
 import Data.Map qualified as Map
 
-import Ledger (minAdaTxOut)
+import Ledger (Datum, minAdaTxOut)
 import Ledger.Ada qualified as Ada
 import Ledger.Value
 import Plutus.Contract
 import Plutus.Contract.Test
 import Plutus.Contract.Test.ContractModel
-import Plutus.V1.Ledger.Api (Datum)
 
 import Plutus.Contracts.Tutorial.Escrow hiding (Action (..))
 import Plutus.Trace.Emulator qualified as Trace
@@ -92,7 +91,7 @@ instance ContractModel EscrowModel where
       wait 1
 
   precondition s a = case a of
-    Init _   -> currentPhase == Initial
+    Init tgts   -> currentPhase == Initial && and [Ada.adaValueOf (fromInteger n) `geq` Ada.toValue minAdaTxOut | (w,n) <- tgts]
     Redeem _ -> currentPhase == Running
              && (s ^. contractState . contributions . to fold) `geq` (s ^. contractState . targets . to fold)
     Pay _ v  -> currentPhase == Running

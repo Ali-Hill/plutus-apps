@@ -17,14 +17,15 @@ import Control.Concurrent.STM
 import Control.Lens hiding (index)
 import Control.Monad.Freer
 import Control.Monad.Freer.Extras.Log (LogMsg, logDebug, logInfo, logWarn)
-import Control.Monad.Freer.State (State, gets, modify)
+import Control.Monad.Freer.State (State, get, gets, modify, put)
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Data.Foldable (traverse_)
 import Data.Functor (void)
 import Data.Maybe (listToMaybe)
 import GHC.Generics (Generic)
-import Ledger (Block, CardanoTx, Params, Slot (..))
+import Ledger (Block, CardanoTx, Slot (..))
 import Ledger.Index qualified as Index
+import Ledger.TimeSlot (SlotConfig)
 import Wallet.Emulator.Chain qualified as EC
 
 type TxPool = [CardanoTx]
@@ -82,34 +83,35 @@ handleControlChain ::
      , Member (LogMsg EC.ChainEvent) effs
      , LastMember m effs
      , MonadIO m )
-  => Params -> EC.ChainControlEffect ~> Eff effs
-handleControlChain params = \case
+  => SlotConfig -> EC.ChainControlEffect ~> Eff effs
+handleControlChain slotCfg = \case
     EC.ProcessBlock -> do
-        pool  <- gets $ view txPool
-        slot  <- gets $ view currentSlot
-        idx   <- gets $ view index
-        chan   <- gets $ view channel
+        st <- get
+        let pool  = st ^. txPool
+            slot  = st ^. currentSlot
+            idx   = st ^. index
+            EC.ValidatedBlock block events rest =
+                EC.validateBlock slotCfg slot idx pool
 
-        let EC.ValidatedBlock block events idx' = EC.validateBlock params slot idx pool
+        let st' = st & txPool .~ rest
+                     & tip    ?~ block
+                     & index  %~ Index.insertBlock block
 
-        modify $ txPool .~ []
-        modify $ tip    ?~ block
-        modify $ index  .~ idx'
-
+        put st'
         traverse_ logEvent events
 
-        liftIO $ atomically $ writeTChan chan block
+        liftIO $ atomically $ writeTChan (st ^. channel) block
         pure block
     EC.ModifySlot f -> modify @MockNodeServerChainState (over currentSlot f) >> gets (view currentSlot)
 
 handleChain ::
      ( Member (State MockNodeServerChainState) effs )
-  => Params
+  => SlotConfig
   -> EC.ChainEffect ~> Eff effs
-handleChain params = \case
+handleChain slotCfg = \case
     EC.QueueTx tx     -> modify $ over txPool (addTxToPool tx)
     EC.GetCurrentSlot -> gets _currentSlot
-    EC.GetParams      -> pure params
+    EC.GetSlotConfig  -> pure slotCfg
 
 logEvent :: Member (LogMsg EC.ChainEvent) effs => EC.ChainEvent -> Eff effs ()
 logEvent e = case e of

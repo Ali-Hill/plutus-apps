@@ -12,6 +12,7 @@
 {-# LANGUAGE OverloadedStrings     #-}
 {-# LANGUAGE RankNTypes            #-}
 {-# LANGUAGE ScopedTypeVariables   #-}
+{-# LANGUAGE TupleSections         #-}
 {-# LANGUAGE TypeApplications      #-}
 {-# LANGUAGE TypeFamilies          #-}
 {-# LANGUAGE TypeOperators         #-}
@@ -21,8 +22,6 @@ module Plutus.Contract.Request(
     awaitSlot
     , isSlot
     , currentSlot
-    , currentPABSlot
-    , currentChainIndexSlot
     , waitNSlots
     , awaitTime
     , isTime
@@ -34,20 +33,14 @@ module Plutus.Contract.Request(
     , mintingPolicyFromHash
     , stakeValidatorFromHash
     , redeemerFromHash
-    , txOutFromRef
-    , txFromTxId
     , unspentTxOutFromRef
     , utxoRefMembership
     , utxoRefsAt
     , utxoRefsWithCurrency
     , utxosAt
     , utxosTxOutTxFromTx
-    , utxosTxOutTxAt
-    , txsFromTxIds
     , txoRefsAt
-    , txsAt
     , getTip
-    , collectQueryResponse
     -- ** Waiting for changes to the UTXO set
     , fundsAtAddressGt
     , fundsAtAddressGeq
@@ -78,14 +71,9 @@ module Plutus.Contract.Request(
     , endpointDescription
     , endpointReq
     , endpointResp
-    -- ** Wallet information
+    -- ** Public key hashes
     , ownPaymentPubKeyHash
-    , ownPaymentPubKeyHashes
-    , ownFirstPaymentPubKeyHash
-    , ownAddresses
-    , ownUtxos
     -- ** Submitting transactions
-    , adjustUnbalancedTx
     , submitUnbalancedTx
     , submitBalancedTx
     , balanceTx
@@ -105,7 +93,6 @@ module Plutus.Contract.Request(
 
 import Control.Lens (Prism', preview, review, view)
 import Control.Monad.Freer.Error qualified as E
-import Control.Monad.Trans.State.Strict (StateT (..), evalStateT)
 import Data.Aeson (FromJSON, ToJSON)
 import Data.Aeson qualified as JSON
 import Data.Aeson.Types qualified as JSON
@@ -123,8 +110,9 @@ import Data.Void (Void)
 import GHC.Generics (Generic)
 import GHC.Natural (Natural)
 import GHC.TypeLits (Symbol, symbolVal)
-import Ledger (AssetClass, DiffMilliSeconds, POSIXTime, PaymentPubKeyHash (PaymentPubKeyHash), Slot, TxId, TxOutRef,
-               Value, addressCredential, fromMilliSeconds, txOutRefId)
+import Ledger (Address, AssetClass, Datum, DatumHash, DiffMilliSeconds, MintingPolicy, MintingPolicyHash, POSIXTime,
+               PaymentPubKeyHash, Redeemer, RedeemerHash, Slot, StakeValidator, StakeValidatorHash, TxId, TxOutRef,
+               Validator, ValidatorHash, Value, addressCredential, fromMilliSeconds)
 import Ledger.Constraints (TxConstraints)
 import Ledger.Constraints.OffChain (ScriptLookups, UnbalancedTx)
 import Ledger.Constraints.OffChain qualified as Constraints
@@ -132,12 +120,10 @@ import Ledger.Tx (CardanoTx, ChainIndexTxOut, ciTxOutValue, getCardanoTxId)
 import Ledger.Typed.Scripts (Any, TypedValidator, ValidatorTypes (DatumType, RedeemerType))
 import Ledger.Value qualified as V
 import Plutus.Contract.Util (loopM)
-import Plutus.V1.Ledger.Api (Address, Datum, DatumHash, MintingPolicy, MintingPolicyHash, Redeemer, RedeemerHash,
-                             StakeValidator, StakeValidatorHash, Validator, ValidatorHash)
 import PlutusTx qualified
 
 import Plutus.Contract.Effects (ActiveEndpoint (ActiveEndpoint, aeDescription, aeMetadata),
-                                PABReq (AdjustUnbalancedTxReq, AwaitSlotReq, AwaitTimeReq, AwaitTxOutStatusChangeReq, AwaitTxStatusChangeReq, AwaitUtxoProducedReq, AwaitUtxoSpentReq, BalanceTxReq, ChainIndexQueryReq, CurrentChainIndexSlotReq, CurrentPABSlotReq, CurrentTimeReq, ExposeEndpointReq, OwnAddressesReq, OwnContractInstanceIdReq, WriteBalancedTxReq, YieldUnbalancedTxReq),
+                                PABReq (AwaitSlotReq, AwaitTimeReq, AwaitTxOutStatusChangeReq, AwaitTxStatusChangeReq, AwaitUtxoProducedReq, AwaitUtxoSpentReq, BalanceTxReq, ChainIndexQueryReq, CurrentSlotReq, CurrentTimeReq, ExposeEndpointReq, OwnContractInstanceIdReq, OwnPaymentPublicKeyHashReq, WriteBalancedTxReq, YieldUnbalancedTxReq),
                                 PABResp (ExposeEndpointResp))
 import Plutus.Contract.Effects qualified as E
 import Plutus.Contract.Logging (logDebug)
@@ -145,17 +131,13 @@ import Plutus.Contract.Schema (Input, Output)
 import Wallet.Types (ContractInstanceId, EndpointDescription (EndpointDescription),
                      EndpointValue (EndpointValue, unEndpointValue))
 
-import Data.Foldable (fold)
-import Data.List.NonEmpty qualified as NonEmpty
 import Plutus.ChainIndex (ChainIndexTx, Page (nextPageQuery, pageItems), PageQuery, txOutRefs)
-import Plutus.ChainIndex.Api (IsUtxoResponse, QueryResponse, TxosResponse, UtxosResponse, collectQueryResponse, paget)
+import Plutus.ChainIndex.Api (IsUtxoResponse, TxosResponse, UtxosResponse (page))
 import Plutus.ChainIndex.Types (RollbackState (Unknown), Tip, TxOutStatus, TxStatus)
-import Plutus.Contract.Error (AsContractError (_ChainIndexContractError, _ConstraintResolutionContractError, _EndpointDecodeContractError, _ResumableContractError, _TxToCardanoConvertContractError, _WalletContractError))
+import Plutus.Contract.Error (AsContractError (_ChainIndexContractError, _ConstraintResolutionContractError, _EndpointDecodeContractError, _ResumableContractError, _WalletContractError))
 import Plutus.Contract.Resumable (prompt)
 import Plutus.Contract.Types (Contract (Contract), MatchingError (WrongVariantError), Promise (Promise), mapError,
                               runError, throwError)
-import Plutus.V1.Ledger.Address (toPubKeyHash)
-import Wallet.Emulator.Error (WalletAPIError (NoPaymentPubKeyHashError))
 
 -- | Constraints on the contract schema, ensuring that the labels of the schema
 --   are unique.
@@ -183,17 +165,6 @@ pabReq req prism = Contract $ do
             $ WrongVariantError
             $ "unexpected answer: " <> tshow x
 
--- | Adjust the unbalanced tx
-adjustUnbalancedTx ::
-    forall w s e.
-    ( AsContractError e
-    )
-    => UnbalancedTx
-    -> Contract w s e UnbalancedTx
-adjustUnbalancedTx utx =
-  let req = pabReq (AdjustUnbalancedTxReq utx) E._AdjustUnbalancedTxResp in
-  req >>= either (throwError . review _TxToCardanoConvertContractError) pure
-
 -- | Wait until the slot
 awaitSlot ::
     forall w s e.
@@ -213,29 +184,12 @@ isSlot ::
 isSlot = Promise . awaitSlot
 
 -- | Get the current slot number
-{-# DEPRECATED currentSlot "It was renamed to 'currentPABSlot', this function will be removed" #-}
 currentSlot ::
     forall w s e.
     ( AsContractError e
     )
     => Contract w s e Slot
-currentSlot = currentPABSlot
-
--- | Get the current slot number of PAB
-currentPABSlot ::
-    forall w s e.
-    ( AsContractError e
-    )
-    => Contract w s e Slot
-currentPABSlot = pabReq CurrentPABSlotReq E._CurrentPABSlotResp
-
--- | Get the current node slot number querying slot number from plutus chain index to be aligned with slot at local running node
-currentChainIndexSlot ::
-    forall w s e.
-    ( AsContractError e
-    )
-    => Contract w s e Slot
-currentChainIndexSlot = pabReq CurrentChainIndexSlotReq E._CurrentChainIndexSlotResp
+currentSlot = pabReq CurrentSlotReq E._CurrentSlotResp
 
 -- | Wait for a number of slots to pass
 waitNSlots ::
@@ -358,18 +312,6 @@ redeemerFromHash h = do
     E.RedeemerHashResponse r -> pure r
     r                        -> throwError $ review _ChainIndexContractError ("RedeemerHashResponse", r)
 
-txOutFromRef ::
-    forall w s e.
-    ( AsContractError e
-    )
-    => TxOutRef
-    -> Contract w s e (Maybe ChainIndexTxOut)
-txOutFromRef ref = do
-  cir <- pabReq (ChainIndexQueryReq $ E.TxOutFromRef ref) E._ChainIndexQueryResp
-  case cir of
-    E.TxOutRefResponse r -> pure r
-    r                    -> throwError $ review _ChainIndexContractError ("TxOutRefResponse", r)
-
 unspentTxOutFromRef ::
     forall w s e.
     ( AsContractError e
@@ -381,18 +323,6 @@ unspentTxOutFromRef ref = do
   case cir of
     E.UnspentTxOutResponse r -> pure r
     r                        -> throwError $ review _ChainIndexContractError ("UnspentTxOutResponse", r)
-
-txFromTxId ::
-    forall w s e.
-    ( AsContractError e
-    )
-    => TxId
-    -> Contract w s e (Maybe ChainIndexTx)
-txFromTxId txid = do
-  cir <- pabReq (ChainIndexQueryReq $ E.TxFromTxId txid) E._ChainIndexQueryResp
-  case cir of
-    E.TxIdResponse r -> pure r
-    r                -> throwError $ review _ChainIndexContractError ("TxIdResponse", r)
 
 utxoRefMembership ::
     forall w s e.
@@ -434,25 +364,23 @@ utxoRefsWithCurrency pq assetClass = do
     E.UtxoSetWithCurrencyResponse r -> pure r
     r                               -> throwError $ review _ChainIndexContractError ("UtxoSetWithCurrencyResponse", r)
 
--- | Get all utxos belonging to the wallet that runs this contract.
-ownUtxos :: forall w s e. (AsContractError e) => Contract w s e (Map TxOutRef ChainIndexTxOut)
-ownUtxos = do
-    addrs <- ownAddresses
-    fold <$> mapM utxosAt (NonEmpty.toList addrs)
-
--- | Get all the unspent transaction output at an address w.r.t. a page query TxOutRef
-queryUnspentTxOutsAt ::
-    forall w s e.
+-- | Fold through each 'Page's of unspent 'TxOutRef's at a given 'Address', and
+-- accumulate the result.
+foldUtxoRefsAt ::
+    forall w s e a.
     ( AsContractError e
     )
-    => Address
-    -> PageQuery TxOutRef
-    -> Contract w s e (QueryResponse [(TxOutRef, ChainIndexTxOut)])
-queryUnspentTxOutsAt addr pq = do
-  cir <- pabReq (ChainIndexQueryReq $ E.UnspentTxOutSetAtAddress pq $ addressCredential addr) E._ChainIndexQueryResp
-  case cir of
-    E.UnspentTxOutsAtResponse r -> pure r
-    r                           -> throwError $ review _ChainIndexContractError ("UnspentTxOutAtResponse", r)
+    => (a -> Page TxOutRef -> Contract w s e a) -- ^ Accumulator function
+    -> a -- ^ Initial value
+    -> Address -- ^ Address which contain the UTXOs
+    -> Contract w s e a
+foldUtxoRefsAt f ini addr = go ini (Just def)
+  where
+    go acc Nothing = pure acc
+    go acc (Just pq) = do
+      page <- page <$> utxoRefsAt pq addr
+      newAcc <- f acc page
+      go newAcc (nextPageQuery page)
 
 -- | Get the unspent transaction outputs at an address.
 utxosAt ::
@@ -461,41 +389,16 @@ utxosAt ::
     )
     => Address
     -> Contract w s e (Map TxOutRef ChainIndexTxOut)
-utxosAt addr =
-  Map.fromList . concat <$> collectQueryResponse (queryUnspentTxOutsAt addr)
-
--- | Get unspent transaction outputs with transaction from address.
-utxosTxOutTxAt ::
-    forall w s e.
-    ( AsContractError e
-    )
-    => Address
-    -> Contract w s e (Map TxOutRef (ChainIndexTxOut, ChainIndexTx))
-utxosTxOutTxAt addr = do
-  utxos <- utxosAt addr
-  evalStateT (Map.traverseMaybeWithKey go utxos) mempty
+utxosAt addr = do
+  foldUtxoRefsAt f Map.empty addr
   where
-    go :: TxOutRef
-       -> ChainIndexTxOut
-       -> StateT (Map TxId ChainIndexTx) (Contract w s e) (Maybe (ChainIndexTxOut, ChainIndexTx))
-    go ref out = StateT $ \lookupTx -> do
-      let txid = txOutRefId ref
-      -- Lookup the txid in the lookup table. If it's present, we don't need
-      -- to query the chain index again. If it's not, we query the chain
-      -- index and store the result in the lookup table.
-      case Map.lookup txid lookupTx of
-        Just tx ->
-          pure (Just (out, tx), lookupTx)
-        Nothing -> do
-          -- We query the chain index for the tx and store it in the lookup
-          -- table if it is found.
-          txM <- txFromTxId txid
-          case txM of
-            Just tx ->
-              pure (Just (out, tx), Map.insert txid tx lookupTx)
-            Nothing ->
-              pure (Nothing, lookupTx)
-
+    f acc page = do
+      let utxoRefs = pageItems page
+      txOuts <- traverse unspentTxOutFromRef utxoRefs
+      let utxos = Map.fromList
+                $ mapMaybe (\(ref, txOut) -> fmap (ref,) txOut)
+                $ zip utxoRefs txOuts
+      pure $ acc <> utxos
 
 -- | Get the unspent transaction outputs from a 'ChainIndexTx'.
 utxosTxOutTxFromTx ::
@@ -508,38 +411,6 @@ utxosTxOutTxFromTx tx =
     mkOutRef txOutRef = do
       ciTxOutM <- unspentTxOutFromRef txOutRef
       pure $ ciTxOutM >>= \ciTxOut -> pure (txOutRef, (ciTxOut, tx))
-
-foldTxoRefsAt ::
-    forall w s e a.
-    ( AsContractError e
-    )
-    => (a -> Page TxOutRef -> Contract w s e a)
-    -> a
-    -> Address
-    -> Contract w s e a
-foldTxoRefsAt f ini addr = go ini (Just def)
-  where
-    go acc Nothing = pure acc
-    go acc (Just pq) = do
-      page <- paget <$> txoRefsAt pq addr
-      newAcc <- f acc page
-      go newAcc (nextPageQuery page)
-
--- | Get the transactions at an address.
-txsAt ::
-    forall w s e.
-    ( AsContractError e
-    )
-    => Address
-    -> Contract w s e [ChainIndexTx]
-txsAt addr = do
-  foldTxoRefsAt f [] addr
-  where
-    f acc page = do
-      let txoRefs = pageItems page
-      let txIds = txOutRefId <$> txoRefs
-      txs <- txsFromTxIds txIds
-      pure $ acc <> txs
 
 -- | Get the transaction outputs at an address.
 txoRefsAt ::
@@ -554,19 +425,6 @@ txoRefsAt pq addr = do
   case cir of
     E.TxoSetAtResponse r -> pure r
     r                    -> throwError $ review _ChainIndexContractError ("TxoSetAtAddress", r)
-
--- | Get the transactions for a list of transaction ids.
-txsFromTxIds ::
-    forall w s e.
-    ( AsContractError e
-    )
-    => [TxId]
-    -> Contract w s e [ChainIndexTx]
-txsFromTxIds txid = do
-  cir <- pabReq (ChainIndexQueryReq $ E.TxsFromTxIds txid) E._ChainIndexQueryResp
-  case cir of
-    E.TxIdsResponse r -> pure r
-    r                 -> throwError $ review _ChainIndexContractError ("TxIdsResponse", r)
 
 getTip ::
     forall w s e.
@@ -800,7 +658,6 @@ endpointWithMeta meta f = Promise $ do
 endpointDescription :: forall l. KnownSymbol l => Proxy l -> EndpointDescription
 endpointDescription = EndpointDescription . symbolVal
 
-{-# DEPRECATED ownPaymentPubKeyHash "Use ownFirstPaymentPubKeyHash, ownPaymentPubKeyHashes or ownAddresses instead" #-}
 -- | Get the hash of a public key belonging to the wallet that runs this contract.
 --   * Any funds paid to this public key hash will be treated as the wallet's own
 --     funds
@@ -810,30 +667,7 @@ endpointDescription = EndpointDescription . symbolVal
 --   * There is a 1-n relationship between wallets and public keys (although in
 --     the mockchain n=1)
 ownPaymentPubKeyHash :: forall w s e. (AsContractError e) => Contract w s e PaymentPubKeyHash
-ownPaymentPubKeyHash = ownFirstPaymentPubKeyHash
-
--- | Get the addresses belonging to the wallet that runs this contract.
---   * Any funds paid to one of these addresses will be treated as the wallet's own
---     funds
---   * The wallet is able to sign transactions with the private key of one of its
---     public key, for example, if the public key is added to the
---     'requiredSignatures' field of 'Tx'.
---   * There is a 1-n relationship between wallets and addresses (although in
---     the mockchain n=1)
-ownAddresses :: forall w s e. (AsContractError e) => Contract w s e (NonEmpty Address)
-ownAddresses = pabReq OwnAddressesReq E._OwnAddressesResp
-
-ownPaymentPubKeyHashes :: forall w s e. (AsContractError e) => Contract w s e [PaymentPubKeyHash]
-ownPaymentPubKeyHashes = do
-    addrs <- ownAddresses
-    pure $ fmap PaymentPubKeyHash $ mapMaybe toPubKeyHash $ NonEmpty.toList addrs
-
-ownFirstPaymentPubKeyHash :: forall w s e. (AsContractError e) => Contract w s e PaymentPubKeyHash
-ownFirstPaymentPubKeyHash = do
-    pkhs <- ownPaymentPubKeyHashes
-    case pkhs of
-      []      -> throwError $ review _WalletContractError NoPaymentPubKeyHashError
-      (pkh:_) -> pure pkh
+ownPaymentPubKeyHash = pabReq OwnPaymentPublicKeyHashReq E._OwnPaymentPublicKeyHashResp
 
 -- | Send an unbalanced transaction to be balanced and signed. Returns the ID
 --    of the final transaction when the transaction was submitted. Throws an
@@ -884,7 +718,7 @@ submitTxConstraints
   => TypedValidator a
   -> TxConstraints (RedeemerType a) (DatumType a)
   -> Contract w s e CardanoTx
-submitTxConstraints inst = submitTxConstraintsWith (Constraints.plutusV1TypedValidatorLookups inst)
+submitTxConstraints inst = submitTxConstraintsWith (Constraints.typedValidatorLookups inst)
 
 -- | Build a transaction that satisfies the constraints using the UTXO map
 --   to resolve any input constraints (see 'Ledger.Constraints.TxConstraints.InputConstraint')
@@ -900,7 +734,7 @@ submitTxConstraintsSpending
   -> TxConstraints (RedeemerType a) (DatumType a)
   -> Contract w s e CardanoTx
 submitTxConstraintsSpending inst utxo =
-  let lookups = Constraints.plutusV1TypedValidatorLookups inst <> Constraints.unspentOutputs utxo
+  let lookups = Constraints.typedValidatorLookups inst <> Constraints.unspentOutputs utxo
   in submitTxConstraintsWith lookups
 
 {-| A variant of 'mkTx' that runs in the 'Contract' monad, throwing errors and

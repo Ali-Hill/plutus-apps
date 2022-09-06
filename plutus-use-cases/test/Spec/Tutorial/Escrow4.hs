@@ -24,14 +24,13 @@ import Data.Foldable
 import Data.Map (Map)
 import Data.Map qualified as Map
 
-import Ledger (Slot (..), minAdaTxOut)
+import Ledger (Datum, Slot (..), minAdaTxOut)
 import Ledger.Ada qualified as Ada
 import Ledger.TimeSlot (SlotConfig (..))
 import Ledger.Value (Value, geq)
 import Plutus.Contract (Contract, selectList)
 import Plutus.Contract.Test
 import Plutus.Contract.Test.ContractModel
-import Plutus.V1.Ledger.Api (Datum)
 import Plutus.V1.Ledger.Time
 
 import Plutus.Contracts.Escrow hiding (Action (..))
@@ -137,18 +136,46 @@ instance ContractModel EscrowModel where
   arbitraryAction s
     | s ^.contractState . phase == Initial
       = Init <$> (Slot . getPositive <$> scale (*10) arbitrary) <*> arbitraryTargets
-    | otherwise
+    | s ^.contractState . phase == Running
       = frequency $ [ (3, Pay <$> elements testWallets <*> choose (1, 30)) ] ++
                     [ (1, Redeem <$> elements testWallets)
                     | (s ^. contractState . contributions . to fold) `geq` (s ^. contractState . targets . to fold)
-                    ]  ++
-                    [ (1, Refund <$> elements testWallets) ]
+                    ]  
+    | otherwise
+      = Refund <$> elements testWallets
 
 
   shrinkAction _ (Init s tgts) = map (Init s) (shrinkList (\(w,n)->(w,)<$>shrink n) tgts)
                               ++ map (`Init` tgts) (map Slot . shrink . getSlot $ s)
   shrinkAction _ (Pay w n)     = [Pay w n' | n' <- shrink n]
   shrinkAction _ _             = []
+
+{-
+Actions (2375 in total):
+58.65% Pay
+27.45% WaitUntil
+ 9.31% Redeem
+ 3.58% Init
+ 1.01% Refund
+
+Actions rejected by precondition (4006 in total):
+61.63% Pay
+31.05% Refund
+ 7.21% Redeem
+-}
+{- fixed 
+Actions (3088 in total):
+60.98% Pay
+26.42% WaitUntil
+ 9.81% Redeem
+ 2.62% Init
+ 0.16% Refund
+
+Actions rejected by precondition (5436 in total):
+98.77% Refund
+ 1.05% Pay
+ 0.18% Init
+-}
 
 arbitraryTargets :: Gen [(Wallet,Integer)]
 arbitraryTargets = do
@@ -198,7 +225,7 @@ finishingStrategy = do
 walletStrategy :: Wallet -> DL EscrowModel ()
 walletStrategy w = do
     contribs <- viewContractState contributions
-    --waitUntilDeadline
+    waitUntilDeadline
     when (w `Map.member` contribs) $ do
       action $ Refund w
 
@@ -224,3 +251,26 @@ prop_NoLockedFunds = checkNoLockedFundsProof noLockProof
 
 prop_NoLockedFundsFast :: Property
 prop_NoLockedFundsFast = checkNoLockedFundsProofFast noLockProof
+
+{-
+Ex4 Prop finished fast no scaling.
+
+59% Refunding
+41% Running
+
+61% Refunding
+39% Running
+
+58% Refunding
+42% Running
+
+62% Refunding
+38% Running
+
+52% Refunding
+48% Running
+
+~500 tests to find error without scaling. 
+
+~5 tests average with scaling. 
+-}

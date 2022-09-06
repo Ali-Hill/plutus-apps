@@ -91,11 +91,12 @@ import Ledger.Constraints qualified as Constraints
 import Ledger.Interval qualified as Interval
 import Ledger.Scripts (MintingPolicyHash)
 import Ledger.Typed.Scripts qualified as Scripts
+import Ledger.Typed.Tx (TypedScriptTxOut (..))
 import Ledger.Value (AssetClass, TokenName, Value)
 import Ledger.Value qualified as Value
 import Plutus.Contract
 import Plutus.Contract.Oracle
-import Plutus.Contract.StateMachine (AsSMContractError, SMContractError, State (..), StateMachine,
+import Plutus.Contract.StateMachine (AsSMContractError, OnChainState (..), SMContractError, State (..), StateMachine,
                                      StateMachineClient (..), Void)
 import Plutus.Contract.StateMachine qualified as SM
 import PlutusTx qualified
@@ -367,7 +368,7 @@ typedValidator :: Stablecoin -> Scripts.TypedValidator (StateMachine BankState I
 typedValidator stablecoin =
     let val = $$(PlutusTx.compile [|| validator ||]) `PlutusTx.applyCode` PlutusTx.liftCode stablecoin
         validator d = SM.mkValidator (stablecoinStateMachine d)
-        wrap = Scripts.mkUntypedValidator @BankState @Input
+        wrap = Scripts.wrapValidator @BankState @Input
     in Scripts.mkTypedValidator @(StateMachine BankState Input) val $$(PlutusTx.compile [|| wrap ||])
 
 machineClient ::
@@ -415,11 +416,11 @@ checkTransition theClient sc i@Input{inpConversionRate} = do
         case checkHashOffChain inpConversionRate of
             Right Observation{obsValue} -> do
                 case currentState of
-                    Just (ocs, _) -> do
-                        case checkValidState sc (SM.getStateData ocs) obsValue of
+                    Just (OnChainState{ocsTxOut=TypedScriptTxOut{tyTxOutData}}, _) -> do
+                        case checkValidState sc tyTxOutData obsValue of
                             Right _ -> logInfo @Haskell.String "Current state OK"
                             Left w  -> logInfo $ "Current state is invalid: " <> Haskell.show w <> ". The transition may still be allowed."
-                        case applyInput sc (SM.getStateData ocs) i of
+                        case applyInput sc tyTxOutData i of
                             Just (_, newState) -> case checkValidState sc newState obsValue of
                                 Right _ -> logInfo @Haskell.String "New state OK"
                                 Left w  -> logWarn $ "New state is invalid: " <> Haskell.show w <> ". The transition is not allowed."

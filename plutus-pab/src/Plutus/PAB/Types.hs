@@ -25,7 +25,7 @@ import Data.Time.Units (Second)
 import Data.UUID (UUID)
 import Data.UUID.Extras qualified as UUID
 import GHC.Generics (Generic)
-import Ledger (Block, Blockchain, CardanoTx, TxId, eitherTx, getCardanoTxId)
+import Ledger (Block, Blockchain, Tx, TxId, eitherTx, txId)
 import Ledger.Index (UtxoIndex (UtxoIndex))
 import Ledger.Index qualified as UtxoIndex
 import Plutus.ChainIndex.Types (Point (..))
@@ -162,7 +162,6 @@ data WebserverConfig =
         , staticDir            :: Maybe FilePath
         , permissiveCorsPolicy :: Bool -- ^ If true; use a very permissive CORS policy (any website can interact.)
         , endpointTimeout      :: Maybe Second
-        , enableMarconi        :: Bool
         }
     deriving (Show, Eq, Generic)
     deriving anyclass (FromJSON, ToJSON)
@@ -176,7 +175,6 @@ defaultWebServerConfig =
     , staticDir            = Nothing
     , permissiveCorsPolicy = False
     , endpointTimeout      = Nothing
-    , enableMarconi        = False
     }
 
 instance Default WebserverConfig where
@@ -214,7 +212,7 @@ toUUID = \case
 data ChainOverview =
     ChainOverview
         { chainOverviewBlockchain     :: Blockchain
-        , chainOverviewUnspentTxsById :: Map TxId CardanoTx
+        , chainOverviewUnspentTxsById :: Map TxId Tx
         , chainOverviewUtxoIndex      :: UtxoIndex
         }
     deriving (Show, Eq, Generic)
@@ -229,7 +227,7 @@ mkChainOverview = foldl reducer emptyChainOverview
                           , chainOverviewUtxoIndex = oldUtxoIndex
                           } txs =
         let unprunedTxById =
-                foldl (\m -> eitherTx (const m) (\tx -> Map.insert (getCardanoTxId tx) tx m)) oldTxById txs
+                foldl (\m -> eitherTx (const m) (\tx -> Map.insert (txId tx) tx m)) oldTxById txs
             newTxById = unprunedTxById -- TODO Prune spent keys.
             newUtxoIndex = UtxoIndex.insertBlock txs oldUtxoIndex
          in ChainOverview

@@ -1,4 +1,4 @@
-= Contributing to Plutus Apps
+= Contributing to Plutus
 :toc: left
 :reproducible:
 
@@ -30,9 +30,9 @@ NOTE: You may want to consider using https://github.com/target/lorri[lorri] as a
 The shell comes with some tools for fixing various simple problems that the CI will complain about. Specifically:
 
 - `fix-stylish-haskell` will re-format all the Haskell sources correctly.
-- `fix-cabal-fmt` will re-format all the Cabal sources correctly.
 - `fix-purs-tidy` will re-format all the Purescript sources correctly.
 - `fix-png-optimization` will optimize all PNGs in the repository.
+- `updateMaterialized` will update the materialized Nix files (see xref:update-generated[later]).
 
 If you're not using `nix-shell` all the time and you want to run one of these, you can use `nix-shell --run`.
 
@@ -108,6 +108,19 @@ NOTE: you must run your editor from the nix shell, and not from, say, an
 application launcher like spotlight or dmenu for your editor to find it in
 its PATH.
 
+[[update-generated]]
+=== How to update the generated Haskell package set
+
+Some of the Nix code that builds all the Haskell packages and their dependencies is generated automatically.
+However, to avoid doing too much work all the time, we have checked the generated output in.
+
+IMPORTANT: These files needs to be regenerated if you change any dependencies in cabal files.
+But the CI will tell you if you've failed to do so.
+
+You can regenerate the files by running `updateMaterialized` (provided by `nix-shell`) from the repository root.
+
+This will also update the `plan-256` shas for the extra Haskell tools, if you have a problem iwth that.
+
 === How to add a new Haskell package
 
 You need to do a few things when adding a new package, in the following order:
@@ -115,7 +128,9 @@ You need to do a few things when adding a new package, in the following order:
 . Add the cabal file for the new package.
 . Add the package to link:cabal.project[`cabal.project`].
 . Add the package to link:stack.yaml[`stack.yaml`].
-. Check that you can run `nix build -f default.nix plutus-apps.haskell.projectPackages.<package name>` successfully.
+. Update the xref:update-generated[package set].
+. Update the `xref:update-hie[hie-*.yaml` files].
+. Check that you can run `nix build -f default.nix plutus.haskell.projectPackages.<package name>` successfully.
 
 [[update-haskell-pins]]
 === How to update our pinned Haskell dependencies
@@ -124,9 +139,11 @@ We have pinned versions of some Haskell packages specified via the usual `source
 
 These can be managed normally, but ensure that:
 
+* The specifications remain in sync between `cabal.project` and `stack.yaml`.
+* You update the xref:update-generated[package set].
 * If it is an `source-repository-package`/`extra-dep` from Git, you update the `sha256` mapping in `nix/haskell.nix`.
 For the moment you have to do this by hand, using the following command to get the sha: `nix-prefetch-git --quiet <repo-url> <rev> | jq .sha256`, or by just getting it wrong and trying to build it, in which case Nix will give you the right value.
-* For certain dependencies like `plutus-apps`, please run `nix flake lock --update-input <input-name>` to update `flake.lock`. A wrong-hash error on a `nix build` is a common hint.
+* For certain dependencies like `plutus`, please run `nix flake lock --update-input <input-name>` to update `flake.lock`. A wrong-hash error on a `nix build` is a common hint.
 
 [[update-nix-pins]]
 === How to update our pinned Nix dependencies
@@ -158,13 +175,15 @@ The set of index states which it knows about is controlled by `hackage.nix`, whi
 This therefore needs to be newer than the index state.
 You can update it xref:update-nix-pins[with the Nix flake commands].
 
+You will need to update the xref:update-generated[package set] after this to reflect the new build plan that Cabal will pick.
+
 === How to work with a local copy of source dependencies
 
 Sometimes you may want to make a change that spans both `plutus-apps` *and* some of its dependencies (most commonly, the packages in `plutus`).
 The obvious workflow is to make changes in the `plutus` repository, update the pin in `plutus-apps` to point to the new commit, test, repeat.
 But this is very tedious and it's much nicer to work with a local checkout where cabal can incrementally rebuild the whole thing.
 
-Here's an example of doing this for some packages in `plutus`.
+Here's an example of doing this for some packages in `plutus`. 
 You may need to adapt this example depending on what exactly you're trying to do.
 
 First of all, we add some lines to `cabal.project.local` (we do this to avoid modifying `cabal.project`, which is tracked by git, as much as possible).
@@ -255,20 +274,15 @@ Notes are a great place to put substantial discussion that you need to refer to 
 For example, if you used an encoding trick to fit more data into an output format,
 you could write a Note describing the trick (and justifying its usage!), and then refer to it from the encoder and the decoder.
 
-=== Architecture decision records (ADR)
-
-If a new feature or code refactor requires you to make an "architecturally significant" decision, then you should
-probably write an ADR.
-
-See link:https://plutus-apps.readthedocs.io/en/latest/adr/index.html[the readthedocs page] for more details.
-
 === Code formatting
 
-We use `stylish-haskell` for Haskell code formatting, `purs-tidy` for Purescript, and `cabal-fmt` for cabal files.
-They are run automatically as pre-commit hooks, but CI will run them again and expect that to be a no-op, so if you somehow don’t apply them your PR will not go green.
+We use `stylish-haskell` for Haskell code formatting, and `purs-tidy` for Purescript.
+CI checks that running these is a no-op, so if you don’t apply it them your PR will not go green.
+To avoid annoyance, set up your editor to run them automatically.
+The `nix-shell` environment provides `stylish-haskell` and `purs-tidy` binaries of the correct versions.
 
-To run `stylish-haskell`, `purs-tidy` or `cabal-fmt` manually over your tree, type `fix-stylish-haskell`, `fix-purs-tidy` or `fix-cabal-fmt` respectively.
-They are provided by the `nix-shell` environment.
+You can run `stylish-haskell` or `purs-tidy` over your tree using the
+`fix-stylish-haskell` or `fix-purs-tidy` script provided by the `nix-shell` environment.
 
 === Compiler warnings
 
@@ -431,8 +445,6 @@ Michael also has permissions to restart failed builds.
 The documentation site is built on ReadTheDocs.
 It will build a preview for each PR which is linked from the PR status.
 It's useful to take a look if you're changing any of the documentation.
-
-Run `build-and-serve-docs` in nix-shell to host a local instance at http://0.0.0.0:8002/. Haddock is at http://0.0.0.0:8002/haddock.
 
 ==== Github Actions
 

@@ -95,7 +95,9 @@ instance ContractModel EscrowModel where
       Trace.callEndpoint @"redeem-escrow" (h $ WalletKey w) ()
       delay 1
 
-  arbitraryAction s = frequency $ [ (3, Pay <$> elements testWallets <*> choose (1, 30)) ] ++
+  arbitraryAction s = frequency $ [ 
+                                    (3, Pay <$> elements testWallets <*> choose (2, 30)) 
+                                  ] ++
                                   [ (1, Redeem <$> elements testWallets)
                                   | (s ^. contractState . contributions . to fold) `geq` (s ^. contractState . targets . to fold)
                                   ]

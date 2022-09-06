@@ -13,7 +13,7 @@ module Wallet.Effects(
     -- * Wallet effect
     WalletEffect(..)
     , submitTxn
-    , ownAddresses
+    , ownPaymentPubKeyHash
     , balanceTx
     , totalFunds
     , walletAddSignature
@@ -22,18 +22,18 @@ module Wallet.Effects(
     , NodeClientEffect(..)
     , publishTx
     , getClientSlot
-    , getClientParams
+    , getClientSlotConfig
     ) where
 
 import Control.Monad.Freer.TH (makeEffect)
-import Data.List.NonEmpty (NonEmpty)
-import Ledger (Address, CardanoTx, Params, Slot, Value)
+import Ledger (CardanoTx, PaymentPubKeyHash, Slot, Value)
 import Ledger.Constraints.OffChain (UnbalancedTx)
+import Ledger.TimeSlot (SlotConfig)
 import Wallet.Error (WalletAPIError)
 
 data WalletEffect r where
     SubmitTxn :: CardanoTx -> WalletEffect ()
-    OwnAddresses :: WalletEffect (NonEmpty Address)
+    OwnPaymentPubKeyHash :: WalletEffect PaymentPubKeyHash
     BalanceTx :: UnbalancedTx -> WalletEffect (Either WalletAPIError CardanoTx)
     TotalFunds :: WalletEffect Value -- ^ Total of all funds that are in the wallet (incl. tokens)
     WalletAddSignature :: CardanoTx -> WalletEffect CardanoTx
@@ -44,5 +44,5 @@ makeEffect ''WalletEffect
 data NodeClientEffect r where
     PublishTx :: CardanoTx -> NodeClientEffect ()
     GetClientSlot :: NodeClientEffect Slot
-    GetClientParams :: NodeClientEffect Params
+    GetClientSlotConfig :: NodeClientEffect SlotConfig
 makeEffect ''NodeClientEffect

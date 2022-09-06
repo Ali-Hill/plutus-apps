@@ -45,16 +45,15 @@ import Data.Map (Map)
 import Data.Map qualified as Map
 import Data.Maybe (catMaybes)
 import GHC.Generics (Generic)
-import Ledger (Address, POSIXTime, PaymentPubKeyHash, ScriptContext, TxOutRef, Value)
+import Ledger (Address, Datum (Datum), POSIXTime, PaymentPubKeyHash, ScriptContext, TxOutRef, Validator, Value)
 import Ledger qualified
 import Ledger.Ada qualified as Ada
 import Ledger.Constraints qualified as Constraints
 import Ledger.Tx (ChainIndexTxOut (..))
 import Ledger.Typed.Scripts qualified as Scripts
 import Playground.Contract (ToSchema)
-import Plutus.Contract (AsContractError, Contract, Endpoint, Promise, adjustUnbalancedTx, endpoint, fundsAtAddressGeq,
+import Plutus.Contract (AsContractError, Contract, Endpoint, Promise, collectFromScript, endpoint, fundsAtAddressGeq,
                         logInfo, mkTxConstraints, selectList, type (.\/), yieldUnbalancedTx)
-import Plutus.V1.Ledger.Scripts (Datum (Datum), Validator)
 import PlutusTx qualified
 import PlutusTx.Code (getCovIdx)
 import PlutusTx.Coverage (CoverageIndex)
@@ -103,7 +102,7 @@ gameInstance :: GameParam -> Scripts.TypedValidator Game
 gameInstance = Scripts.mkTypedValidatorParam @Game
     $$(PlutusTx.compile [|| mkValidator ||])
     $$(PlutusTx.compile [|| wrap ||]) where
-        wrap = Scripts.mkUntypedValidator @HashedString @ClearString
+        wrap = Scripts.wrapValidator @HashedString @ClearString
 
 -- | The validation function (Datum -> Redeemer -> ScriptContext -> Bool)
 --
@@ -159,9 +158,10 @@ data GuessArgs =
 lock :: AsContractError e => Promise () GameSchema e ()
 lock = endpoint @"lock" $ \LockArgs { lockArgsGameParam, lockArgsSecret, lockArgsValue } -> do
     logInfo @Haskell.String $ "Pay " <> Haskell.show lockArgsValue <> " to the script"
-    let lookups = Constraints.plutusV1TypedValidatorLookups (gameInstance lockArgsGameParam)
+    let lookups = Constraints.typedValidatorLookups (gameInstance lockArgsGameParam)
         tx       = Constraints.mustPayToTheScript (hashString lockArgsSecret) lockArgsValue
-    mkTxConstraints lookups tx >>= adjustUnbalancedTx >>= yieldUnbalancedTx
+    unbalancedTx <- mkTxConstraints lookups tx
+    yieldUnbalancedTx $ Constraints.adjustUnbalancedTx unbalancedTx
 
 -- | The "guess" contract endpoint. See note [Contract endpoints]
 guess :: AsContractError e => Promise () GameSchema e ()
@@ -170,10 +170,10 @@ guess = endpoint @"guess" $ \GuessArgs { guessArgsGameParam, guessArgsSecret } -
     logInfo @Haskell.String "Waiting for script to have a UTxO of at least 1 lovelace"
     utxos <- fundsAtAddressGeq (gameAddress guessArgsGameParam) (Ada.lovelaceValueOf 1)
 
-    let lookups = Constraints.plutusV1TypedValidatorLookups (gameInstance guessArgsGameParam)
+    let lookups = Constraints.typedValidatorLookups (gameInstance guessArgsGameParam)
                Haskell.<> Constraints.unspentOutputs utxos
         redeemer = clearString guessArgsSecret
-        tx       = Constraints.collectFromTheScript utxos redeemer
+        tx       = collectFromScript utxos redeemer
 
     unbalancedTx <- mkTxConstraints lookups tx
     yieldUnbalancedTx unbalancedTx
@@ -186,7 +186,7 @@ findSecretWordValue =
 -- | Extract the secret word in the Datum of a given transaction output is possible
 secretWordValue :: ChainIndexTxOut -> Maybe HashedString
 secretWordValue o = do
-  Datum d <- snd $ _ciTxOutScriptDatum o
+  Datum d <- either (const Nothing) Just (_ciTxOutDatum o)
   PlutusTx.fromBuiltinData d
 
 contract :: AsContractError e => Contract () GameSchema e ()

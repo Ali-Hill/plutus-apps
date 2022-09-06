@@ -43,7 +43,6 @@ import Control.Monad.Freer.Extras.Log (LogMsg)
 import Control.Monad.Freer.State (State)
 import Control.Monad.Freer.TH (makeEffect)
 import Data.Aeson (FromJSON, ToJSON)
-import Data.List.NonEmpty as NonEmpty
 import Data.Map.Strict (Map)
 import Data.Text (Text)
 import GHC.Generics (Generic)
@@ -52,25 +51,21 @@ import Ledger.Ada (Ada)
 import Plutus.ChainIndex (ChainIndexQueryEffect)
 import Plutus.PAB.Arbitrary ()
 import Plutus.PAB.Types (PABError)
-import Plutus.V1.Ledger.Api (Address)
 import Prettyprinter (Pretty (pretty), (<+>))
 import Servant (ServerError)
 import Servant.Client (ClientError)
 import Servant.Client.Internal.HttpClient (ClientEnv)
 import Wallet.Effects (NodeClientEffect, WalletEffect)
 import Wallet.Emulator.Error (WalletAPIError)
-import Wallet.Emulator.LogMessages (RequestHandlerLogMsg, TxBalanceMsg)
-import Wallet.Emulator.Wallet (Wallet, WalletId, WalletState (WalletState, _mockWallet), mockWalletAddress,
-                               mockWalletPaymentPubKeyHash, toMockWallet)
+import Wallet.Emulator.LogMessages (TxBalanceMsg)
+import Wallet.Emulator.Wallet (Wallet, WalletId, WalletState (WalletState, _mockWallet), mockWalletPaymentPubKeyHash,
+                               toMockWallet)
 
 -- | Information about an emulated wallet.
 data WalletInfo =
     WalletInfo
         { wiWallet            :: Wallet
-        , wiPaymentPubKeyHash :: PaymentPubKeyHash
-        -- ^ Hash of the wallet's public key, serving as wallet ID.
-        -- TODO Remove eventually as it is replaced by 'wiAddresses'.
-        , wiAddresses         :: NonEmpty Address -- ^ Wallet's addresses
+        , wiPaymentPubKeyHash :: PaymentPubKeyHash -- ^ Hash of the wallet's public key, serving as wallet ID
         }
     deriving stock (Show, Generic)
     deriving anyclass (ToJSON, FromJSON)
@@ -78,11 +73,9 @@ data WalletInfo =
 type Wallets = Map WalletId WalletState
 
 fromWalletState :: WalletState -> WalletInfo
-fromWalletState WalletState{_mockWallet} = WalletInfo{wiWallet, wiPaymentPubKeyHash, wiAddresses}
- where
+fromWalletState WalletState{_mockWallet} = WalletInfo{wiWallet, wiPaymentPubKeyHash} where
     wiWallet = toMockWallet _mockWallet
     wiPaymentPubKeyHash = mockWalletPaymentPubKeyHash wiWallet
-    wiAddresses = NonEmpty.fromList [mockWalletAddress wiWallet]
 
 data MultiWalletEffect r where
     CreateWallet :: Maybe Ada -> MultiWalletEffect WalletInfo
@@ -112,7 +105,6 @@ newtype Port = Port Int
 data WalletMsg = StartingWallet Port
                | ChainClientMsg Text
                | Balancing TxBalanceMsg
-               | RequestHandling RequestHandlerLogMsg
     deriving stock (Show, Generic)
     deriving anyclass (ToJSON, FromJSON)
 
@@ -121,11 +113,9 @@ instance Pretty WalletMsg where
         StartingWallet port -> "Starting wallet server on port" <+> pretty port
         ChainClientMsg m    -> "Chain Client: " <+> pretty m
         Balancing m         -> pretty m
-        RequestHandling m   -> pretty m
 
 instance ToObject WalletMsg where
     toObject _ = \case
         StartingWallet port -> mkObjectStr "Starting wallet server" (Tagged @"port" port)
         ChainClientMsg m    -> mkObjectStr "Chain Client: " (Tagged @"msg" m)
         Balancing m         -> mkObjectStr "Balancing" (Tagged @"msg" m)
-        RequestHandling m   -> mkObjectStr "RequestHandling" (Tagged @"msg" m)

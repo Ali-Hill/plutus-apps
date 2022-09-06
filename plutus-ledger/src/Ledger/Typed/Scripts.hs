@@ -1,8 +1,11 @@
-{-# OPTIONS_GHC -Wno-missing-import-lists #-}
-
-module Ledger.Typed.Scripts
-    ( module Export
+module Ledger.Typed.Scripts(
+    module Export
+    , Validator
+    , MintingPolicy
     ) where
 
-import Plutus.Script.Utils.V1.Typed.Scripts as Export
-import Plutus.Script.Utils.V1.Typed.TypeUtils as Export
+import Ledger.Scripts hiding (mintingPolicyHash, stakeValidatorHash, validatorHash)
+
+import Ledger.Typed.Scripts.MonetaryPolicies as Export hiding (forwardToValidator)
+import Ledger.Typed.Scripts.StakeValidators as Export hiding (forwardToValidator)
+import Ledger.Typed.Scripts.Validators as Export

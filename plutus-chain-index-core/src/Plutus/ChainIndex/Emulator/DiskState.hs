@@ -32,14 +32,13 @@ import Data.Semigroup.Generic (GenericSemigroupMonoid (..))
 import Data.Set (Set)
 import Data.Set qualified as Set
 import GHC.Generics (Generic)
-import Ledger (Address (..), TxOut (..), TxOutRef)
+import Ledger (Address (..), Script, ScriptHash, TxOut (..), TxOutRef)
 import Ledger.Credential (Credential)
+import Ledger.Scripts (Datum, DatumHash, Redeemer, RedeemerHash)
 import Ledger.TxId (TxId)
-import Plutus.ChainIndex.Tx (ChainIndexTx (..), citxData, citxScripts, citxTxId, txOutsWithRef, txRedeemersWithHash)
+import Plutus.ChainIndex.Tx (ChainIndexTx (..), citxData, citxRedeemers, citxScripts, citxTxId, txOutsWithRef)
 import Plutus.ChainIndex.Types (Diagnostics (..))
 import Plutus.V1.Ledger.Ada qualified as Ada
-import Plutus.V1.Ledger.Api (Datum, DatumHash, Redeemer, RedeemerHash)
-import Plutus.V1.Ledger.Scripts (Script, ScriptHash)
 import Plutus.V1.Ledger.Value (AssetClass (AssetClass), flattenValue)
 
 -- | Set of transaction output references for each address.
@@ -139,7 +138,7 @@ fromTx tx =
         { _DataMap = view citxData tx
         , _ScriptMap = view citxScripts tx
         , _TxMap = Map.singleton (view citxTxId tx) tx
-        , _RedeemerMap = txRedeemersWithHash tx
+        , _RedeemerMap = view citxRedeemers tx
         , _AddressMap = txCredentialMap tx
         , _AssetClassMap = txAssetClassMap tx
         }
@@ -147,11 +146,9 @@ fromTx tx =
 diagnostics :: DiskState -> Diagnostics
 diagnostics DiskState{_DataMap, _ScriptMap, _TxMap, _RedeemerMap, _AddressMap, _AssetClassMap} =
     Diagnostics
-        { numTransactions = toInteger $ Map.size _TxMap
-        , numScripts = toInteger $ Map.size _ScriptMap
+        { numScripts = toInteger $ Map.size _ScriptMap
         , numAddresses = toInteger $ Map.size $ _unCredentialMap _AddressMap
         , numAssetClasses = toInteger $ Map.size $ _unAssetClassMap _AssetClassMap
-        , someTransactions = take 10 $ fmap fst $ Map.toList _TxMap
         -- These 2 are filled in Handlers.hs
         , numUnmatchedInputs = 0
         , numUnspentOutputs = 0

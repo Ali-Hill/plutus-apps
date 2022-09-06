@@ -6,8 +6,8 @@
 }:
 let
   inherit (packages) pkgs plutus-apps plutus-playground pab-nami-demo docs webCommon;
-  inherit (pkgs) stdenv lib utillinux python3 nixpkgs-fmt glibcLocales;
-  inherit (plutus-apps) haskell stylish-haskell sphinxcontrib-haddock sphinx-markdown-tables sphinxemoji nix-pre-commit-hooks cabal-fmt;
+  inherit (pkgs) stdenv lib utillinux python3 nixpkgs-fmt;
+  inherit (plutus-apps) haskell stylish-haskell sphinxcontrib-haddock sphinx-markdown-tables sphinxemoji nix-pre-commit-hooks;
 
   # Feed cardano-wallet, cardano-cli & cardano-node to our shell.
   # This is stable as it doesn't mix dependencies with this code-base;
@@ -40,7 +40,6 @@ let
     sphinxemoji
     ps.sphinxcontrib_plantuml
     ps.sphinxcontrib-bibtex
-    ps.sphinx-autobuild
     ps.sphinx
     ps.sphinx_rtd_theme
     ps.recommonmark
@@ -53,7 +52,6 @@ let
       stylish-haskell = stylish-haskell;
       nixpkgs-fmt = nixpkgs-fmt;
       shellcheck = pkgs.shellcheck;
-      cabal-fmt = cabal-fmt;
     };
     hooks = {
       purs-tidy-hook = {
@@ -71,7 +69,6 @@ let
         # maintain excludes here *and* in `./.ignore` and *keep them in sync*.
         excludes = [ ".*nix/pkgs/haskell/materialized.*/.*" ".*/spago-packages.nix$" ];
       };
-      cabal-fmt.enable = true;
       shellcheck.enable = true;
       png-optimization = {
         enable = true;
@@ -90,24 +87,17 @@ let
 
   # build inputs from nixpkgs ( -> ./nix/default.nix )
   nixpkgsInputs = with pkgs; [
-    awscli2
-    bzip2
     cacert
     editorconfig-core-c
-    dateutils
     ghcid
     jq
     nixFlakesAlias
     nixpkgs-fmt
-    cabal-fmt
     nodejs
     plantuml
-    # See https://github.com/cachix/pre-commit-hooks.nix/issues/148 for why we need this
-    pre-commit
     shellcheck
     sqlite-interactive
     stack
-    wget
     yq
     z3
     zlib
@@ -123,13 +113,14 @@ let
     docs.build-and-serve-docs
     fixPngOptimization
     fix-purs-tidy
-    fixCabalFmt
     fixStylishHaskell
     haskell-language-server
     haskell-language-server-wrapper
     hie-bios
     hlint
+    pab-nami-demo.generate-purescript
     pab-nami-demo.start-backend
+    plutus-playground.generate-purescript
     plutus-playground.start-backend
     psa
     purescript-language-server
@@ -138,6 +129,7 @@ let
     spago
     spago2nix
     stylish-haskell
+    updateMaterialized
     updateClientDeps
   ]);
 
@@ -162,10 +154,4 @@ haskell.project.shellFor {
   + ''
     export WEB_COMMON_SRC=${webCommon.cleanSrc}
   '';
-
-  # This is no longer set automatically as of more recent `haskell.nix` revisions,
-  # but is useful for users with LANG settings.
-  LOCALE_ARCHIVE = lib.optionalString
-    (stdenv.hostPlatform.libc == "glibc")
-    "${glibcLocales}/lib/locale/locale-archive";
 }

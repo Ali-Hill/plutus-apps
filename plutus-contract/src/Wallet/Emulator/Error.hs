@@ -25,9 +25,6 @@ data WalletAPIError =
     | ChangeHasLessThanNAda Value Ada
     -- ^ The change when selecting coins contains less than the minimum amount
     -- of Ada.
-    | NoPaymentPubKeyHashError
-    -- ^ The wallet doesn't have any payment key hash, which should not be
-    -- possible.
     | PaymentPrivateKeyNotFound PaymentPubKeyHash
     -- ^ The private key of this public key hash is not known to the wallet.
     | ValidationError ValidationError
@@ -48,8 +45,6 @@ instance Pretty WalletAPIError where
             "Insufficient funds:" <+> pretty t
         ChangeHasLessThanNAda v ada ->
             "Coin change has less than" <+> pretty ada <> ":" <+> pretty v
-        NoPaymentPubKeyHashError ->
-            "No payment public hash found"
         PaymentPrivateKeyNotFound pk ->
             "Payment private key not found:" <+> viaShow pk
         ValidationError e ->

@@ -11,7 +11,6 @@
 {-# LANGUAGE TemplateHaskell    #-}
 {-# LANGUAGE TypeApplications   #-}
 {-# LANGUAGE TypeOperators      #-}
-{-# LANGUAGE ViewPatterns       #-}
 {-# OPTIONS_GHC -g -fplugin-opt PlutusTx.Plugin:coverage-all #-}
 module Plutus.Contracts.Auction(
     AuctionState(..),
@@ -40,6 +39,7 @@ import Ledger.Constraints qualified as Constraints
 import Ledger.Constraints.TxConstraints (TxConstraints)
 import Ledger.Interval qualified as Interval
 import Ledger.Typed.Scripts qualified as Scripts
+import Ledger.Typed.Tx (TypedScriptTxOut (..))
 import Ledger.Value qualified as Value
 import Plutus.Contract
 import Plutus.Contract.StateMachine (State (..), StateMachine (..), StateMachineClient, ThreadToken, Void,
@@ -90,7 +90,9 @@ data AuctionOutput =
         }
         deriving stock (Generic, Haskell.Show, Haskell.Eq)
         deriving anyclass (ToJSON, FromJSON)
-        deriving (Haskell.Semigroup, Haskell.Monoid) via (GenericSemigroupMonoid AuctionOutput)
+
+deriving via (GenericSemigroupMonoid AuctionOutput) instance (Haskell.Semigroup AuctionOutput)
+deriving via (GenericSemigroupMonoid AuctionOutput) instance (Haskell.Monoid AuctionOutput)
 
 auctionStateOut :: AuctionState -> AuctionOutput
 auctionStateOut s = Haskell.mempty { auctionState = Last (Just s) }
@@ -172,7 +174,7 @@ typedValidator = Scripts.mkTypedValidatorParam @AuctionMachine
     $$(PlutusTx.compile [|| mkValidator ||])
     $$(PlutusTx.compile [|| wrap ||])
     where
-        wrap = Scripts.mkUntypedValidator
+        wrap = Scripts.wrapValidator
 
 -- | The machine client of the auction state machine. It contains the script instance
 --   with the on-chain code, and the Haskell definition of the state machine for
@@ -218,7 +220,7 @@ auctionSeller :: Value -> POSIXTime -> Contract AuctionOutput SellerSchema Aucti
 auctionSeller value time = do
     threadToken <- SM.getThreadToken
     tell $ threadTokenOut threadToken
-    self <- ownFirstPaymentPubKeyHash
+    self <- ownPaymentPubKeyHash
     let params       = AuctionParams{apOwner = self, apAsset = value, apEndTime = time }
         inst         = typedValidator (threadToken, params)
         client       = machineClient inst threadToken params
@@ -241,10 +243,8 @@ auctionSeller value time = do
 currentState
     :: StateMachineClient AuctionState AuctionInput
     -> Contract AuctionOutput BuyerSchema AuctionError (Maybe HighestBid)
-currentState client = do
-  mOcs <- mapError StateMachineContractError (SM.getOnChainState client)
-  case mOcs of
-    Just (SM.getStateData -> Ongoing s, _) -> do
+currentState client = mapError StateMachineContractError (SM.getOnChainState client) >>= \case
+    Just (SM.OnChainState{SM.ocsTxOut=TypedScriptTxOut{tyTxOutData=Ongoing s}}, _) -> do
         tell $ auctionStateOut $ Ongoing s
         pure (Just s)
     _ -> do
@@ -331,7 +331,7 @@ handleEvent client lastHighestBid change =
         AuctionIsOver s -> tell (auctionStateOut $ Finished s) >> stop
         SubmitOwnBid ada -> do
             logInfo @Haskell.String "Submitting bid"
-            self <- ownFirstPaymentPubKeyHash
+            self <- ownPaymentPubKeyHash
             logInfo @Haskell.String "Received pubkey"
             r <- SM.runStep client Bid{newBid = ada, newBidder = self}
             logInfo @Haskell.String "SM: runStep done"
@@ -368,4 +368,3 @@ auctionBuyer currency params = do
 
 covIdx :: CoverageIndex
 covIdx = getCovIdx $$(PlutusTx.compile [|| mkValidator ||])
-
