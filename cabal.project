@@ -17,6 +17,7 @@ packages: doc
           plutus-use-cases
           quickcheck-dynamic
           web-ghc
+	      certification
 
 -- We never, ever, want this.
 write-ghc-environment-files: never

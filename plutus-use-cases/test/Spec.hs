@@ -22,6 +22,7 @@ import Spec.Stablecoin qualified
 import Spec.TokenAccount qualified
 import Spec.Uniswap qualified
 import Spec.Vesting qualified
+import Plutus.Contracts.Tutorial.Spec qualified
 
 import Test.Tasty
 import Test.Tasty.Hedgehog (HedgehogTestLimit (..))
