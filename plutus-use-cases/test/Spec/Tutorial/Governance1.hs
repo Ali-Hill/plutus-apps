@@ -157,10 +157,7 @@ instance ContractModel GovernanceModel where
   nextReactiveState slot = do
     deadline <- viewContractState endSlot
     s <- viewContractState phase
-    when ((slot >= deadline) && (s == Voting)) $ phase .= Finish
-    --TimeSlot.slotToEndPOSIXTime def $ slot
-    -- s <- viewContractState state
-    -- when ((slot >= deadline) && (snd s) == True) $ phase .= Finish
+    when ((slot > deadline) && (s == Voting)) $ phase .= Finish
 
   initialState = GovernanceModel { _state = ("" , False)
                              , _targets       = AssocMap.empty

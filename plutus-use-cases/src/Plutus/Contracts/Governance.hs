@@ -219,22 +219,29 @@ contract params = forever $ mapError (review _GovError) endpoints where
         void $ SM.runStep theClient $ MintTokens tokens
 
     checkLaw = endpoint @"check-law" $ \l -> do 
+                maybeState <- SM.getOnChainState theClient 
+                case maybeState of 
+                        -- Just (SM.OnChainState{SM.ocsTxOut=TypedScriptTxOut{tyTxOutData=(GovState law mph Nothing)}}, _)
+                        Nothing
+                            -> error ()
+                        Just (SM.OnChainState{SM.ocsTxOut=TypedScriptTxOut{tyTxOutData=(GovState law mph Nothing)}}, _)
+                            -> void $ SM.runStep theClient $ Check
+                        Just (SM.OnChainState{SM.ocsTxOut=TypedScriptTxOut{tyTxOutData=(GovState law mph (Just (Voting p oldMap)))}}, _)
+                            -> error ()
+                        _ -> void $ SM.runStep theClient $ Check
+
+{-
+    checkLaw = endpoint @"check-law" $ \l -> do 
                 SM.getOnChainState theClient >>= \s
                     -> case s of 
                         -- Just (SM.OnChainState{SM.ocsTxOut=TypedScriptTxOut{tyTxOutData=(GovState law mph Nothing)}}, _)
+                        Nothing
+                            -> error ()
                         Just (SM.OnChainState{SM.ocsTxOut=TypedScriptTxOut{tyTxOutData=(GovState law mph Nothing)}}, _)
                             -> void $ SM.runStep theClient $ Check
-                        _ -> error ()
+                        _ -> void $ SM.runStep theClient $ Check
                         -- void $ SM.runStep theClient $ Check
                         --void $ SM.runStep theClient $ Check
-
-{-
-    checkLaw = endpoint @"check-law" $ \l -> do  
-                SM.getOnChainState theClient >>= \s
-                    -> case s of 
-                        Just ((GovState law mph Nothing), FinishVoting) 
-                            -> void $ SM.runStep theClient $ Check
-                        _ -> void $ SM.runStep theClient $ Check
 -}
     --getOnChainState
 
