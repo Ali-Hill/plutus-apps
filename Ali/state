@@ -1,0 +1,9 @@
+State Machine Notes.
+----------------------
+
+
+In the blockchain, 
+
+- the state machine will be represented by a UTxO sitting at the state machine address. 
+- The state of the machine will be the datum of that UTxO. 
+- A transition will be a transaction that consumes the current state, using a redeemer that characterizes the transition, and then produces a new UTxO at the same address, where the datum now reflects the new state.
