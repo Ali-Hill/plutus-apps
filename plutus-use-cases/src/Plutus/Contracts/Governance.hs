@@ -36,6 +36,10 @@ module Plutus.Contracts.Governance (
     ) where
 
 
+
+--import Ledger (Datum, Slot (..), minAdaTxOut)
+
+
 import Control.Lens (makeClassyPrisms, review)
 import Control.Monad
 import Data.Aeson (FromJSON, ToJSON)
@@ -60,7 +64,6 @@ import PlutusTx.Prelude
 import Prelude qualified as Haskell
 import PlutusTx.Coverage --added for coverage
 import PlutusTx.Code --added for coverage
-import Ledger.Typed.Tx (TypedScriptTxOut (..)) --added for onchainstate
 
 
 -- $governance
@@ -100,7 +103,6 @@ data GovInput
     | ProposeChange Proposal
     | AddVote TokenName Bool
     | FinishVoting
-    | Check
     deriving stock (Haskell.Show, Generic)
     deriving anyclass (ToJSON, FromJSON)
 
@@ -111,7 +113,6 @@ data GovInput
 type Schema =
     Endpoint "new-law" ByteString
         .\/ Endpoint "add-vote" (TokenName, Bool)
-        .\/ Endpoint "check-law" ByteString
 
 -- | The governace contract parameters.
 data Params = Params
@@ -207,7 +208,7 @@ contract ::
     -> Contract () Schema e ()
 contract params = forever $ mapError (review _GovError) endpoints where
     theClient = client params
-    endpoints = selectList [initLaw, addVote, checkLaw]
+    endpoints = selectList [initLaw, addVote]
 
     addVote = endpoint @"add-vote" $ \(tokenName, vote) ->
         void $ SM.runStep theClient (AddVote tokenName vote)
@@ -217,33 +218,6 @@ contract params = forever $ mapError (review _GovError) endpoints where
         void $ SM.runInitialise theClient (GovState (toBuiltin bsLaw) mph Nothing) (Ada.lovelaceValueOf 1)
         let tokens = Haskell.zipWith (const (mkTokenName (baseTokenName params))) (initialHolders params) [1..]
         void $ SM.runStep theClient $ MintTokens tokens
-
-    checkLaw = endpoint @"check-law" $ \l -> do 
-                maybeState <- SM.getOnChainState theClient 
-                case maybeState of 
-                        -- Just (SM.OnChainState{SM.ocsTxOut=TypedScriptTxOut{tyTxOutData=(GovState law mph Nothing)}}, _)
-                        Nothing
-                            -> error ()
-                        Just (SM.OnChainState{SM.ocsTxOut=TypedScriptTxOut{tyTxOutData=(GovState law mph Nothing)}}, _)
-                            -> void $ SM.runStep theClient $ Check
-                        Just (SM.OnChainState{SM.ocsTxOut=TypedScriptTxOut{tyTxOutData=(GovState law mph (Just (Voting p oldMap)))}}, _)
-                            -> error ()
-                        _ -> void $ SM.runStep theClient $ Check
-
-{-
-    checkLaw = endpoint @"check-law" $ \l -> do 
-                SM.getOnChainState theClient >>= \s
-                    -> case s of 
-                        -- Just (SM.OnChainState{SM.ocsTxOut=TypedScriptTxOut{tyTxOutData=(GovState law mph Nothing)}}, _)
-                        Nothing
-                            -> error ()
-                        Just (SM.OnChainState{SM.ocsTxOut=TypedScriptTxOut{tyTxOutData=(GovState law mph Nothing)}}, _)
-                            -> void $ SM.runStep theClient $ Check
-                        _ -> void $ SM.runStep theClient $ Check
-                        -- void $ SM.runStep theClient $ Check
-                        --void $ SM.runStep theClient $ Check
--}
-    --getOnChainState
 
 -- | The contract for proposing changes to a law.
 proposalContract ::

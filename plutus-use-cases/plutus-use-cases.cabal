@@ -95,7 +95,6 @@ library
         semigroups -any,
         openapi3 -any,
         tasty -any,
-        tasty-quickcheck -any, 
         plutus-contract-certification -any,
         data-default, 
         QuickCheck
