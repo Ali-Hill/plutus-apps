@@ -53,14 +53,18 @@ import Data.Map qualified as Map
 import Data.Map (Map)
 import Plutus.Contract.Test.Coverage
 
+import Data.Semigroup (Sum (..))
+
+
 --import Data.Set qualified as Set --might not need
 
 
 data GovernanceModel = GovernanceModel { _state :: (BuiltinByteString, Bool)
-                                       , _targets :: AssocMap.Map Ledger.TokenName Bool
+                                       , _targets :: Map Ledger.TokenName Bool
                                        , _walletTokens :: Map Wallet TokenName
                                        , _endSlot    :: Slot
                                        , _phase :: Phase
+                                       , _proposedLaw :: BuiltinByteString
                                       } deriving (Eq, Show, Data)
 
 data Phase = Initial | Establishing | Proposing | Voting | Finish deriving (Eq, Show, Data)
@@ -106,7 +110,7 @@ instance ContractModel GovernanceModel where
                                  }]
   startInstances _ _ = []
 
-  perform h _ _ a = case a of
+  perform h _ s a = case a of
     Init _ -> do
       return ()
     NewLaw w l        -> do
@@ -119,7 +123,7 @@ instance ContractModel GovernanceModel where
       return ()
       delay 1 
     CheckLaw w    -> do
-      Trace.callEndpoint @"check-law" (h $ GovH w) "law"
+      Trace.callEndpoint @"check-law" (h $ GovH w) (fst (s ^. contractState . state))
       delay 1
 
   nextState a = case a of
@@ -143,10 +147,12 @@ instance ContractModel GovernanceModel where
     AddVote w t v -> do 
         -- adds vote but there is no change in wallet.
         oldMap <- viewContractState targets
-        targets .= AssocMap.insert t v oldMap
+        targets .= Map.insert t v oldMap
         wait 1
     StartProposal w l t slot  -> do
+      proposedLaw .= l
       endSlot .= slot
+      targets .= Map.empty
       curSlot <- viewModelState currentSlot 
       when (curSlot < slot) $ phase .= Voting
       wait 1
@@ -157,10 +163,16 @@ instance ContractModel GovernanceModel where
   nextReactiveState slot = do
     deadline <- viewContractState endSlot
     s <- viewContractState phase
-    when ((slot > deadline) && (s == Voting)) $ phase .= Finish
+    votes <- (viewContractState targets)
+    pLaw <- (viewContractState proposedLaw)
+    when ((slot > deadline) && (s == Voting)) $ do 
+      phase .= Finish 
+      let Sum ayes = foldMap (\b -> Sum $ if b then 1 else 0) votes
+      when (ayes >= 5) $ state .= (pLaw, True)
+
 
   initialState = GovernanceModel { _state = ("" , False)
-                             , _targets       = AssocMap.empty
+                             , _targets       = Map.empty
                              , _walletTokens = Map.empty
                              , _endSlot = 0
                              , _phase = Initial

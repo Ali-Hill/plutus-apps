@@ -53,6 +53,9 @@ import Data.Map qualified as Map
 import Data.Map (Map)
 import Plutus.Contract.Test.Coverage
 
+import Data.Semigroup (Sum (..))
+
+
 --import Data.Set qualified as Set --might not need
 
 
@@ -76,6 +79,7 @@ instance ContractModel GovernanceModel where
                           | NewLaw Wallet BuiltinByteString
                           | AddVote Wallet Ledger.TokenName Bool
                           | StartProposal Wallet BuiltinByteString TokenName Slot
+                          | CheckLaw Wallet
     deriving (Eq, Show, Data)
 
   data ContractInstanceKey GovernanceModel w s e params where
@@ -105,7 +109,7 @@ instance ContractModel GovernanceModel where
                                  }]
   startInstances _ _ = []
 
-  perform h _ _ a = case a of
+  perform h _ s a = case a of
     Init _ -> do
       return ()
     NewLaw w l        -> do
@@ -117,6 +121,9 @@ instance ContractModel GovernanceModel where
     StartProposal _ _ _ _ -> do 
       return ()
       delay 1 
+    CheckLaw w    -> do
+      Trace.callEndpoint @"check-law" (h $ GovH w) (fst (s ^. contractState . state))
+      delay 1
 
   nextState a = case a of
     Init w -> do 
@@ -143,13 +150,23 @@ instance ContractModel GovernanceModel where
         wait 1
     StartProposal w l t slot  -> do
       endSlot .= slot
-      phase .= Voting
+      curSlot <- viewModelState currentSlot 
+      when (curSlot < slot) $ phase .= Voting
+      wait 1
+    CheckLaw w -> do
+      -- let Sum ayes = foldMap (\b -> Sum $ if b then 1 else 0) (viewContractState targets)
+      votes <- (viewContractState targets)
+      let Sum ayes = foldMap (\b -> Sum $ if b then 1 else 0) votes
+
+        
+        --in Just (mempty, State (GovState (if ayes >= requiredVotes then newLaw p else oldLaw) mph Nothing) stateValue)
+      phase .= Proposing
       wait 1
 
   nextReactiveState slot = do
     deadline <- viewContractState endSlot
-    s <- viewContractState state
-    when ((slot >= deadline) && (snd s) == True) $ phase .= Proposing
+    s <- viewContractState phase
+    when ((slot > deadline) && (s == Voting)) $ phase .= Finish
 
   initialState = GovernanceModel { _state = ("" , False)
                              , _targets       = AssocMap.empty
@@ -165,6 +182,8 @@ instance ContractModel GovernanceModel where
       = NewLaw <$> QC.elements testWallets <*> QC.elements laws
     | s ^.contractState . phase == Proposing
       = StartProposal <$> QC.elements testWallets <*> QC.elements laws <*> QC.elements tokens <*> (Slot . QC.getPositive <$> QC.scale (*10) QC.arbitrary)
+    | s ^.contractState . phase == Finish
+      = CheckLaw <$> QC.elements testWallets    
     | otherwise
       =   AddVote <$> QC.elements testWallets <*> QC.elements tokens <*> QC.choose (True, False)
 
@@ -179,9 +198,12 @@ instance ContractModel GovernanceModel where
                       && ownsVotingToken' w t (s ^. contractState . walletTokens) 
     StartProposal w l t slot -> currentPhase == Proposing 
                                 && ownsVotingToken' w t (s ^. contractState . walletTokens)
+                                -- && viewModelState currentSlot < slot Note: I thought I would be able to do this 
+    CheckLaw w -> currentPhase == Finish
                                 -- Gov.ownsVotingToken (Scripts.forwardingMintingPolicyHash (Gov.typedValidator params)) t
                                 -- && snd (s ^. contractState . state) == False
     where currentPhase = s ^. contractState . phase
+          
 
 
 ownsVotingToken' :: Wallet -> TokenName -> Map Wallet TokenName -> Bool

@@ -111,7 +111,7 @@ data GovInput
 type Schema =
     Endpoint "new-law" ByteString
         .\/ Endpoint "add-vote" (TokenName, Bool)
-        .\/ Endpoint "check-law" ByteString
+        .\/ Endpoint "check-law" BuiltinByteString -- ByteString
 
 -- | The governace contract parameters.
 data Params = Params
@@ -198,7 +198,8 @@ transition Params{..} State{ stateData = s, stateValue} i = case (s, i) of
 
     _ -> Nothing
 
--- Look at state machine library. 
+getLaw :: GovState -> BuiltinByteString
+getLaw (GovState l _ _) = l
 
 -- | The main contract for creating a new law and for voting on proposals.
 contract ::
@@ -225,9 +226,9 @@ contract params = forever $ mapError (review _GovError) endpoints where
                         Nothing
                             -> error ()
                         Just (SM.OnChainState{SM.ocsTxOut=TypedScriptTxOut{tyTxOutData=(GovState law mph Nothing)}}, _)
-                            -> void $ SM.runStep theClient $ Check
+                            -> if l == getLaw (GovState law mph Nothing) then void $ SM.runStep theClient $ Check else error ()
                         Just (SM.OnChainState{SM.ocsTxOut=TypedScriptTxOut{tyTxOutData=(GovState law mph (Just (Voting p oldMap)))}}, _)
-                            -> error ()
+                            -> void $ SM.runStep theClient $ Check -- error ()
                         _ -> void $ SM.runStep theClient $ Check
 
 {-
