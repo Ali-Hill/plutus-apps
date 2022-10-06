@@ -125,7 +125,6 @@ library
     , template-haskell
     , text
     , tasty -any
-    , tasty-quickcheck -any
     , tasty-hunit
 
   if flag(defer-plugin-errors)
