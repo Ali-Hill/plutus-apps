@@ -133,7 +133,6 @@ library
     , text
     , tasty -any
     , tasty-quickcheck -any
-    , QuickCheck -any
 
   if flag(defer-plugin-errors)
     ghc-options: -fplugin-opt PlutusTx.Plugin:defer-errors
