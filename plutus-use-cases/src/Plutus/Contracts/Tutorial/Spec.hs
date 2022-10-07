@@ -210,7 +210,7 @@ tests = testGroup "escrow"
     [ let con = void $ payEp @() @EscrowSchema @EscrowError (escrowParams startTime) in
       checkPredicateOptions options "can pay"
         ( assertDone con (Trace.walletInstanceTag w1) (const True) "escrow pay not done"
-        .&&. walletFundsChange w1 (Ada.adaValueOf (-10))
+        .&&. walletFundsChange w1 (Ada.adaValueOf (-100))
         )
         $ do
           hdl <- Trace.activateContractWallet w1 con
@@ -380,9 +380,9 @@ unitTest2 = do
               action $ Refund w1
 
 
--- unitTestFail :: DL EscrowModel ()
--- unitTestFail = do
---              action $ Redeem w4
+unitTestFail :: DL EscrowModel ()
+unitTestFail = do
+              action $ Redeem w4
 
 prop_UnitTest :: Property
 prop_UnitTest = withMaxSuccess 1 $ forAllDL unitTest2 prop_Escrow
@@ -394,7 +394,7 @@ certification = defaultCertification {
     certNoLockedFunds = Just noLockProof,
     certCrashTolerance = Just Instance,
     certUnitTests = Just unitTest,
-    certDLTests = [("redeem test", unitTest1), ("refund test", unitTest2)],
+    certDLTests = [("redeem test", unitTest1), ("refund test", unitTest2), ("fail test", unitTestFail)],
     certCoverageIndex      = covIdx
   }
   where unitTest _ = tests
