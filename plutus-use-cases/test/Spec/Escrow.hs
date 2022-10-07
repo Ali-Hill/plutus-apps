@@ -210,7 +210,7 @@ tests = testGroup "escrow"
     [ let con = void $ payEp @() @EscrowSchema @EscrowError (escrowParams startTime) in
       checkPredicateOptions options "can pay"
         ( assertDone con (Trace.walletInstanceTag w1) (const True) "escrow pay not done"
-        .&&. walletFundsChange w1 (Ada.adaValueOf (-10))
+        .&&. walletFundsChange w1 (Ada.adaValueOf (-100))
         )
         $ do
           hdl <- Trace.activateContractWallet w1 con
