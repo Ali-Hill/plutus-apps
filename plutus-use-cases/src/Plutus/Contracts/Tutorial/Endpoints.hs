@@ -5,7 +5,7 @@
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeOperators    #-}
 
-module Spec.Escrow.Endpoints where
+module Plutus.Contracts.Tutorial.Endpoints where
 
 import Data.Text (unpack)
 
