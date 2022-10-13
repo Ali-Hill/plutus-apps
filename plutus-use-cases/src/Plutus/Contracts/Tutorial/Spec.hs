@@ -8,7 +8,7 @@
 {-# LANGUAGE TypeApplications    #-}
 {-# LANGUAGE TypeFamilies        #-}
 {-# OPTIONS_GHC -fno-warn-name-shadowing #-}
-module Spec.Escrow( tests
+module Plutus.Contracts.Tutorial.Spec( tests
                   , redeemTrace
                   , redeem2Trace
                   , refundTrace
@@ -51,7 +51,7 @@ import Test.Tasty.HUnit qualified as HUnit
 -- Don't need when removing prop from testTree
 -- import Test.Tasty.QuickCheck hiding ((.&&.))
 
-import Spec.Escrow.Endpoints
+import Plutus.Contracts.Tutorial.Endpoints
 
 import Plutus.Contract.Test.Certification
 import Plutus.Contract.Test.ContractModel.CrashTolerance
@@ -380,9 +380,9 @@ unitTest2 = do
               action $ Refund w1
 
 
--- unitTestFail :: DL EscrowModel ()
--- unitTestFail = do
---              action $ Redeem w4
+unitTestFail :: DL EscrowModel ()
+unitTestFail = do
+              action $ Redeem w4
 
 prop_UnitTest :: Property
 prop_UnitTest = withMaxSuccess 1 $ forAllDL unitTest2 prop_Escrow
@@ -394,7 +394,7 @@ certification = defaultCertification {
     certNoLockedFunds = Just noLockProof,
     certCrashTolerance = Just Instance,
     certUnitTests = Just unitTest,
-    certDLTests = [("redeem test", unitTest1), ("refund test", unitTest2)],
+    certDLTests = [("redeem test", unitTest1), ("refund test", unitTest2), ("fail test", unitTestFail)],
     certCoverageIndex      = covIdx
   }
   where unitTest _ = tests
