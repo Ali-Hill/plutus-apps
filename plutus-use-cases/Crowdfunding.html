@@ -1,0 +1,89 @@
+<body ><h1 >Files</h1><ul ><li ><a href="#src/Plutus/Contracts/Crowdfunding.hs" >src/Plutus/Contracts/Crowdfunding.hs</a></li></ul><hr><h2 id="src/Plutus/Contracts/Crowdfunding.hs" >src/Plutus/Contracts/Crowdfunding.hs</h2><pre >.
+.
+.
+    83    <span style=background-color:lightgray;color:gray >import PlutusTx.Code</span>
+    84    <span style=background-color:lightgray;color:gray >import PlutusTx.Coverage</span>
+    85    <span style=background-color:lightgray;color:gray ></span>
+    86    <span style=background-color:lightgray;color:gray >-- | A crowdfunding campaign.</span>
+    87    <span style=background-color:lightgray;color:gray >data Campaign = Campaign</span>
+    88    <span style=background-color:lightgray;color:gray >    { </span><span style=background-color:black;color:orangered >campaignDeadline </span><span style=background-color:lightgray;color:gray >          :: POSIXTime</span>
+    89    <span style=background-color:lightgray;color:gray >    -- ^ The date by which the campaign funds can be contributed.</span>
+    90    <span style=background-color:lightgray;color:gray >    , </span><span style=background-color:black;color:orangered >campaignCollectionDeadline </span><span style=background-color:lightgray;color:gray >:: POSIXTime</span>
+    91    <span style=background-color:lightgray;color:gray >    -- ^ The date by which the campaign owner has to collect the funds</span>
+    92    <span style=background-color:lightgray;color:gray >    , </span><span style=background-color:black;color:orangered >campaignOwner </span><span style=background-color:lightgray;color:gray >             :: PaymentPubKeyHash</span>
+    93    <span style=background-color:lightgray;color:gray >    -- ^ Public key of the campaign owner. This key is entitled to retrieve the</span>
+    94    <span style=background-color:lightgray;color:gray >    --   funds if the campaign is successful.</span>
+    95    <span style=background-color:lightgray;color:gray >    } deriving (Generic, ToJSON, FromJSON, ToSchema, Haskell.Show)</span>
+    96    <span style=background-color:lightgray;color:gray ></span>
+    97    <span style=background-color:lightgray;color:gray >PlutusTx.makeLift &#39;&#39;Campaign</span>
+.
+.
+.
+   126    <span style=background-color:lightgray;color:gray >        }</span>
+   127    <span style=background-color:lightgray;color:gray ></span>
+   128    <span style=background-color:lightgray;color:gray >-- | The &#39;POSIXTimeRange&#39; during which the funds can be collected</span>
+   129    <span style=background-color:lightgray;color:gray >{-# INLINABLE collectionRange #-}</span>
+   130    <span style=background-color:lightgray;color:gray >collectionRange :: Campaign -&gt; POSIXTimeRange</span>
+   131    <span style=background-color:black;color:orangered >collectionRange cmp =</span><span style=background-color:lightgray;color:gray ></span>
+   132    <span style=background-color:black;color:orangered >    -- We have to subtract &#39;2&#39;, see Note [Validity Interval&#39;s upper bound]</span><span style=background-color:lightgray;color:gray ></span>
+   133    <span style=background-color:black;color:orangered >    Interval.interval </span><span style=background-color:black;color:orangered >(campaignDeadline cmp) </span><span style=background-color:black;color:orangered >(</span><span style=background-color:black;color:orangered >campaignCollectionDeadline cmp </span><span style=background-color:black;color:orangered >- </span><span style=background-color:black;color:orangered >2)</span><span style=background-color:black;color:orangered ></span><span style=background-color:lightgray;color:gray ></span>
+   134    <span style=background-color:lightgray;color:gray ></span>
+   135    <span style=background-color:lightgray;color:gray >-- | The &#39;POSIXTimeRange&#39; during which a refund may be claimed</span>
+   136    <span style=background-color:lightgray;color:gray >{-# INLINABLE refundRange #-}</span>
+   137    <span style=background-color:lightgray;color:gray >refundRange :: Campaign -&gt; POSIXTimeRange</span>
+   138    <span style=background-color:black;color:orangered >refundRange cmp =</span><span style=background-color:lightgray;color:gray ></span>
+   139    <span style=background-color:black;color:orangered >    Interval.from </span><span style=background-color:black;color:orangered >(campaignCollectionDeadline cmp)</span><span style=background-color:lightgray;color:gray ></span>
+   140    <span style=background-color:lightgray;color:gray ></span>
+   141    <span style=background-color:lightgray;color:gray >data Crowdfunding</span>
+   142    <span style=background-color:lightgray;color:gray >instance Scripts.ValidatorTypes Crowdfunding where</span>
+   143    <span style=background-color:lightgray;color:gray >    type instance RedeemerType Crowdfunding = CampaignAction</span>
+   144    <span style=background-color:lightgray;color:gray >    type instance DatumType Crowdfunding = PaymentPubKeyHash</span>
+.
+.
+.
+   150    <span style=background-color:lightgray;color:gray >    where</span>
+   151    <span style=background-color:lightgray;color:gray >        wrap = Scripts.mkUntypedValidator</span>
+   152    <span style=background-color:lightgray;color:gray ></span>
+   153    <span style=background-color:lightgray;color:gray >{-# INLINABLE validRefund #-}</span>
+   154    <span style=background-color:lightgray;color:gray >validRefund :: Campaign -&gt; PaymentPubKeyHash -&gt; TxInfo -&gt; Bool</span>
+   155    <span style=background-color:black;color:orangered >validRefund campaign contributor txinfo =</span><span style=background-color:lightgray;color:gray ></span>
+   156    <span style=background-color:black;color:orangered >    -- Check that the transaction falls in the refund range of the campaign</span><span style=background-color:lightgray;color:gray ></span>
+   157    <span style=background-color:black;color:orangered >    </span><span style=background-color:black;color:orangered >refundRange </span><span style=background-color:black;color:orangered >campaign </span><span style=background-color:black;color:orangered >`Interval.contains` </span><span style=background-color:black;color:orangered >txInfoValidRange txinfo</span><span style=background-color:black;color:orangered ></span><span style=background-color:lightgray;color:gray ></span>
+   158    <span style=background-color:black;color:orangered >    -- Check that the transaction is signed by the contributor</span><span style=background-color:lightgray;color:gray ></span>
+   159    <span style=background-color:black;color:orangered >    &amp;&amp; </span><span style=background-color:black;color:orangered >(</span><span style=background-color:black;color:orangered >txinfo </span><span style=background-color:black;color:orangered >`V.txSignedBy` </span><span style=background-color:black;color:orangered >unPaymentPubKeyHash contributor)</span><span style=background-color:black;color:orangered ></span><span style=background-color:lightgray;color:gray ></span>
+   160    <span style=background-color:lightgray;color:gray ></span>
+   161    <span style=background-color:lightgray;color:gray >{-# INLINABLE validCollection #-}</span>
+   162    <span style=background-color:lightgray;color:gray >validCollection :: Campaign -&gt; TxInfo -&gt; Bool</span>
+   163    <span style=background-color:black;color:orangered >validCollection campaign txinfo =</span><span style=background-color:lightgray;color:gray ></span>
+   164    <span style=background-color:black;color:orangered >    -- Check that the transaction falls in the collection range of the campaign</span><span style=background-color:lightgray;color:gray ></span>
+   165    <span style=background-color:black;color:orangered >    (</span><span style=background-color:black;color:orangered >collectionRange </span><span style=background-color:black;color:orangered >campaign </span><span style=background-color:black;color:orangered >`Interval.contains` </span><span style=background-color:black;color:orangered >txInfoValidRange txinfo)</span><span style=background-color:black;color:orangered ></span><span style=background-color:lightgray;color:gray ></span>
+   166    <span style=background-color:black;color:orangered >    -- Check that the transaction is signed by the campaign owner</span><span style=background-color:lightgray;color:gray ></span>
+   167    <span style=background-color:black;color:orangered >    &amp;&amp; </span><span style=background-color:black;color:orangered >(</span><span style=background-color:black;color:orangered >txinfo </span><span style=background-color:black;color:orangered >`V.txSignedBy` </span><span style=background-color:black;color:orangered >unPaymentPubKeyHash (campaignOwner campaign))</span><span style=background-color:black;color:orangered ></span><span style=background-color:lightgray;color:gray ></span>
+   168    <span style=background-color:lightgray;color:gray ></span>
+   169    <span style=background-color:lightgray;color:gray >{-# INLINABLE mkValidator #-}</span>
+   170    <span style=background-color:lightgray;color:gray >-- | The validator script is of type &#39;CrowdfundingValidator&#39;, and is</span>
+   171    <span style=background-color:lightgray;color:gray >-- additionally parameterized by a &#39;Campaign&#39; definition. This argument is</span>
+   172    <span style=background-color:lightgray;color:gray >-- provided by the Plutus client, using &#39;PlutusTx.applyCode&#39;.</span>
+   173    <span style=background-color:lightgray;color:gray >-- As a result, the &#39;Campaign&#39; definition is part of the script address,</span>
+   174    <span style=background-color:lightgray;color:gray >-- and different campaigns have different addresses.</span>
+   175    <span style=background-color:lightgray;color:gray >mkValidator :: Campaign -&gt; PaymentPubKeyHash -&gt; CampaignAction -&gt; ScriptContext -&gt; Bool</span>
+   176    <span style=background-color:black;color:orangered >mkValidator c con act ScriptContext{scriptContextTxInfo} = </span><span style=background-color:black;color:orangered >case act of</span><span style=background-color:lightgray;color:gray ></span>
+   177    <span style=background-color:black;color:orangered >    -- the &quot;refund&quot; branch</span><span style=background-color:lightgray;color:gray ></span>
+   178    <span style=background-color:black;color:orangered >    Refund  -&gt; </span><span style=background-color:black;color:orangered >validRefund </span><span style=background-color:black;color:orangered >c </span><span style=background-color:black;color:orangered >con </span><span style=background-color:black;color:orangered >scriptContextTxInfo</span><span style=background-color:black;color:orangered ></span><span style=background-color:lightgray;color:gray ></span>
+   179    <span style=background-color:black;color:orangered >    -- the &quot;collection&quot; branch</span><span style=background-color:lightgray;color:gray ></span>
+   180    <span style=background-color:black;color:orangered >    Collect -&gt; </span><span style=background-color:black;color:orangered >validCollection </span><span style=background-color:black;color:orangered >c </span><span style=background-color:black;color:orangered >scriptContextTxInfo</span><span style=background-color:lightgray;color:gray ></span>
+   181    <span style=background-color:lightgray;color:gray ></span>
+   182    <span style=background-color:lightgray;color:gray >-- | The validator script that determines whether the campaign owner can</span>
+   183    <span style=background-color:lightgray;color:gray >--   retrieve the funds or the contributors can claim a refund.</span>
+   184    <span style=background-color:lightgray;color:gray >--</span>
+   185    <span style=background-color:lightgray;color:gray >contributionScript :: Campaign -&gt; Validator</span>
+.
+.
+.
+   282    <span style=background-color:lightgray;color:gray >    makeContribution (knownWallet 3) (Ada.adaValueOf 10)</span>
+   283    <span style=background-color:lightgray;color:gray >    makeContribution (knownWallet 4) (Ada.adaValueOf 2.5)</span>
+   284    <span style=background-color:lightgray;color:gray >    void $ Trace.waitUntilSlot 21</span>
+   285    <span style=background-color:lightgray;color:gray ></span>
+   286    <span style=background-color:lightgray;color:gray >covIdx :: CoverageIndex</span>
+   287    <span style=background-color:lightgray;color:gray >covIdx = getCovIdx $$(</span><span style=background-color:black;color:orangered >PlutusTx.compile [|| mkValidator ||])</span><span style=background-color:lightgray;color:gray ></span>
+</pre></body>

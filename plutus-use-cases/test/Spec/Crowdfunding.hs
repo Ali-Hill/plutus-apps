@@ -45,6 +45,7 @@ import Ledger.TimeSlot qualified as TimeSlot
 import Plutus.Contract hiding (currentSlot, runError)
 import Plutus.Contract.Test
 import Plutus.Contract.Test.ContractModel
+import Plutus.Contract.Test.Coverage
 import Plutus.Contracts.Crowdfunding
 import Plutus.Trace.Emulator (ContractHandle (..), EmulatorTrace)
 import Plutus.Trace.Emulator qualified as Trace
@@ -286,3 +287,11 @@ contributorWallets = [w2, w3, w4, w5, w6, w7, w8, w9, w10]
 
 prop_Crowdfunding :: Actions CrowdfundingModel -> Property
 prop_Crowdfunding = propRunActions_
+
+check_propCrowdfundingWithCoverage :: IO ()
+check_propCrowdfundingWithCoverage = do
+  cr <- quickCheckWithCoverage stdArgs (set coverageIndex covIdx defaultCoverageOptions) $ \covopts ->
+    withMaxSuccess 100 $
+      propRunActionsWithOptions @CrowdfundingModel defaultCheckOptionsContractModel covopts
+        (const (pure True))
+  writeCoverageReport "Crowdfunding" cr

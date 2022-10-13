@@ -22,6 +22,7 @@
 {-# OPTIONS_GHC -fno-omit-interface-pragmas #-}
 {-# OPTIONS_GHC -fno-specialise #-}
 {-# OPTIONS_GHC -fplugin-opt PlutusTx.Plugin:debug-context #-}
+{-# OPTIONS_GHC -g -fplugin-opt PlutusTx.Plugin:coverage-all #-}
 
 module Plutus.Contracts.Crowdfunding (
     -- * Campaign parameters
@@ -46,6 +47,8 @@ module Plutus.Contracts.Crowdfunding (
     , startCampaign
     , makeContribution
     , successfulCampaign
+    -- Coverage
+    , covIdx
     ) where
 
 import Control.Applicative (Applicative (..))
@@ -76,6 +79,9 @@ import Prelude qualified as Haskell
 import Schema (ToArgument, ToSchema)
 import Wallet.Emulator (Wallet (..), knownWallet)
 import Wallet.Emulator qualified as Emulator
+
+import PlutusTx.Code
+import PlutusTx.Coverage
 
 -- | A crowdfunding campaign.
 data Campaign = Campaign
@@ -276,3 +282,8 @@ successfulCampaign = do
     makeContribution (knownWallet 3) (Ada.adaValueOf 10)
     makeContribution (knownWallet 4) (Ada.adaValueOf 2.5)
     void $ Trace.waitUntilSlot 21
+
+covIdx :: CoverageIndex
+covIdx = getCovIdx $$(PlutusTx.compile [|| mkValidator ||])
+
+
