@@ -204,6 +204,8 @@ noLockProof = defaultNLFP
 prop_NoLockedFunds :: Property
 prop_NoLockedFunds = checkNoLockedFundsProofWithOptions options noLockProof
 
+-- test1 :: TestTree
+-- test1 = testProperty "QuickCheck ContractModel" $ withMaxSuccess 10 prop_Escrow
 
 tests :: TestTree
 tests = testGroup "escrow"
@@ -402,7 +404,7 @@ certification = defaultCertification {
 check_propEscrowWithCoverage :: IO ()
 check_propEscrowWithCoverage = do
   cr <- quickCheckWithCoverage stdArgs (set coverageIndex covIdx defaultCoverageOptions) $ \covopts ->
-    withMaxSuccess 1000 $
+    withMaxSuccess 100 $
       propRunActionsWithOptions @EscrowModel defaultCheckOptionsContractModel covopts
         (const (pure True))
   writeCoverageReport "Escrow" cr

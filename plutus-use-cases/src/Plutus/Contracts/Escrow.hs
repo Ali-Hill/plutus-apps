@@ -211,12 +211,27 @@ validate EscrowParams{escrowDeadline, escrowTargets} contributor action ScriptCo
             traceIfFalse "escrowDeadline-before" ((escrowDeadline - 1) `before` txInfoValidRange scriptContextTxInfo)
             && traceIfFalse "txSignedBy" (scriptContextTxInfo `txSignedBy` unPaymentPubKeyHash contributor)
 
+
+-- We can use 'compile' to turn a validator function into a compiled Plutus Core program.
+-- Here's a reminder of how to do it.
+compiledValidator :: CompiledCode (EscrowParams DatumHash -> PaymentPubKeyHash -> Action -> ScriptContext -> Bool)
+compiledValidator = $$(PlutusTx.compile [|| validate ||])
+
+typedValidator :: EscrowParams Datum -> Scripts.TypedValidator Escrow
+typedValidator escrow = go (Haskell.fmap datumHash escrow) where
+    go = Scripts.mkTypedValidatorParam @Escrow
+        compiledValidator
+        $$(PlutusTx.compile [|| wrap ||])
+    wrap = Scripts.mkUntypedValidator
+
+{- fix this
 typedValidator :: EscrowParams Datum -> Scripts.TypedValidator Escrow
 typedValidator escrow = go (Haskell.fmap datumHash escrow) where
     go = Scripts.mkTypedValidatorParam @Escrow
         $$(PlutusTx.compile [|| validate ||])
         $$(PlutusTx.compile [|| wrap ||])
     wrap = Scripts.mkUntypedValidator
+-}
 
 escrowContract
     :: EscrowParams Datum
@@ -371,4 +386,5 @@ payRedeemRefund params vl = do
     go
 
 covIdx :: CoverageIndex
-covIdx = getCovIdx $$(PlutusTx.compile [|| validate ||])
+covIdx = getCovIdx compiledValidator
+    -- getCovIdx $$(PlutusTx.compile [|| validate ||])
