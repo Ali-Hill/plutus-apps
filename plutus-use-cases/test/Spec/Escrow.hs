@@ -404,7 +404,7 @@ certification = defaultCertification {
 check_propEscrowWithCoverage :: IO ()
 check_propEscrowWithCoverage = do
   cr <- quickCheckWithCoverage stdArgs (set coverageIndex covIdx defaultCoverageOptions) $ \covopts ->
-    withMaxSuccess 100 $
+    withMaxSuccess 20 $
       propRunActionsWithOptions @EscrowModel defaultCheckOptionsContractModel covopts
         (const (pure True))
   writeCoverageReport "Escrow" cr

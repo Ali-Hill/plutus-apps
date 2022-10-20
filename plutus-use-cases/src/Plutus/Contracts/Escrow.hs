@@ -387,4 +387,3 @@ payRedeemRefund params vl = do
 
 covIdx :: CoverageIndex
 covIdx = getCovIdx compiledValidator
-    -- getCovIdx $$(PlutusTx.compile [|| validate ||])
