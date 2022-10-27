@@ -271,8 +271,10 @@ tests = testGroup "escrow"
         $ \step -> reasonable' step
                                (Scripts.validatorScript $ typedValidator (escrowParams startTime))
                                32000
-    , testProperty "QuickCheck ContractModel" prop_Escrow
-    , testProperty "QuickCheck NoLockedFunds" prop_NoLockedFunds
+
+    -- Ali: Disabled these tests for now as I am using certification instead.
+    -- , testProperty "QuickCheck ContractModel" prop_Escrow
+    -- , testProperty "QuickCheck NoLockedFunds" prop_NoLockedFunds
 
     -- TODO: commented because the test fails after 'CardanoTx(Both)' was deleted.
     -- The fix would be to start using CardanoTx instead of EmulatorTx in 'DoubleSatisfation.doubleSatisfactionCandidates'.
