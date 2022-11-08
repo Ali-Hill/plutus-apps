@@ -48,7 +48,7 @@ import Data.String (IsString (fromString))
 import Data.Text qualified as T
 import Data.Text.Class (fromText, toText)
 import GHC.Generics (Generic)
-import Ledger (CardanoTx, ChainIndexTxOut, Params (..), PubKeyHash, Tx (txFee, txMint), TxOut (..), TxOutRef,
+import Ledger (CardanoTx, DecoratedTxOut, Params (..), PubKeyHash, Tx (txFee, txMint), TxOut (..), TxOutRef,
                UtxoIndex (..), Value)
 import Ledger qualified
 import Ledger.Ada qualified as Ada
@@ -289,7 +289,7 @@ handleWallet = \case
         handleAddSignature txCTx
 
     totalFundsH :: (Member (State WalletState) effs, Member ChainIndexQueryEffect effs) => Eff effs Value
-    totalFundsH = foldMap (view Ledger.ciTxOutValue) <$> (get >>= ownOutputs)
+    totalFundsH = foldMap (view Ledger.decoratedTxOutValue) <$> (get >>= ownOutputs)
 
     yieldUnbalancedTxH ::
         ( Member (Error WalletAPIError) effs
@@ -351,7 +351,7 @@ handleBalance utx = do
                  $ either (fmap (Tx.CardanoApiTx . Tx.CardanoApiEmulatorEraTx . makeSignedTransaction []) . makeTransactionBody mempty)
                           (pure . Tx.EmulatorTx)
                  $ tx
-            logWarn $ ValidationFailed ph (Ledger.getCardanoTxId tx') tx' ve mempty
+            logWarn $ ValidationFailed ph (Ledger.getCardanoTxId tx') tx' ve mempty []
             throwError $ WAPI.ValidationError ve
         handleError _ (Left (Right ce)) = throwError $ WAPI.ToCardanoError ce
         handleError _ (Right v) = pure v
@@ -379,7 +379,7 @@ ownOutputs :: forall effs.
     ( Member ChainIndexQueryEffect effs
     )
     => WalletState
-    -> Eff effs (Map.Map TxOutRef ChainIndexTxOut)
+    -> Eff effs (Map.Map TxOutRef DecoratedTxOut)
 ownOutputs WalletState{_mockWallet} = do
     refs <- allUtxoSet (Just def)
     Map.fromList . catMaybes <$> traverse txOutRefTxOutFromRef refs
@@ -395,7 +395,7 @@ ownOutputs WalletState{_mockWallet} = do
       nextItems <- allUtxoSet (ChainIndex.nextPageQuery refPage)
       pure $ ChainIndex.pageItems refPage ++ nextItems
 
-    txOutRefTxOutFromRef :: TxOutRef -> Eff effs (Maybe (TxOutRef, ChainIndexTxOut))
+    txOutRefTxOutFromRef :: TxOutRef -> Eff effs (Maybe (TxOutRef, DecoratedTxOut))
     txOutRefTxOutFromRef ref = fmap (ref,) <$> ChainIndex.unspentTxOutFromRef ref
 
 lookupValue ::
@@ -407,7 +407,7 @@ lookupValue ::
 lookupValue outputRef@Tx.TxInput {Tx.txInputRef} = do
     txoutMaybe <- ChainIndex.unspentTxOutFromRef txInputRef
     case txoutMaybe of
-        Just txout -> pure $ view Ledger.ciTxOutValue txout
+        Just txout -> pure $ txout ^. Ledger.decoratedTxOutValue
         Nothing ->
             WAPI.throwOtherError $ "Unable to find TxOut for " <> fromString (show outputRef)
 
@@ -420,7 +420,7 @@ handleBalanceTx ::
     , Member (Error WAPI.WalletAPIError) effs
     , Member (LogMsg TxBalanceMsg) effs
     )
-    => Map.Map TxOutRef ChainIndexTxOut -- ^ The current wallet's unspent transaction outputs.
+    => Map.Map TxOutRef DecoratedTxOut -- ^ The current wallet's unspent transaction outputs.
     -> UnbalancedTx
     -> Eff effs Tx
 handleBalanceTx utxo utx = do
@@ -437,7 +437,7 @@ handleBalanceTx utxo utx = do
         inputsOutRefs = map Tx.txInputRef txInputs
         filteredUtxo = flip Map.filterWithKey utxo $ \txOutRef _ ->
             txOutRef `notElem` inputsOutRefs
-        outRefsWithValue = second (view Ledger.ciTxOutValue) <$> Map.toList filteredUtxo
+        outRefsWithValue = second (view Ledger.decoratedTxOutValue) <$> Map.toList filteredUtxo
 
     ((neg, newTxIns), (pos, mNewTxOut)) <- calculateTxChanges ownAddr outRefsWithValue $ Value.split balance
 
@@ -459,22 +459,29 @@ handleBalanceTx utxo utx = do
 
     collateral <- traverse lookupValue (Tx.txCollateralInputs txWithinputsAdded)
 
-    let collAddr = maybe ownAddr Ledger.txOutAddress $ Tx.txReturnCollateral txWithinputsAdded
-        collateralPercent = maybe 100 fromIntegral (protocolParamCollateralPercent pProtocolParams)
-        collFees = Ada.toValue $ (Ada.fromValue fees * collateralPercent + 99 {- make sure to round up -}) `Ada.divide` 100
-        collBalance = fold collateral PlutusTx.- collFees
+    if Value.isZero (fold collateral)
+        && null (Tx.txRedeemers txWithinputsAdded) -- every script has a redeemer, no redeemers -> no scripts
+        && null (Tx.txReturnCollateral txWithinputsAdded) then
+        -- Don't add collateral if there are no plutus scripts that can fail
+        -- and there are no collateral inputs or outputs already
+        pure txWithinputsAdded
+    else do
+        let collAddr = maybe ownAddr Ledger.txOutAddress $ Tx.txReturnCollateral txWithinputsAdded
+            collateralPercent = maybe 100 fromIntegral (protocolParamCollateralPercent pProtocolParams)
+            collFees = Ada.toValue $ (Ada.fromValue fees * collateralPercent + 99 {- make sure to round up -}) `Ada.divide` 100
+            collBalance = fold collateral PlutusTx.- collFees
 
-    ((negColl, newTxInsColl), (_, mNewTxOutColl)) <- calculateTxChanges collAddr outRefsWithValue $ Value.split collBalance
+        ((negColl, newTxInsColl), (_, mNewTxOutColl)) <- calculateTxChanges collAddr outRefsWithValue $ Value.split collBalance
 
-    txWithCollateralInputs <- if Value.isZero negColl
-        then do
-            logDebug NoCollateralInputsAdded
-            pure txWithinputsAdded
-        else do
-            logDebug $ AddingCollateralInputsFor negColl
-            pure $ txWithinputsAdded & over Tx.collateralInputs (sort . (++) (fmap Tx.pubKeyTxInput newTxInsColl))
+        txWithCollateralInputs <- if Value.isZero negColl
+            then do
+                logDebug NoCollateralInputsAdded
+                pure txWithinputsAdded
+            else do
+                logDebug $ AddingCollateralInputsFor negColl
+                pure $ txWithinputsAdded & over Tx.collateralInputs (sort . (++) (fmap Tx.pubKeyTxInput newTxInsColl))
 
-    pure $ txWithCollateralInputs & Tx.totalCollateral ?~ collFees & Tx.returnCollateral .~ mNewTxOutColl
+        pure $ txWithCollateralInputs & Tx.totalCollateral ?~ collFees & Tx.returnCollateral .~ mNewTxOutColl
 
 type PubKeyTxIn = TxOutRef
 

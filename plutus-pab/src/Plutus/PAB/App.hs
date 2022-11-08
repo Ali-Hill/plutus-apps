@@ -34,14 +34,13 @@ import Cardano.BM.Trace (Trace, logDebug)
 import Cardano.ChainIndex.Types qualified as ChainIndex
 import Cardano.Node.Client (handleNodeClientClient, runChainSyncWithCfg)
 import Cardano.Node.Params qualified as Params
-import Cardano.Node.Types (ChainSyncHandle, NodeMode (AlonzoNode, MockNode),
+import Cardano.Node.Types (ChainSyncHandle, NodeMode (MockNode),
                            PABServerConfig (PABServerConfig, pscBaseUrl, pscNetworkId, pscNodeMode, pscSocketPath))
 import Cardano.Protocol.Socket.Mock.Client qualified as MockClient
 import Cardano.Wallet.LocalClient qualified as LocalWalletClient
 import Cardano.Wallet.Mock.Client qualified as WalletMockClient
 import Cardano.Wallet.RemoteClient qualified as RemoteWalletClient
 import Cardano.Wallet.Types qualified as Wallet
-import Control.Concurrent.STM qualified as STM
 import Control.Lens (preview, (^?!))
 import Control.Monad (void)
 import Control.Monad.Freer (Eff, LastMember, Member, interpret, reinterpret, reinterpret2, reinterpretN, type (~>))
@@ -87,7 +86,7 @@ import Plutus.PAB.Types (ChainQueryConfig (..), ChainQueryEnv (..), Config (Conf
                          PABError (BeamEffectError, ChainIndexError, NodeClientError, RemoteWalletWithMockNodeError, WalletClientError, WalletError),
                          WebserverConfig (WebserverConfig), _PostgresPool, _SqlitePool, chainQueryConfig, dbConfig,
                          endpointTimeout, getBlockfrostEnv, getChainIndexEnv, nodeServerConfig, pabWebserverConfig,
-                         walletServerConfig)
+                         waitStatusTimeout, walletServerConfig)
 import Servant.Client (ClientEnv, ClientError, mkClientEnv)
 import Wallet.API (NodeClientEffect)
 import Wallet.Effects (WalletEffect)
@@ -132,7 +131,7 @@ appEffectHandlers storageBackend config trace BuiltinHandler{contractHandler} =
     EffectHandlers
         { initialiseEnvironment = do
             env <- liftIO $ mkEnv trace config
-            instancesState <- liftIO $ STM.atomically Instances.emptyInstancesState
+            instancesState <- liftIO Instances.emptyInstancesState
             blockchainEnv <- liftIO $ BlockchainEnv.startNodeClient config instancesState
             pure (instancesState, blockchainEnv, env)
 
@@ -240,7 +239,7 @@ handleWalletEffect PABServerConfig { pscNodeMode = MockNode } _ w eff = do
         Nothing -> throwError RemoteWalletWithMockNodeError
         Just clientEnv ->
             runReader clientEnv $ WalletMockClient.handleWalletClient @IO w eff
-handleWalletEffect nodeCfg@PABServerConfig { pscNodeMode = AlonzoNode } cidM w eff = do
+handleWalletEffect nodeCfg cidM w eff = do
     clientEnvM <- ask @(Maybe ClientEnv)
     case clientEnvM of
         Nothing -> RemoteWalletClient.handleWalletClient cidM eff
@@ -264,8 +263,8 @@ runApp
     storageBackend
     trace
     contractHandler
-    config@Config{pabWebserverConfig=WebserverConfig{endpointTimeout}} =
-    Core.runPAB (Timeout endpointTimeout) (appEffectHandlers storageBackend config trace contractHandler)
+    config@Config{pabWebserverConfig=WebserverConfig{endpointTimeout, waitStatusTimeout}} =
+    Core.runPAB (Timeout endpointTimeout) (Timeout waitStatusTimeout) (appEffectHandlers storageBackend config trace contractHandler)
 
 type App a b = PABAction (Builtin a) (AppEnv a) b
 
@@ -284,9 +283,8 @@ mkEnv appTrace appConfig@Config { dbConfig
     dbPool <- dbConnect dbConfig appTrace
     txSendHandle <-
       case pscNodeMode of
-        AlonzoNode -> pure Nothing
-        MockNode   ->
-          liftIO $ Just <$> MockClient.runTxSender pscSocketPath
+        MockNode -> liftIO $ Just <$> MockClient.runTxSender pscSocketPath
+        _        -> pure Nothing
     -- This is for access to the slot number in the interpreter
     chainSyncHandle <- runChainSyncWithCfg $ nodeServerConfig appConfig
     appInMemContractStore <- liftIO initialInMemInstances

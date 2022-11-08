@@ -60,6 +60,7 @@ import Control.Monad (replicateM)
 import Data.Bifunctor (Bifunctor (first), bimap)
 import Data.ByteString qualified as BS
 import Data.Default (Default (def), def)
+import Data.Either.Combinators (leftToMaybe)
 import Data.Foldable (fold, foldl')
 import Data.Functor.Identity (Identity)
 import Data.List (sort)
@@ -263,7 +264,7 @@ genValidTransactionSpending' g ins totalVal = do
                         , txData = Map.fromList (map (\d -> (datumHash d, d)) datums)
                         , txScripts = Map.fromList (map ((\s -> (scriptHash s, s)) . fmap getValidator) scripts)
                         }
-                    & addMintingPolicy (Versioned ScriptGen.alwaysSucceedPolicy PlutusV1) Script.unitRedeemer
+                    & addMintingPolicy (Versioned ScriptGen.alwaysSucceedPolicy PlutusV1) (Script.unitRedeemer, Nothing)
                     & EmulatorTx
 
                 -- sign the transaction with all known wallets
@@ -293,7 +294,7 @@ signTx params utxo = let
 validateMockchain :: Mockchain -> CardanoTx -> Maybe Ledger.ValidationErrorInPhase
 validateMockchain (Mockchain _ utxo params) tx = result where
     cUtxoIndex = either (error . show) id $ fromPlutusIndex (Index.UtxoIndex utxo)
-    result = validateCardanoTx params 1 cUtxoIndex (signTx params utxo tx)
+    result = leftToMaybe $ validateCardanoTx params 1 cUtxoIndex (signTx params utxo tx)
 
 -- | Generate an 'Interval where the lower bound if less or equal than the
 -- upper bound.

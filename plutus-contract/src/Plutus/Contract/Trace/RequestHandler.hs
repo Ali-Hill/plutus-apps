@@ -31,6 +31,7 @@ module Plutus.Contract.Trace.RequestHandler(
     , handleChainIndexQueries
     , handleOwnInstanceIdQueries
     , handleYieldedUnbalancedTx
+    , handleGetParams
     ) where
 
 import Control.Applicative (Alternative (empty, (<|>)))
@@ -269,6 +270,7 @@ handleChainIndexQueries = RequestHandler $ \chainIndexQuery ->
         UtxoSetMembership txOutRef    -> UtxoSetMembershipResponse <$> ChainIndexEff.utxoSetMembership txOutRef
         UtxoSetAtAddress pq c         -> UtxoSetAtResponse <$> ChainIndexEff.utxoSetAtAddress pq c
         UnspentTxOutSetAtAddress pq c -> UnspentTxOutsAtResponse <$> ChainIndexEff.unspentTxOutSetAtAddress pq c
+        DatumsAtAddress pq c          -> DatumsAtResponse <$> ChainIndexEff.datumsAtAddress pq c
         UtxoSetWithCurrency pq ac     -> UtxoSetWithCurrencyResponse <$> ChainIndexEff.utxoSetWithCurrency pq ac
         TxoSetAtAddress pq c          -> TxoSetAtResponse <$> ChainIndexEff.txoSetAtAddress pq c
         TxsFromTxIds txids            -> TxIdsResponse <$> ChainIndexEff.txsFromTxIds txids
@@ -308,3 +310,14 @@ handleAdjustUnbalancedTx =
             forM (adjustUnbalancedTx params utx) $ \(missingAdaCosts, adjusted) -> do
                 logDebug $ AdjustingUnbalancedTx missingAdaCosts
                 pure adjusted
+
+handleGetParams ::
+    forall effs.
+    ( Member (LogObserve (LogMessage Text)) effs
+    , Member NodeClientEffect effs
+    )
+    => RequestHandler effs () Params
+handleGetParams =
+    RequestHandler $ \_ ->
+        surroundDebug @Text "handleGetParams" $ do
+            Wallet.Effects.getClientParams

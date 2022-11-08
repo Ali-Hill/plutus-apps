@@ -27,8 +27,7 @@ import Cardano.BM.Data.Trace (Trace)
 import Cardano.ChainIndex.Server qualified as ChainIndex
 import Cardano.Node.Params qualified as Params
 import Cardano.Node.Server qualified as NodeServer
-import Cardano.Node.Types (NodeMode (AlonzoNode, MockNode), PABServerConfig (pscNetworkId, pscNodeMode, pscSocketPath),
-                           _AlonzoNode)
+import Cardano.Node.Types (NodeMode (MockNode), PABServerConfig (pscNetworkId, pscNodeMode, pscSocketPath), _AlonzoNode)
 import Cardano.Protocol.Socket.Type (epochSlots)
 import Cardano.Wallet.Mock.Server qualified as WalletServer
 import Cardano.Wallet.Mock.Types (WalletMsg)
@@ -58,6 +57,7 @@ import Data.Time.Units (Second)
 import Plutus.Contract.Resumable (responses)
 import Plutus.Contract.State (State (State, record))
 import Plutus.Contract.State qualified as State
+import Plutus.PAB.App (StorageBackend (..))
 import Plutus.PAB.App qualified as App
 import Plutus.PAB.Core qualified as Core
 import Plutus.PAB.Core.ContractInstance (ContractInstanceState (ContractInstanceState), updateState)
@@ -135,7 +135,7 @@ runConfigCommand _ ConfigCommandArgs{ccaTrace, ccaPABConfig = Config {nodeServer
                 (toMockNodeServerLog ccaTrace)
                 nodeServerConfig
                 ccaAvailability
-        AlonzoNode -> do
+        _        -> do
             available ccaAvailability
             -- The semantics of Command(s) is that once a set of commands are
             -- started if any finishes the entire application is terminated. We want
@@ -163,19 +163,8 @@ runConfigCommand
                 $ LM.SCoreMsg
                 $ LM.ConnectingToAlonzoNode nodeServerConfig slotNo
 
-    connection <- App.dbConnect dbConfig (LM.convertLog LM.PABMsg ccaTrace)
-    -- Restore the running contracts by first collecting up enough details about the
-    -- previous contracts to re-start them
-    previousContracts <-
-        Beam.runBeamStoreAction connection (LM.convertLog LM.PABMsg ccaTrace)
-        $ interpret (LM.handleLogMsgTrace ccaTrace)
-        $ do
-            cIds   <- Map.toList <$> Contract.getActiveContracts @(Builtin a)
-            forM cIds $ \(cid, args) -> do
-                s <- Contract.getState @(Builtin a) cid
-                let priorContract :: (SomeBuiltinState a, Wallet.ContractInstanceId, ContractActivationArgs a)
-                    priorContract = (s, cid, args)
-                pure priorContract
+    -- retrieve previous contracts only when not in InMemoryBackend mode
+    previousContracts <- retrievePreviousContracts ccaStorageBackend
 
     -- Then, start the server
     result <- App.runApp ccaStorageBackend (toPABMsg ccaTrace) contractHandler config
@@ -198,6 +187,22 @@ runConfigCommand
           liftIO $ takeMVar mvar
     either handleError return result
   where
+
+    retrievePreviousContracts BeamBackend = do
+      connection <- App.dbConnect dbConfig (LM.convertLog LM.PABMsg ccaTrace)
+      -- Restore the running contracts by first collecting up enough details about the
+      -- previous contracts to re-start them
+      Beam.runBeamStoreAction connection (LM.convertLog LM.PABMsg ccaTrace)
+        $ interpret (LM.handleLogMsgTrace ccaTrace)
+        $ do
+            cIds <- Map.toList <$> Contract.getActiveContracts @(Builtin a)
+            forM cIds $ \(cid, args) -> do
+              s <- Contract.getState @(Builtin a) cid
+              let priorContract :: (SomeBuiltinState a, Wallet.ContractInstanceId, ContractActivationArgs a)
+                  priorContract = (s, cid, args)
+              pure priorContract
+    retrievePreviousContracts InMemoryBackend = pure $ Right []
+
     handleError err = do
         runStdoutLoggingT $ (logErrorN . tshow . pretty) err
         exitWith (ExitFailure 2)
@@ -205,8 +210,8 @@ runConfigCommand
 -- Fork a list of commands
 runConfigCommand contractHandler c@ConfigCommandArgs{ccaAvailability, ccaPABConfig=Config {nodeServerConfig} } (ForkCommands commands) =
     let shouldStartMocks = case pscNodeMode nodeServerConfig of
-                             MockNode   -> True
-                             AlonzoNode -> False
+                             MockNode -> True
+                             _        -> False
         startedCommands  = filter (mockedServices shouldStartMocks) commands
      in void $ do
           putStrLn $ "Starting all commands (" <> show startedCommands <> ")."

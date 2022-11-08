@@ -39,7 +39,7 @@ import Control.Concurrent.STM (STM)
 import Control.Concurrent.STM qualified as STM
 import Control.Lens (preview)
 import Control.Lens.Operators
-import Control.Monad (forM_, void)
+import Control.Monad (forM_)
 import Control.Monad.Freer (Eff, LastMember, Member, raise, type (~>))
 import Control.Monad.Freer.Error (Error)
 import Control.Monad.Freer.Extras.Log (LogMessage, LogMsg, LogObserve, logDebug, logInfo)
@@ -135,7 +135,7 @@ startContractInstanceThread' ::
 startContractInstanceThread' ContractInstanceState{stmState} activeContractInstanceId runAppBackend a = do
   s <- startSTMInstanceThread'
     @t @m stmState runAppBackend a activeContractInstanceId
-  ask >>= void . liftIO . STM.atomically . InstanceState.insertInstance activeContractInstanceId s
+  ask >>= liftIO . InstanceState.insertInstance activeContractInstanceId s
   pure activeContractInstanceId
 
 -- | Create a new instance of the contract
@@ -339,6 +339,7 @@ stmRequestHandler = fmap sequence (wrapHandler (fmap pure nonBlockingRequests) <
         <> RequestHandler.handleCurrentNodeClientTimeRangeQueries @effs
         <> RequestHandler.handleYieldedUnbalancedTx @effs
         <> RequestHandler.handleAdjustUnbalancedTx @effs
+        <> RequestHandler.handleGetParams @effs
 
     -- requests that wait for changes to happen
     blockingRequests =

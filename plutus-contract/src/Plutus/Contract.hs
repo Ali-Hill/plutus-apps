@@ -54,6 +54,7 @@ module Plutus.Contract(
     , Request.utxoIsProduced
     -- * Chain index requests
     , Request.datumFromHash
+    , Request.datumsAt
     , Request.validatorFromHash
     , Request.mintingPolicyFromHash
     , Request.stakeValidatorFromHash
@@ -97,6 +98,8 @@ module Plutus.Contract(
     , Request.isTxConfirmed
     -- ** Tx output confirmation
     , Request.awaitTxOutStatusChange
+    -- * Parameters
+    , Request.getParams
     -- * Checkpoints
     , Plutus.Contract.Types.checkpoint
     , Plutus.Contract.Types.checkpointLoop
