@@ -138,11 +138,11 @@ instance ContractModel GovernanceModel where
 
         walletTokens .= Map.fromList [(w , t) | w <- testWallets | t <- tokens]
 
-        -- sequence_ [deposit w $ Ada.toValue Ledger.minAdaTxOut | w <- testWallets]
-        -- sequence_ [deposit w $ (Gov.votingValue mph t) | w <- testWallets | t <- tokens]
+        sequence_ [deposit w $ Ada.toValue Ledger.minAdaTxOut | w <- testWallets]
+        sequence_ [deposit w $ (Gov.votingValue mph t) | w <- testWallets | t <- tokens]
 
         -- the current wallet loses the minimum ada * (no of wallets + 1) since we deposit ada to all wallets
-        -- withdraw w $ Ada.toValue (Ledger.minAdaTxOut * (fromInteger $ numberOfHolders + 1))
+        withdraw w $ Ada.toValue (Ledger.minAdaTxOut * (fromInteger $ numberOfHolders + 1))
 
         state .= (l , True)
         phase .= Proposing
