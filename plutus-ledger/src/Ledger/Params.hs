@@ -8,10 +8,11 @@
 -- | The set of parameters, like protocol parameters and slot configuration.
 module Ledger.Params(
   Params(..),
+  paramsWithProtocolsParameters,
   slotConfigL,
   emulatorPParamsL,
+  pParamsFromProtocolParams,
   pProtocolParams,
-  fromProtocolParams,
   protocolParamsL,
   networkIdL,
   increaseTransactionLimits,
@@ -68,7 +69,6 @@ data Params = Params
   , pNetworkId      :: NetworkId
   }
   deriving (Eq, Show, Generic)
-  -- deriving anyclass (ToJSON, FromJSON)
 
 deriving instance Generic NetworkId
 deriving instance ToJSON NetworkId
@@ -86,12 +86,15 @@ makeLensesFor
 pProtocolParams :: Params -> ProtocolParameters
 pProtocolParams p = C.fromLedgerPParams C.ShelleyBasedEraBabbage $ emulatorPParams p
 
-fromProtocolParams :: ProtocolParameters -> PParams
-fromProtocolParams = C.toLedgerPParams C.ShelleyBasedEraBabbage
+pParamsFromProtocolParams :: ProtocolParameters -> PParams
+pParamsFromProtocolParams = C.toLedgerPParams C.ShelleyBasedEraBabbage
+
+paramsWithProtocolsParameters :: SlotConfig -> ProtocolParameters -> NetworkId -> Params
+paramsWithProtocolsParameters sc p = Params sc (pParamsFromProtocolParams p)
 
 protocolParamsL :: Lens' Params ProtocolParameters
 protocolParamsL = let
-  set p pParam = p & emulatorPParamsL .~ fromProtocolParams pParam
+  set p pParam = p & emulatorPParamsL .~ pParamsFromProtocolParams pParam
   in lens pProtocolParams set
 
 instance ToJSON Params where
@@ -132,7 +135,7 @@ testnet :: NetworkId
 testnet = Testnet $ NetworkMagic 1
 
 instance Default Params where
-  def = Params def (fromProtocolParams def) testnet
+  def = Params def (pParamsFromProtocolParams def) testnet
 
 instance Default ProtocolParameters where
   -- The protocol parameters as they are in the Alonzo era.
