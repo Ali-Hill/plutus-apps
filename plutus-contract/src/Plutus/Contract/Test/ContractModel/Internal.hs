@@ -1444,11 +1444,11 @@ finalChecks opts copts predicate prop = do
           env <- innerAction
           hdl <- activateContract w1 (getEnvContract @()) envContractInstanceTag
           void $ callEndpoint @"register-token-env" hdl env
-        stream :: forall effs. S.Stream (S.Of (LogMessage EmulatorEvent)) (Eff effs) (Maybe EmulatorErr)
+        stream :: forall effs. S.Stream (S.Of (LogMessage EmulatorEvent)) (Eff effs) (Either EmulatorErr ())
         stream = fst <$> runEmulatorStream (opts ^. emulatorConfig) action
         (errorResult, events) = S.streamFold (,[]) run (\ (msg S.:> es) -> (fst es, (msg ^. logMessageContent) : snd es)) stream
     case errorResult of
-      Just err -> do
+      Left err -> do
         QC.monitor $ counterexample (show err)
         QC.assert False
       _ -> return ()
@@ -1920,7 +1920,7 @@ checkErrorWhitelistWithOptions opts copts whitelist acts = property $ go check a
     checkEvent _ = False
 
     checkEvents :: [ChainEvent] -> Bool
-    checkEvents events = all checkEvent [ f | (TxnValidationFail _ _ _ (ScriptFailure f) _) <- events ]
+    checkEvents events = all checkEvent [ f | (TxnValidationFail _ _ _ (ScriptFailure f) _ _) <- events ]
 
     go :: TracePredicate -> Actions m -> Property
     go check actions = monadic (flip State.evalState mempty) $ finalChecks opts copts (\ _ _ -> check) $ do

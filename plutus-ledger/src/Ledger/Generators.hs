@@ -1,5 +1,4 @@
 {-# LANGUAGE DataKinds           #-}
-{-# LANGUAGE NamedFieldPuns      #-}
 {-# LANGUAGE NumericUnderscores  #-}
 {-# LANGUAGE OverloadedStrings   #-}
 {-# LANGUAGE RecordWildCards     #-}
@@ -61,6 +60,7 @@ import Control.Monad (replicateM)
 import Data.Bifunctor (Bifunctor (first), bimap)
 import Data.ByteString qualified as BS
 import Data.Default (Default (def), def)
+import Data.Either.Combinators (leftToMaybe)
 import Data.Foldable (fold, foldl')
 import Data.Functor.Identity (Identity)
 import Data.List (sort)
@@ -83,7 +83,7 @@ import Ledger (Ada, AssetClass, CardanoTx (EmulatorTx), CurrencySymbol, Datum, I
                POSIXTime (POSIXTime, getPOSIXTime), POSIXTimeRange, Passphrase (Passphrase),
                PaymentPrivateKey (unPaymentPrivateKey), PaymentPubKey, Slot (Slot), SlotRange,
                SomeCardanoApiTx (SomeTx), TokenName,
-               Tx (txCollateral, txFee, txInputs, txMint, txOutputs, txValidRange),
+               Tx (txCollateralInputs, txFee, txInputs, txMint, txOutputs, txValidRange),
                TxInType (ConsumePublicKeyAddress, ConsumeSimpleScriptAddress, ScriptAddress), TxInput (TxInput),
                TxInputType (TxConsumePublicKeyAddress, TxConsumeSimpleScriptAddress, TxScriptAddress), TxOut,
                TxOutRef (TxOutRef), ValidationErrorInPhase, Validator, Value, Versioned, addCardanoTxSignature,
@@ -257,14 +257,14 @@ genValidTransactionSpending' g ins totalVal = do
                 (scripts, datums) = bimap catMaybes catMaybes $ unzip witnesses
                 tx = mempty
                         { txInputs = ins'
-                        , txCollateral = maybe [] (flip take ins' . fromIntegral) (gmMaxCollateralInputs g)
+                        , txCollateralInputs = maybe [] (flip take ins' . fromIntegral) (gmMaxCollateralInputs g)
                         , txOutputs = txOutputs
                         , txMint = maybe mempty id mintValue
                         , txFee = Ada.toValue fee'
                         , txData = Map.fromList (map (\d -> (datumHash d, d)) datums)
                         , txScripts = Map.fromList (map ((\s -> (scriptHash s, s)) . fmap getValidator) scripts)
                         }
-                    & addMintingPolicy (Versioned ScriptGen.alwaysSucceedPolicy PlutusV1) Script.unitRedeemer
+                    & addMintingPolicy (Versioned ScriptGen.alwaysSucceedPolicy PlutusV1) (Script.unitRedeemer, Nothing)
                     & EmulatorTx
 
                 -- sign the transaction with all known wallets
@@ -279,9 +279,9 @@ genValidTransactionSpending' g ins totalVal = do
             Ledger.ConsumePublicKeyAddress -> (TxInput outref TxConsumePublicKeyAddress, (Nothing, Nothing))
             Ledger.ConsumeSimpleScriptAddress -> (TxInput outref Ledger.TxConsumeSimpleScriptAddress, (Nothing, Nothing))
             Ledger.ScriptAddress (Left vl) rd dt ->
-                (TxInput outref (Ledger.TxScriptAddress rd (Left $ validatorHash vl) (datumHash dt)), (Just vl, Just dt))
+                (TxInput outref (Ledger.TxScriptAddress rd (Left $ validatorHash vl) (fmap datumHash dt)), (Just vl, dt))
             Ledger.ScriptAddress (Right ref) rd dt ->
-                (TxInput outref (Ledger.TxScriptAddress rd (Right ref) (datumHash dt)), (Nothing, Just dt))
+                (TxInput outref (Ledger.TxScriptAddress rd (Right ref) (fmap datumHash dt)), (Nothing, dt))
 
 signTx :: Params -> Map TxOutRef TxOut -> CardanoTx -> CardanoTx
 signTx params utxo = let
@@ -294,7 +294,7 @@ signTx params utxo = let
 validateMockchain :: Mockchain -> CardanoTx -> Maybe Ledger.ValidationErrorInPhase
 validateMockchain (Mockchain _ utxo params) tx = result where
     cUtxoIndex = either (error . show) id $ fromPlutusIndex (Index.UtxoIndex utxo)
-    result = validateCardanoTx params 1 cUtxoIndex (signTx params utxo tx)
+    result = leftToMaybe $ validateCardanoTx params 1 cUtxoIndex (signTx params utxo tx)
 
 -- | Generate an 'Interval where the lower bound if less or equal than the
 -- upper bound.

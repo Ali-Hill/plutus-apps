@@ -204,6 +204,8 @@ noLockProof = defaultNLFP
 prop_NoLockedFunds :: Property
 prop_NoLockedFunds = checkNoLockedFundsProofWithOptions options noLockProof
 
+-- test1 :: TestTree
+-- test1 = testProperty "QuickCheck ContractModel" $ withMaxSuccess 10 prop_Escrow
 
 tests :: TestTree
 tests = testGroup "escrow"
@@ -270,9 +272,9 @@ tests = testGroup "escrow"
                                (Scripts.validatorScript $ typedValidator (escrowParams startTime))
                                32000
 
-    -- hiding this for now
-    -- , testProperty "QuickCheck ContractModel" $ withMaxSuccess 10 prop_Escrow
-    -- , testProperty "QuickCheck NoLockedFunds" $ withMaxSuccess 10 prop_NoLockedFunds
+    -- Ali: Disabled these tests for now as I am using certification instead.
+    -- , testProperty "QuickCheck ContractModel" prop_Escrow
+    -- , testProperty "QuickCheck NoLockedFunds" prop_NoLockedFunds
 
     -- TODO: commented because the test fails after 'CardanoTx(Both)' was deleted.
     -- The fix would be to start using CardanoTx instead of EmulatorTx in 'DoubleSatisfation.doubleSatisfactionCandidates'.
@@ -402,7 +404,7 @@ certification = defaultCertification {
 check_propEscrowWithCoverage :: IO ()
 check_propEscrowWithCoverage = do
   cr <- quickCheckWithCoverage stdArgs (set coverageIndex covIdx defaultCoverageOptions) $ \covopts ->
-    withMaxSuccess 1000 $
+    withMaxSuccess 100 $
       propRunActionsWithOptions @EscrowModel defaultCheckOptionsContractModel covopts
         (const (pure True))
   writeCoverageReport "Escrow" cr

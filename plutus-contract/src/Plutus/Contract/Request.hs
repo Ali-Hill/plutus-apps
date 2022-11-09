@@ -22,14 +22,17 @@ module Plutus.Contract.Request(
     , isSlot
     , currentSlot
     , currentPABSlot
+    , currentNodeClientSlot
     , currentChainIndexSlot
     , waitNSlots
     , awaitTime
     , isTime
     , currentTime
+    , currentNodeClientTimeRange
     , waitNMilliSeconds
     -- ** Chain index queries
     , datumFromHash
+    , datumsAt
     , validatorFromHash
     , mintingPolicyFromHash
     , stakeValidatorFromHash
@@ -97,10 +100,11 @@ module Plutus.Contract.Request(
     , submitTxConfirmed
     , mkTxConstraints
     , yieldUnbalancedTx
+    -- ** Parameters
+    , getParams
     -- * Etc.
     , ContractRow
     , pabReq
-    , mkTxContract
     , MkTxLog(..)
     ) where
 
@@ -124,12 +128,12 @@ import Data.Void (Void)
 import GHC.Generics (Generic)
 import GHC.Natural (Natural)
 import GHC.TypeLits (Symbol, symbolVal)
-import Ledger (AssetClass, DiffMilliSeconds, POSIXTime, PaymentPubKeyHash (PaymentPubKeyHash), Slot, TxId, TxOutRef,
-               Value, addressCredential, fromMilliSeconds, txOutRefId)
+import Ledger (AssetClass, DiffMilliSeconds, POSIXTime, Params, PaymentPubKeyHash (PaymentPubKeyHash), Slot, TxId,
+               TxOutRef, Value, addressCredential, fromMilliSeconds, txOutRefId)
 import Ledger.Constraints (TxConstraints)
 import Ledger.Constraints.OffChain (ScriptLookups, UnbalancedTx)
 import Ledger.Constraints.OffChain qualified as Constraints
-import Ledger.Tx (CardanoTx, ChainIndexTxOut, Versioned, ciTxOutValue, getCardanoTxId)
+import Ledger.Tx (CardanoTx, DecoratedTxOut, Versioned, decoratedTxOutValue, getCardanoTxId)
 import Ledger.Typed.Scripts (Any, TypedValidator, ValidatorTypes (DatumType, RedeemerType))
 import Ledger.Value qualified as V
 import Plutus.Contract.Util (loopM)
@@ -138,7 +142,7 @@ import Plutus.V1.Ledger.Api (Address, Datum, DatumHash, MintingPolicy, MintingPo
 import PlutusTx qualified
 
 import Plutus.Contract.Effects (ActiveEndpoint (ActiveEndpoint, aeDescription, aeMetadata),
-                                PABReq (AdjustUnbalancedTxReq, AwaitSlotReq, AwaitTimeReq, AwaitTxOutStatusChangeReq, AwaitTxStatusChangeReq, AwaitUtxoProducedReq, AwaitUtxoSpentReq, BalanceTxReq, ChainIndexQueryReq, CurrentChainIndexSlotReq, CurrentPABSlotReq, CurrentTimeReq, ExposeEndpointReq, OwnAddressesReq, OwnContractInstanceIdReq, WriteBalancedTxReq, YieldUnbalancedTxReq),
+                                PABReq (AdjustUnbalancedTxReq, AwaitSlotReq, AwaitTimeReq, AwaitTxOutStatusChangeReq, AwaitTxStatusChangeReq, AwaitUtxoProducedReq, AwaitUtxoSpentReq, BalanceTxReq, ChainIndexQueryReq, CurrentChainIndexSlotReq, CurrentNodeClientSlotReq, CurrentNodeClientTimeRangeReq, CurrentTimeReq, ExposeEndpointReq, GetParamsReq, OwnAddressesReq, OwnContractInstanceIdReq, WriteBalancedTxReq, YieldUnbalancedTxReq),
                                 PABResp (ExposeEndpointResp))
 import Plutus.Contract.Effects qualified as E
 import Plutus.Contract.Logging (logDebug)
@@ -214,7 +218,7 @@ isSlot ::
 isSlot = Promise . awaitSlot
 
 -- | Get the current slot number
-{-# DEPRECATED currentSlot "It was renamed to 'currentPABSlot', this function will be removed" #-}
+{-# DEPRECATED currentSlot "Use currentNodeClientSlot instead" #-}
 currentSlot ::
     forall w s e.
     ( AsContractError e
@@ -222,13 +226,23 @@ currentSlot ::
     => Contract w s e Slot
 currentSlot = currentPABSlot
 
+{-# DEPRECATED currentPABSlot "Use currentNodeClientSlot instead" #-}
 -- | Get the current slot number of PAB
 currentPABSlot ::
     forall w s e.
     ( AsContractError e
     )
     => Contract w s e Slot
-currentPABSlot = pabReq CurrentPABSlotReq E._CurrentPABSlotResp
+currentPABSlot = pabReq CurrentNodeClientSlotReq E._CurrentNodeClientSlotResp
+
+-- | Get the current slot number of the node client (the local or remote node) that the application
+-- is connected to.
+currentNodeClientSlot ::
+    forall w s e.
+    ( AsContractError e
+    )
+    => Contract w s e Slot
+currentNodeClientSlot = pabReq CurrentNodeClientSlotReq E._CurrentNodeClientSlotResp
 
 -- | Get the current node slot number querying slot number from plutus chain index to be aligned with slot at local running node
 currentChainIndexSlot ::
@@ -272,6 +286,7 @@ isTime ::
     -> Promise w s e POSIXTime
 isTime = Promise . awaitTime
 
+{-# DEPRECATED currentTime "Use currentNodeClientTimeRange instead" #-}
 -- | Get the latest time of the current slot.
 --
 -- Example: if slot length is 3s and current slot is 2, then `currentTime`
@@ -282,6 +297,17 @@ currentTime ::
     )
     => Contract w s e POSIXTime
 currentTime = pabReq CurrentTimeReq E._CurrentTimeResp
+
+-- | Get the 'POSIXTime' range of the current slot.
+--
+-- Example: if slot length is 3s and current slot is 2, then `currentTimeRange`
+-- returns the time interval @[3, 5[@.
+currentNodeClientTimeRange ::
+    forall w s e.
+    ( AsContractError e
+    )
+    => Contract w s e (POSIXTime, POSIXTime)
+currentNodeClientTimeRange = pabReq CurrentNodeClientTimeRangeReq E._CurrentNodeClientTimeRangeResp
 
 -- | Wait for a number of milliseconds starting at the ending time of the current
 -- slot, and return the latest time we know has passed.
@@ -299,6 +325,14 @@ waitNMilliSeconds n = do
   t <- currentTime
   awaitTime $ t + fromMilliSeconds n
 
+-- | Get the configured parameter set.
+getParams ::
+    forall w s e.
+    ( AsContractError e
+    )
+    => Contract w s e Params
+getParams = pabReq GetParamsReq E._GetParamsResp
+
 datumFromHash ::
     forall w s e.
     ( AsContractError e
@@ -310,6 +344,34 @@ datumFromHash h = do
   case cir of
     E.DatumHashResponse r -> pure r
     r                     -> throwError $ review _ChainIndexContractError ("DatumHashResponse", r)
+
+
+
+-- | Get all the datums at an address w.r.t. a page query TxOutRef
+queryDatumsAt ::
+    forall w s e.
+    ( AsContractError e
+    )
+    => Address
+    -> PageQuery TxOutRef
+    -> Contract w s e (QueryResponse [Datum])
+queryDatumsAt addr pq = do
+  cir <- pabReq (ChainIndexQueryReq $ E.DatumsAtAddress pq $ addressCredential addr) E._ChainIndexQueryResp
+  case cir of
+    E.DatumsAtResponse r -> pure r
+    r                    -> throwError $ review _ChainIndexContractError ("DatumsAtResponse", r)
+
+
+-- | Get the all datums at an address whether or not the corresponding utxo have been consumed or not.
+datumsAt ::
+    forall w s e.
+    ( AsContractError e
+    )
+    => Address
+    -> Contract w s e [Datum]
+datumsAt addr =
+  concat <$> collectQueryResponse (queryDatumsAt addr)
+
 
 validatorFromHash ::
     forall w s e.
@@ -364,7 +426,7 @@ txOutFromRef ::
     ( AsContractError e
     )
     => TxOutRef
-    -> Contract w s e (Maybe ChainIndexTxOut)
+    -> Contract w s e (Maybe DecoratedTxOut)
 txOutFromRef ref = do
   cir <- pabReq (ChainIndexQueryReq $ E.TxOutFromRef ref) E._ChainIndexQueryResp
   case cir of
@@ -376,7 +438,7 @@ unspentTxOutFromRef ::
     ( AsContractError e
     )
     => TxOutRef
-    -> Contract w s e (Maybe ChainIndexTxOut)
+    -> Contract w s e (Maybe DecoratedTxOut)
 unspentTxOutFromRef ref = do
   cir <- pabReq (ChainIndexQueryReq $ E.UnspentTxOutFromRef ref) E._ChainIndexQueryResp
   case cir of
@@ -436,7 +498,7 @@ utxoRefsWithCurrency pq assetClass = do
     r                               -> throwError $ review _ChainIndexContractError ("UtxoSetWithCurrencyResponse", r)
 
 -- | Get all utxos belonging to the wallet that runs this contract.
-ownUtxos :: forall w s e. (AsContractError e) => Contract w s e (Map TxOutRef ChainIndexTxOut)
+ownUtxos :: forall w s e. (AsContractError e) => Contract w s e (Map TxOutRef DecoratedTxOut)
 ownUtxos = do
     addrs <- ownAddresses
     fold <$> mapM utxosAt (NonEmpty.toList addrs)
@@ -448,7 +510,7 @@ queryUnspentTxOutsAt ::
     )
     => Address
     -> PageQuery TxOutRef
-    -> Contract w s e (QueryResponse [(TxOutRef, ChainIndexTxOut)])
+    -> Contract w s e (QueryResponse [(TxOutRef, DecoratedTxOut)])
 queryUnspentTxOutsAt addr pq = do
   cir <- pabReq (ChainIndexQueryReq $ E.UnspentTxOutSetAtAddress pq $ addressCredential addr) E._ChainIndexQueryResp
   case cir of
@@ -461,7 +523,7 @@ utxosAt ::
     ( AsContractError e
     )
     => Address
-    -> Contract w s e (Map TxOutRef ChainIndexTxOut)
+    -> Contract w s e (Map TxOutRef DecoratedTxOut)
 utxosAt addr =
   Map.fromList . concat <$> collectQueryResponse (queryUnspentTxOutsAt addr)
 
@@ -471,14 +533,14 @@ utxosTxOutTxAt ::
     ( AsContractError e
     )
     => Address
-    -> Contract w s e (Map TxOutRef (ChainIndexTxOut, ChainIndexTx))
+    -> Contract w s e (Map TxOutRef (DecoratedTxOut, ChainIndexTx))
 utxosTxOutTxAt addr = do
   utxos <- utxosAt addr
   evalStateT (Map.traverseMaybeWithKey go utxos) mempty
   where
     go :: TxOutRef
-       -> ChainIndexTxOut
-       -> StateT (Map TxId ChainIndexTx) (Contract w s e) (Maybe (ChainIndexTxOut, ChainIndexTx))
+       -> DecoratedTxOut
+       -> StateT (Map TxId ChainIndexTx) (Contract w s e) (Maybe (DecoratedTxOut, ChainIndexTx))
     go ref out = StateT $ \lookupTx -> do
       let txid = txOutRefId ref
       -- Lookup the txid in the lookup table. If it's present, we don't need
@@ -502,13 +564,13 @@ utxosTxOutTxAt addr = do
 utxosTxOutTxFromTx ::
     AsContractError e
     => ChainIndexTx
-    -> Contract w s e [(TxOutRef, (ChainIndexTxOut, ChainIndexTx))]
+    -> Contract w s e [(TxOutRef, (DecoratedTxOut, ChainIndexTx))]
 utxosTxOutTxFromTx tx =
   catMaybes <$> mapM mkOutRef (txOutRefs tx)
   where
     mkOutRef txOutRef = do
-      ciTxOutM <- unspentTxOutFromRef txOutRef
-      pure $ ciTxOutM >>= \ciTxOut -> pure (txOutRef, (ciTxOut, tx))
+      decoratedTxOutM <- unspentTxOutFromRef txOutRef
+      pure $ decoratedTxOutM >>= \decoratedTxOut -> pure (txOutRef, (decoratedTxOut, tx))
 
 foldTxoRefsAt ::
     forall w s e a.
@@ -588,7 +650,7 @@ watchAddressUntilSlot ::
     )
     => Address
     -> Slot
-    -> Contract w s e (Map TxOutRef ChainIndexTxOut)
+    -> Contract w s e (Map TxOutRef DecoratedTxOut)
 watchAddressUntilSlot a slot = awaitSlot slot >> utxosAt a
 
 -- | Wait until the target time and get the unspent transaction outputs at an
@@ -599,7 +661,7 @@ watchAddressUntilTime ::
     )
     => Address
     -> POSIXTime
-    -> Contract w s e (Map TxOutRef ChainIndexTxOut)
+    -> Contract w s e (Map TxOutRef DecoratedTxOut)
 watchAddressUntilTime a time = awaitTime time >> utxosAt a
 
 {-| Wait until the UTXO has been spent, returning the transaction that spends it.
@@ -652,7 +714,7 @@ fundsAtAddressGt
        )
     => Address
     -> Value
-    -> Contract w s e (Map TxOutRef ChainIndexTxOut)
+    -> Contract w s e (Map TxOutRef DecoratedTxOut)
 fundsAtAddressGt addr vl =
     fundsAtAddressCondition (\presentVal -> presentVal `V.gt` vl) addr
 
@@ -662,11 +724,11 @@ fundsAtAddressCondition
        )
     => (Value -> Bool)
     -> Address
-    -> Contract w s e (Map TxOutRef ChainIndexTxOut)
+    -> Contract w s e (Map TxOutRef DecoratedTxOut)
 fundsAtAddressCondition condition addr = loopM go () where
     go () = do
         cur <- utxosAt addr
-        let presentVal = foldMap (view ciTxOutValue) cur
+        let presentVal = foldMap (view decoratedTxOutValue) cur
         if condition presentVal
             then pure (Right cur)
             else awaitUtxoProduced addr >> pure (Left ())
@@ -680,7 +742,7 @@ fundsAtAddressGeq
        )
     => Address
     -> Value
-    -> Contract w s e (Map TxOutRef ChainIndexTxOut)
+    -> Contract w s e (Map TxOutRef DecoratedTxOut)
 fundsAtAddressGeq addr vl =
     fundsAtAddressCondition (\presentVal -> presentVal `V.geq` vl) addr
 
@@ -901,43 +963,12 @@ submitTxConstraintsSpending
   , AsContractError e
   )
   => TypedValidator a
-  -> Map TxOutRef ChainIndexTxOut
+  -> Map TxOutRef DecoratedTxOut
   -> TxConstraints (RedeemerType a) (DatumType a)
   -> Contract w s e CardanoTx
 submitTxConstraintsSpending inst utxo =
   let lookups = Constraints.typedValidatorLookups inst <> Constraints.unspentOutputs utxo
   in submitTxConstraintsWith lookups
-
-{-| A variant of 'mkTx' that runs in the 'Contract' monad, throwing errors and
-logging its inputs and outputs.
--}
-mkTxContract ::
-    forall w s a.
-    ( PlutusTx.FromData (DatumType a)
-    , PlutusTx.ToData (DatumType a)
-    , PlutusTx.ToData (RedeemerType a)
-    )
-    => ScriptLookups a
-    -> TxConstraints (RedeemerType a) (DatumType a)
-    -> Contract w s Constraints.MkTxError UnbalancedTx
-mkTxContract lookups txc = do
-    let result = Constraints.mkTx lookups txc
-        logData = MkTxLog{mkTxLogLookups=Constraints.generalise lookups, mkTxLogTxConstraints=bimap PlutusTx.toBuiltinData PlutusTx.toBuiltinData txc, mkTxLogResult = result}
-    logDebug logData
-    case result of
-        Left err -> throwError err
-        Right r' -> return r'
-
-{-| Arguments and result of a call to 'mkTx'
--}
-data MkTxLog =
-    MkTxLog
-        { mkTxLogLookups       :: ScriptLookups Any
-        , mkTxLogTxConstraints :: TxConstraints PlutusTx.BuiltinData PlutusTx.BuiltinData
-        , mkTxLogResult        :: Either Constraints.MkTxError UnbalancedTx
-        }
-        deriving stock (Show, Generic)
-        deriving anyclass (ToJSON, FromJSON)
 
 -- | Build a transaction that satisfies the constraints
 mkTxConstraints :: forall a w s e.
@@ -949,8 +980,27 @@ mkTxConstraints :: forall a w s e.
   => ScriptLookups a
   -> TxConstraints (RedeemerType a) (DatumType a)
   -> Contract w s e UnbalancedTx
-mkTxConstraints sl constraints =
-  mapError (review _ConstraintResolutionContractError) (mkTxContract sl constraints)
+mkTxConstraints lookups constraints = do
+    params <- getParams
+    let result = Constraints.mkTxWithParams params lookups constraints
+        logData = MkTxLog
+          { mkTxLogLookups = Constraints.generalise lookups
+          , mkTxLogTxConstraints = bimap PlutusTx.toBuiltinData PlutusTx.toBuiltinData constraints
+          , mkTxLogResult = result
+          }
+    logDebug logData
+    mapError (review _ConstraintResolutionContractError) $ either throwError pure result
+
+{-| Arguments and result of a call to 'mkTx'
+-}
+data MkTxLog =
+    MkTxLog
+        { mkTxLogLookups       :: ScriptLookups Any
+        , mkTxLogTxConstraints :: TxConstraints PlutusTx.BuiltinData PlutusTx.BuiltinData
+        , mkTxLogResult        :: Either Constraints.MkTxError UnbalancedTx
+        }
+        deriving stock (Show, Generic)
+        deriving anyclass (ToJSON, FromJSON)
 
 -- | Build a transaction that satisfies the constraints, then submit it to the
 --   network. Using the given constraints.

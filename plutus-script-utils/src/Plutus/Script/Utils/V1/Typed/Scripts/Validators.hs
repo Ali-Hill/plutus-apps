@@ -22,7 +22,6 @@ module Plutus.Script.Utils.V1.Typed.Scripts.Validators
     validatorAddress,
     validatorScript,
     vValidatorScript,
-    unsafeMkTypedValidator,
     forwardingMintingPolicy,
     vForwardingMintingPolicy,
     forwardingMintingPolicyHash,
@@ -42,7 +41,7 @@ import Data.Aeson (FromJSON, ToJSON)
 import Data.Kind (Type)
 import GHC.Generics (Generic)
 import Plutus.Script.Utils.Scripts (Datum, Language (PlutusV1), Versioned (Versioned))
-import Plutus.Script.Utils.Typed (Any, DatumType, RedeemerType,
+import Plutus.Script.Utils.Typed (DatumType, RedeemerType,
                                   TypedValidator (TypedValidator, tvForwardingMPS, tvForwardingMPSHash, tvValidator, tvValidatorHash),
                                   UntypedValidator, ValidatorTypes, forwardingMintingPolicy,
                                   forwardingMintingPolicyHash, generalise, vForwardingMintingPolicy, vValidatorScript,
@@ -149,19 +148,6 @@ mkTypedValidatorParam ::
 mkTypedValidatorParam vc wrapper param =
   mkTypedValidator (vc `applyCode` liftCode param) wrapper
 
--- | Make a 'TypedValidator' (with no type constraints) from an untyped 'Validator' script.
-unsafeMkTypedValidator :: PV1.Validator -> TypedValidator Any
-unsafeMkTypedValidator vl =
-  TypedValidator
-    { tvValidator = Versioned vl PlutusV1
-    , tvValidatorHash = vh
-    , tvForwardingMPS = Versioned mps PlutusV1
-    , tvForwardingMPSHash = Scripts.mintingPolicyHash mps
-    }
-  where
-    vh = Scripts.validatorHash vl
-    mps = MPS.mkForwardingMintingPolicy vh
-
 data WrongOutTypeError
   = ExpectedScriptGotPubkey
   | ExpectedPubkeyGotScript
@@ -176,7 +162,7 @@ data ConnectionError
   | WrongRedeemerType PV1.BuiltinData
   | WrongDatumType PV1.BuiltinData
   | NoDatum PV1.TxOutRef PV1.DatumHash
-  | UnknownRef
+  | UnknownRef PV1.TxOutRef
   deriving stock (Show, Eq, Ord, Generic)
 
 instance Pretty ConnectionError where
@@ -186,7 +172,7 @@ instance Pretty ConnectionError where
   pretty (WrongRedeemerType d)         = "Wrong redeemer type" <+> pretty (PV1.builtinDataToData d)
   pretty (WrongDatumType d)            = "Wrong datum type" <+> pretty (PV1.builtinDataToData d)
   pretty (NoDatum t d)                 = "No datum with hash " <+> pretty d <+> "for tx output" <+> pretty t
-  pretty UnknownRef                    = "Unknown reference"
+  pretty (UnknownRef d)                = "Unknown reference" <+> pretty d
 
 -- | Checks that the given validator hash is consistent with the actual validator.
 checkValidatorAddress :: forall a m. (MonadError ConnectionError m) => TypedValidator a -> PV1.Address -> m ()

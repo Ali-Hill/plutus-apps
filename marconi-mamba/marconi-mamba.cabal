@@ -30,6 +30,7 @@ common lang
     ExplicitForAll
     GeneralizedNewtypeDeriving
     ImportQualifiedPost
+    OverloadedStrings
     ScopedTypeVariables
     StandaloneDeriving
 
@@ -39,15 +40,67 @@ common lang
     -Wnoncanonical-monad-instances -Wredundant-constraints
     -Wunused-packages
 
-library
+library json-rpc
   import:          lang
-  hs-source-dirs:  src
-  exposed-modules: Marconi.Mamba
+  hs-source-dirs:  json-rpc/src
+  exposed-modules:
+    Marconi.Client.Types
+    Marconi.JsonRpc.Types
+    Marconi.Server.Types
 
   ------------------------
   -- Non-IOG dependencies
   ------------------------
-  build-depends:   base
+  build-depends:
+    , aeson
+    , base                 >=4.9 && <5
+    , containers
+    , http-media
+    , servant
+    , servant-client-core
+    , servant-server
+    , text
+
+library
+  import:          lang
+  hs-source-dirs:  src
+  exposed-modules:
+    Marconi.Api.HttpServer
+    Marconi.Api.Routes
+    Marconi.Api.Types
+    Marconi.Api.UtxoIndexersQuery
+    Marconi.Bootstrap
+
+  --------------------
+  -- Local components
+  --------------------
+  build-depends:
+    , cardano-streaming
+    , json-rpc
+    , marconi
+    , rewindable-index
+
+  --------------------------
+  -- Other IOG dependencies
+  --------------------------
+  build-depends:   cardano-api
+
+  ------------------------
+  -- Non-IOG dependencies
+  ------------------------
+  build-depends:
+    , aeson
+    , async
+    , base            >=4.9 && <5
+    , containers
+    , lens
+    , servant
+    , servant-server
+    , sqlite-simple
+    , stm
+    , text
+    , time
+    , warp
 
 executable marconi-mamba
   import:         lang
@@ -58,8 +111,103 @@ executable marconi-mamba
   -- Local components
   --------------------
   build-depends:
-    , cardano-streaming
     , marconi
+    , marconi-mamba
+
+  ------------------------
+  -- Non-IOG dependencies
+  ------------------------
+  build-depends:
+    , async
+    , base                  >=4.9 && <5
+    , optparse-applicative
+
+executable examples-json-rpc-server
+  import:         lang
+  hs-source-dirs: examples/json-rpc-server/src
+  main-is:        Main.hs
+
+  --------------------
+  -- Local components
+  --------------------
+  build-depends:
+    , marconi
+    , marconi-mamba
+
+  --------------------------
+  -- Other IOG dependencies
+  --------------------------
+  build-depends:  cardano-api
+
+  ------------------------
+  -- Non-IOG dependencies
+  ------------------------
+  build-depends:
+    , async
+    , base                  >=4.9 && <5
+    , lens
+    , optparse-applicative
+    , stm
+
+executable examples-json-rpc-client
+  import:         lang
+  hs-source-dirs: examples/json-rpc-client/src
+  main-is:        Main.hs
+
+  --------------------
+  -- Local components
+  --------------------
+  build-depends:
+    , json-rpc
+    , marconi
+
+  ------------------------
+  -- Non-IOG dependencies
+  ------------------------
+  build-depends:
+    , base            >=4.9 && <5
+    , http-client
+    , servant
+    , servant-client
+
+library db-utils
+  import:          lang
+  hs-source-dirs:  db-utils/src
+  exposed-modules: Marconi.DB.SqlUtils
+
+  --------------------
+  -- Local components
+  --------------------
+  build-depends:   marconi-mamba
+
+  --------------------------
+  -- Other IOG dependencies
+  --------------------------
+  build-depends:   cardano-api
+
+  ------------------------
+  -- Non-IOG dependencies
+  ------------------------
+  build-depends:
+    , async
+    , base           >=4.9 && <5
+    , lens
+    , sqlite-simple
+    , text
+    , time
+
+executable db-utils-exe
+  import:         lang
+  hs-source-dirs: db-utils/exe
+  main-is:        Main.hs
+
+  --------------------
+  -- Local components
+  --------------------
+  build-depends:
+    , db-utils
+    , marconi
+    , marconi-mamba
 
   --------------------------
   -- Other IOG dependencies

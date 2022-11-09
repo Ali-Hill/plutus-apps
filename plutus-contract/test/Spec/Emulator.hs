@@ -91,7 +91,8 @@ tests = testGroup "all tests" [
     ],
     testGroup "Etc." [
         testPropertyNamed "selectCoin" "selectCoinProp" selectCoinProp,
-        testPropertyNamed "txnFlows" "txnFlowsTest" txnFlowsTest
+        testPropertyNamed "txnFlows" "txnFlowsTest" txnFlowsTest,
+        testPropertyNamed "evalEmulatorTrace test" "evalEmulatorTraceTest" evalEmulatorTraceTest
         ]
     ]
 
@@ -158,8 +159,8 @@ txnUpdateUtxo = property $ do
         pred = \case
             [ Chain.TxnValidate{}
                 , Chain.SlotAdd _
-                , Chain.TxnValidate _ _
-                , Chain.TxnValidationFail _ _ _ (Index.CardanoLedgerValidationError msg) _
+                , Chain.TxnValidate _ _ _
+                , Chain.TxnValidationFail _ _ _ (Index.CardanoLedgerValidationError msg) _ _
                 , Chain.SlotAdd _
                 ] -> "ApplyTxError [UtxowFailure (UtxoFailure (FromAlonzoUtxoFail (ValueNotConserved" `Text.isInfixOf` msg
                      || "[CollectErrors [BadTranslation (TranslationLogicMissingInput" `Text.isInfixOf` msg
@@ -195,7 +196,7 @@ invalidTrace = property $ do
         pred = \case
             [ Chain.TxnValidate{}
                 , Chain.SlotAdd _
-                , Chain.TxnValidationFail _ _ _ (Index.CardanoLedgerValidationError msg) _
+                , Chain.TxnValidationFail _ _ _ (Index.CardanoLedgerValidationError msg) _ _
                 , Chain.SlotAdd _
                 ] -> "ValueNotConservedUTxO" `Text.isInfixOf` msg
             _ -> False
@@ -229,7 +230,7 @@ invalidScript = property $ do
     let invalidTxnUtxo = [(snd outToSpend, fst outToSpend)]
     invalidTxn <- forAll
         $ Gen.genValidTransactionSpending
-            [Gen.TxInputWitnessed (snd outToSpend) (ScriptAddress (Left failValidator) unitRedeemer unitDatum)]
+            [Gen.TxInputWitnessed (snd outToSpend) (ScriptAddress (Left failValidator) unitRedeemer (Just unitDatum))]
             totalVal
     Hedgehog.annotateShow invalidTxn
 
@@ -313,6 +314,13 @@ pubKeyTransactions2 = do
     _ <- Trace.nextSlot
     Trace.liftWallet wallet1 $ payToPaymentPublicKeyHash_ def W.always (Ada.adaValueOf 20) pubKey2
     void Trace.nextSlot
+
+evalEmulatorTraceTest :: Property
+evalEmulatorTraceTest = property $ do
+    let trace = Trace.payToWallet wallet1 wallet2 (Ada.adaValueOf 10)
+        res = Trace.evalEmulatorTrace def trace
+    Hedgehog.annotateShow res
+    Hedgehog.assert (either (const False) (const True) res)
 
 genChainTxn :: Hedgehog.MonadGen m => m (Mockchain, CardanoTx)
 genChainTxn = do

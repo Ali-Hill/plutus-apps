@@ -1,56 +1,41 @@
 {-# LANGUAGE NamedFieldPuns #-}
+
 module Main where
 
-import Cardano.Api qualified as C
-import Cardano.Streaming (withChainSyncEventStream)
-import Marconi.CLI qualified as M
-import Marconi.Indexers qualified as I
 import Options.Applicative qualified as Opt
 
-data Args = Args
-  { socketPath :: FilePath
-  , dbPath     :: FilePath
-  , networkId  :: C.NetworkId
-  , chainPoint :: C.ChainPoint
-  } deriving (Show)
+import Control.Applicative (optional)
+import Control.Concurrent.Async (race_)
+import Marconi.Api.Types (CliArgs (CliArgs))
+import Marconi.Bootstrap (bootstrapHttp, bootstrapJsonRpc, bootstrapUtxoIndexers)
+import Marconi.CLI (multiString, pNetworkId)
 
-args :: Opt.Parser Args
-args = Args
+
+args :: Opt.Parser CliArgs
+args = CliArgs
   <$> Opt.strOption (Opt.long "socket-path" <> Opt.metavar "FILE" <> Opt.help "Socket path to node")
-  <*> Opt.strOption (Opt.long "db" <> Opt.metavar "FILE" <> Opt.help "Path to the utxo database.")
+  <*> Opt.strOption (Opt.long "utxo-db" <> Opt.metavar "FILE" <> Opt.help "Path to the utxo database.")
+  <*> (optional . Opt.option  Opt.auto) (
+        Opt.long "http-port" <> Opt.metavar "HTTP-PORT" <> Opt.help "JSON-RPC http port number, default is port 3000.")
   <*> pNetworkId
-  <*> M.chainPointParser
-  where
-    -- TODO: `pNetworkId` and `pTestnetMagic` are copied from
-    -- https://github.com/input-output-hk/cardano-node/blob/988c93085022ed3e2aea5d70132b778cd3e622b9/cardano-cli/src/Cardano/CLI/Shelley/Parsers.hs#L2009-L2027
-    -- Use them from there whenever they are exported.
-    pNetworkId :: Opt.Parser C.NetworkId
-    pNetworkId =
-      pMainnet Opt.<|> fmap C.Testnet pTestnetMagic
-     where
-       pMainnet :: Opt.Parser C.NetworkId
-       pMainnet =
-        Opt.flag' C.Mainnet
-          (  Opt.long "mainnet"
-          <> Opt.help "Use the mainnet magic id."
-          )
-    pTestnetMagic :: Opt.Parser C.NetworkMagic
-    pTestnetMagic =
-      C.NetworkMagic <$>
-        Opt.option Opt.auto
-          (  Opt.long "testnet-magic"
-          <> Opt.metavar "NATURAL"
-          <> Opt.help "Specify a testnet magic id."
-          )
+  <*> multiString (Opt.long "addresses-to-index"
+                        <> Opt.help ("Becch32 Shelley addresses to index."
+                                 <> " i.e \"--address-to-index address-1 --address-to-index address-2 ...\"" ) )
 
-opts :: Opt.ParserInfo Args
+
+opts :: Opt.ParserInfo CliArgs
 opts = Opt.info (args Opt.<**> Opt.helper)
-  ( Opt.fullDesc
- <> Opt.header "marconi-mamba - Cardano blockchain indexer" )
+    ( Opt.fullDesc <> Opt.header "marconi-mamba - Cardano blockchain indexer" )
 
+-- | concurrently start:
+-- JSON-RPC server
+-- marconi utxo worker
+-- Exceptions in either thread will end the program
+--
 main :: IO ()
 main = do
-  Args {socketPath, dbPath, networkId, chainPoint} <- Opt.execParser opts
-  let indexers = I.combineIndexers [(I.utxoWorker Nothing, dbPath)]
-
-  withChainSyncEventStream socketPath networkId chainPoint indexers
+    cli@(CliArgs _ utxoDbPath maybePort nId tAddress)  <- Opt.execParser opts
+    rpcEnv <- bootstrapJsonRpc utxoDbPath maybePort tAddress nId
+    race_
+       (bootstrapHttp rpcEnv)                            -- start http server
+       (bootstrapUtxoIndexers cli rpcEnv)

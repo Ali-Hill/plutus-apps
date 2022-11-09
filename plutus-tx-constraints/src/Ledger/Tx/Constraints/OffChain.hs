@@ -52,17 +52,17 @@ module Ledger.Tx.Constraints.OffChain(
 
 import Cardano.Api qualified as C
 import Cardano.Api.Shelley qualified as C
-import Control.Lens (Lens', Traversal', coerced, iso, lens, makeLensesFor, set, use, (%=), (.=), (<>=))
-import Control.Monad.Except (Except, MonadError, mapExcept, runExcept, throwError, withExcept)
+import Control.Lens (Lens', Traversal', coerced, iso, lens, makeLensesFor, set, use, (%=), (.=), (<>=), (^.))
+import Control.Lens.Extras (is)
+import Control.Monad.Except (Except, MonadError, guard, lift, mapExcept, runExcept, throwError, withExcept)
 import Control.Monad.Reader (ReaderT (runReaderT), mapReaderT)
 import Control.Monad.State (MonadState, StateT, execStateT, gets, mapStateT)
 import Data.Aeson (FromJSON, ToJSON)
 import Data.Bifunctor (first)
 import Data.Either (partitionEithers)
 import Data.Foldable (traverse_)
-import Data.List qualified as List
 import GHC.Generics (Generic)
-import Ledger (POSIXTimeRange, Params (..), networkIdL)
+import Ledger (POSIXTimeRange, Params (..), networkIdL, pProtocolParams)
 import Ledger.Address (pubKeyHashAddress, scriptValidatorHashAddress)
 import Ledger.Constraints qualified as P
 import Ledger.Constraints.OffChain (UnbalancedTx (..), cpsUnbalancedTx, unBalancedTxTx, unbalancedTx)
@@ -119,7 +119,7 @@ tx :: Traversal' UnbalancedTx C.CardanoBuildTx
 tx = P.cardanoTx
 
 emptyCardanoBuildTx :: Params -> C.CardanoBuildTx
-emptyCardanoBuildTx Params { pProtocolParams }= C.CardanoBuildTx $ C.TxBodyContent
+emptyCardanoBuildTx p = C.CardanoBuildTx $ C.TxBodyContent
     { C.txIns = mempty
     , C.txInsCollateral = C.TxInsCollateral C.CollateralInBabbageEra mempty
     , C.txInsReference = C.TxInsReferenceNone
@@ -129,7 +129,7 @@ emptyCardanoBuildTx Params { pProtocolParams }= C.CardanoBuildTx $ C.TxBodyConte
     , C.txFee = C.TxFeeExplicit C.TxFeesExplicitInBabbageEra mempty
     , C.txValidityRange = (C.TxValidityNoLowerBound, C.TxValidityNoUpperBound C.ValidityNoUpperBoundInBabbageEra)
     , C.txMintValue = C.TxMintNone
-    , C.txProtocolParams = C.BuildTxWith $ Just pProtocolParams
+    , C.txProtocolParams = C.BuildTxWith $ Just $ pProtocolParams p
     , C.txScriptValidity = C.TxScriptValidityNone
     , C.txExtraKeyWits = C.TxExtraKeyWitnessesNone
     , C.txMetadata = C.TxMetadataNone
@@ -161,6 +161,7 @@ instance Pretty MkTxError where
         ToCardanoError err  -> "ToCardanoError" <> colon <+> pretty err
         LedgerMkTxError err -> pretty err
 
+
 -- | Given a list of 'SomeLookupsAndConstraints' describing the constraints
 --   for several scripts, build a single transaction that runs all the scripts.
 mkSomeTx
@@ -175,6 +176,28 @@ mkSomeTx params xs =
         $ runExcept
         $ execStateT (traverse process xs) (initialState params)
 
+data SortedConstraints
+   = MkSortedConstraints
+   { rangeConstraints        :: [POSIXTimeRange]
+   , includeDatumConstraints :: [TxConstraint]
+   , otherConstraints        :: [TxConstraint]
+   }
+
+prepareConstraints
+    :: ToData (DatumType a)
+    => [ScriptOutputConstraint (DatumType a)]
+    -> [TxConstraint]
+    -> ReaderT (P.ScriptLookups a) (StateT P.ConstraintProcessingState (Except MkTxError)) SortedConstraints
+prepareConstraints ownOutputs constraints = do
+    let
+      extractPosixTimeRange = \case
+        P.MustValidateIn range -> Left range
+        other                  -> Right other
+      (ranges, nonRangeConstraints) = partitionEithers $ extractPosixTimeRange <$> constraints
+    (other, verification) <- mapLedgerMkTxError $ P.prepareConstraints ownOutputs nonRangeConstraints
+    pure $ MkSortedConstraints ranges verification other
+
+
 -- | Resolve some 'TxConstraints' by modifying the 'UnbalancedTx' in the
 --   'ConstraintProcessingState'
 processLookupsAndConstraints
@@ -185,34 +208,17 @@ processLookupsAndConstraints
     => P.ScriptLookups a
     -> TxConstraints (RedeemerType a) (DatumType a)
     -> StateT P.ConstraintProcessingState (Except MkTxError) ()
-processLookupsAndConstraints lookups TxConstraints{txConstraints, txOwnOutputs} =
-    let
-      extractPosixTimeRange = \case
-        P.MustValidateIn range -> Left range
-        other                  -> Right other
-      (ranges, nonRangeConstraints) = partitionEithers $ extractPosixTimeRange <$> txConstraints
-
-      -- This is done so that the 'MustIncludeDatumInTxWithHash' and
-      -- 'MustIncludeDatumInTx' are not sensitive to the order of the
-      -- constraints. @mustPayToOtherScript ... <> mustIncludeDatumInTx ...@
-      -- and @mustIncludeDatumInTx ... <> mustPayToOtherScript ...@
-      -- must yield the same behavior.
-      isIncludeDatumInTxConstraint = \case
-        P.MustIncludeDatumInTxWithHash {} -> True
-        P.MustIncludeDatumInTx {}         -> True
-        _                                 -> False
-      (includeDatumsConstraints, otherConstraints) = List.partition isIncludeDatumInTxConstraint nonRangeConstraints
-    in do
+processLookupsAndConstraints lookups TxConstraints{txConstraints, txOwnOutputs} = do
         flip runReaderT lookups $ do
-            ownOutputConstraints <- concat <$> traverse addOwnOutput txOwnOutputs
-            let constraints = otherConstraints <> ownOutputConstraints <> includeDatumsConstraints
-            traverse_ processConstraint constraints
+            sortedConstraints <- prepareConstraints txOwnOutputs txConstraints
+            traverse_ processConstraint (otherConstraints sortedConstraints)
             -- traverse_ P.processConstraintFun txCnsFuns
             -- traverse_ P.addOwnInput txOwnInputs
             -- P.addMintingRedeemers
             -- P.addMissingValueSpent
+            traverse_ processConstraint (includeDatumConstraints sortedConstraints)
             mapReaderT (mapStateT (withExcept LedgerMkTxError)) P.updateUtxoIndex
-        setValidityRange ranges
+            lift $ setValidityRange (rangeConstraints sortedConstraints)
 
 -- | Reinject the validityRange inside the unbalanced Tx.
 --   As the Tx is a Caradano transaction, and as we have access to the SlotConfig,
@@ -270,18 +276,17 @@ processConstraint = \case
             \outs -> fmap (set txOutDatum datumInTx) outs
     P.MustSpendPubKeyOutput txo -> do
         txout <- lookupTxOutRef txo
-        case txout of
-          Tx.PublicKeyChainIndexTxOut {} -> do
-              txIn <- throwLeft ToCardanoError $ C.toCardanoTxIn txo
-              unbalancedTx . tx . txIns <>= [(txIn, C.BuildTxWith (C.KeyWitness C.KeyWitnessForSpending))]
-          _ -> throwError (LedgerMkTxError $ P.TxOutRefWrongType txo)
+        maybe (throwError (LedgerMkTxError $ P.TxOutRefWrongType txo)) pure
+            $ guard $ is Tx._PublicKeyDecoratedTxOut txout
+        txIn <- throwLeft ToCardanoError $ C.toCardanoTxIn txo
+        unbalancedTx . tx . txIns <>= [(txIn, C.BuildTxWith (C.KeyWitness C.KeyWitnessForSpending))]
 
     P.MustSpendScriptOutput txo redeemer mref -> do
         txout <- lookupTxOutRef txo
         mkWitness <- case mref of
           Just ref -> do
             refTxOut <- lookupTxOutRef ref
-            case Tx._ciTxOutReferenceScript refTxOut of
+            case refTxOut ^. Tx.decoratedTxOutReferenceScript of
                 Just (Tx.Versioned _ lang) -> do
                     txIn <- throwLeft ToCardanoError $ C.toCardanoTxIn ref
                     unbalancedTx . tx . txInsReference <>= [ txIn ]
@@ -300,7 +305,7 @@ processConstraint = \case
                 let witness
                         = C.ScriptWitness C.ScriptWitnessForSpending $
                             mkWitness
-                            (C.ScriptDatumForTxIn (C.toCardanoScriptData (getDatum datum)))
+                            (C.toCardanoDatumWitness $ P.datumWitness datum)
                             (C.toCardanoScriptData (getRedeemer redeemer))
                             C.zeroExecutionUnits
 
@@ -341,19 +346,13 @@ processConstraint = \case
 
 lookupTxOutRef
     :: Tx.TxOutRef
-    -> ReaderT (P.ScriptLookups a) (StateT P.ConstraintProcessingState (Except MkTxError)) Tx.ChainIndexTxOut
+    -> ReaderT (P.ScriptLookups a) (StateT P.ConstraintProcessingState (Except MkTxError)) Tx.DecoratedTxOut
 lookupTxOutRef txo = mapLedgerMkTxError $ P.lookupTxOutRef txo
 
 lookupScriptAsReferenceScript
     :: Maybe ScriptHash
     -> ReaderT (P.ScriptLookups a) (StateT P.ConstraintProcessingState (Except MkTxError)) (C.ReferenceScript C.BabbageEra)
 lookupScriptAsReferenceScript msh = mapLedgerMkTxError $ P.lookupScriptAsReferenceScript msh
-
-addOwnOutput
-    :: ToData (DatumType a)
-    => ScriptOutputConstraint (DatumType a)
-    -> ReaderT (P.ScriptLookups a) (StateT P.ConstraintProcessingState (Except MkTxError)) [TxConstraint]
-addOwnOutput soc = mapLedgerMkTxError $ P.addOwnOutput soc
 
 mapLedgerMkTxError
     :: ReaderT (P.ScriptLookups a) (StateT P.ConstraintProcessingState (Except P.MkTxError)) b

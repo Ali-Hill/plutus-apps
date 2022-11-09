@@ -42,18 +42,23 @@ import Cardano.Ledger.ShelleyMA.TxBody qualified as Allegra
 import Cardano.Ledger.Keys qualified as Shelley
 import Cardano.Ledger.Shelley.Tx qualified as Shelley
 import Cardano.Ledger.Shelley.TxBody qualified as Shelley
+import Ledger.Params (PParams)
 
 makeTransactionBody'
-    :: Map.Map Alonzo.RdmrPtr Alonzo.ExUnits
+    :: Maybe PParams
+    -> Map.Map Alonzo.RdmrPtr Alonzo.ExUnits
     -> TxBodyContent BuildTx BabbageEra
     -> Either TxBodyError (TxBody BabbageEra)
 makeTransactionBody'
+    mpparams
     exUnits
     txbodycontent@TxBodyContent {
         txIns,
         txInsCollateral,
         txInsReference,
         txOuts,
+        txReturnCollateral,
+        txTotalCollateral,
         txFee,
         txValidityRange = (lowerBound, upperBound),
         txExtraKeyWits,
@@ -61,7 +66,6 @@ makeTransactionBody'
         txCertificates,
         txMintValue,
         txScriptValidity,
-        txProtocolParams,
         txMetadata,
         txAuxScripts
     } =
@@ -78,8 +82,14 @@ makeTransactionBody'
                 TxInsReferenceNone     -> Set.empty
                 TxInsReference _ txins -> Set.fromList (map toShelleyTxIn txins)
           , Babbage.outputs = Seq.fromList (map (CBOR.mkSized . toShelleyTxOut era) txOuts)
-          , Babbage.collateralReturn = SNothing
-          , Babbage.totalCollateral = SNothing
+          , Babbage.collateralReturn =
+              case txReturnCollateral of
+                TxReturnCollateralNone        -> SNothing
+                TxReturnCollateral _ colTxOut -> SJust $ CBOR.mkSized $ toShelleyTxOut era colTxOut
+          , Babbage.totalCollateral =
+              case txTotalCollateral of
+                TxTotalCollateralNone  -> SNothing
+                TxTotalCollateral _ lv -> SJust $ toShelleyLovelace lv
           , Babbage.txcerts =
               case txCertificates of
                 TxCertificatesNone    -> Seq.empty
@@ -113,12 +123,12 @@ makeTransactionBody'
                 TxMintNone        -> mempty
                 TxMintValue _ v _ -> toMaryValue v
           , Babbage.scriptIntegrityHash =
-              case txProtocolParams of
-                BuildTxWith Nothing        -> SNothing
-                BuildTxWith (Just pparams) ->
+              case mpparams of
+                Nothing        -> SNothing
+                Just pparams ->
                   Alonzo.hashScriptIntegrity
                     (Set.map
-                        (Alonzo.getLanguageView (toLedgerPParams era pparams))
+                        (Alonzo.getLanguageView pparams)
                         languages
                     )
                     redeemers

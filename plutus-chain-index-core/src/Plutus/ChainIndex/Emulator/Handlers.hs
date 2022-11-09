@@ -23,7 +23,7 @@ module Plutus.ChainIndex.Emulator.Handlers(
     , utxoIndex
     ) where
 
-import Control.Lens (at, ix, makeLenses, over, preview, set, to, view, (&))
+import Control.Lens (at, ix, makeLenses, over, preview, set, to, view, (&), (^?))
 import Control.Monad (foldM)
 import Control.Monad.Freer (Eff, Member, type (~>))
 import Control.Monad.Freer.Error (Error, throwError)
@@ -38,7 +38,8 @@ import GHC.Generics (Generic)
 import Ledger.Address (Address (addressCredential))
 import Ledger.Scripts (ScriptHash (ScriptHash))
 import Ledger.Tx (TxId, TxOutRef (..), Versioned)
-import Ledger.Tx qualified as L (ChainIndexTxOut (PublicKeyChainIndexTxOut, ScriptChainIndexTxOut))
+import Ledger.Tx qualified as L (DatumFromQuery (..), DecoratedTxOut, datumInDatumFromQuery, decoratedTxOutDatum,
+                                 mkPubkeyDecoratedTxOut, mkScriptDecoratedTxOut)
 import Plutus.ChainIndex.Api (IsUtxoResponse (IsUtxoResponse), QueryResponse (QueryResponse),
                               TxosResponse (TxosResponse), UtxosResponse (UtxosResponse))
 import Plutus.ChainIndex.ChainIndexError (ChainIndexError (..))
@@ -100,6 +101,7 @@ getTxFromTxId i = do
         Nothing -> logWarn (TxNotFound i) >> pure Nothing
         _       -> pure result
 
+
 -- | Get the 'ChainIndexTxOut' for a 'TxOutRef'.
 getTxOutFromRef ::
   forall effs.
@@ -107,7 +109,7 @@ getTxOutFromRef ::
   , Member (LogMsg ChainIndexLog) effs
   )
   => TxOutRef
-  -> Eff effs (Maybe L.ChainIndexTxOut)
+  -> Eff effs (Maybe L.DecoratedTxOut)
 getTxOutFromRef ref@TxOutRef{txOutRefId, txOutRefIdx} = do
   ds <- gets (view diskState)
   -- Find the output in the tx matching the output ref
@@ -122,7 +124,7 @@ getUtxoutFromRef ::
   , Member (LogMsg ChainIndexLog) effs
   )
   => TxOutRef
-  -> Eff effs (Maybe L.ChainIndexTxOut)
+  -> Eff effs (Maybe L.DecoratedTxOut)
 getUtxoutFromRef ref@TxOutRef{txOutRefId, txOutRefIdx} = do
   ds <- gets (view diskState)
   -- Find the output in the tx matching the output ref
@@ -136,31 +138,31 @@ makeChainIndexTxOut ::
   , Member (LogMsg ChainIndexLog) effs
   )
   => ChainIndexTxOut
-  -> Eff effs (Maybe L.ChainIndexTxOut)
+  -> Eff effs (Maybe L.DecoratedTxOut)
 makeChainIndexTxOut txout@(ChainIndexTxOut address value datum refScript) = do
   datumWithHash <- getDatumWithHash datum
   -- The output might come from a public key address or a script address.
   -- We need to handle them differently.
   case addressCredential $ citoAddress txout of
     PubKeyCredential _ ->
-      pure $ Just $ L.PublicKeyChainIndexTxOut address value datumWithHash script
+      pure $ L.mkPubkeyDecoratedTxOut address value datumWithHash script
     ScriptCredential (ValidatorHash h) -> do
       case datumWithHash of
         Just d -> do
           v <- getScriptFromHash (ScriptHash h)
-          pure $ Just $ L.ScriptChainIndexTxOut address value d script (ValidatorHash h, fmap Validator <$> v)
+          pure $ L.mkScriptDecoratedTxOut address value d script (fmap Validator <$> v)
         Nothing -> do
           -- If the txout comes from a script address, the Datum should not be Nothing
           logWarn $ NoDatumScriptAddr txout
           pure Nothing
  where
-    getDatumWithHash :: OutputDatum -> Eff effs (Maybe (DatumHash, Maybe Datum))
+    getDatumWithHash :: OutputDatum -> Eff effs (Maybe (DatumHash, L.DatumFromQuery))
     getDatumWithHash NoOutputDatum = pure Nothing
     getDatumWithHash (OutputDatumHash dh) = do
         d <- getDatumFromHash dh
-        pure $ Just (dh, d)
+        pure $ Just (dh, maybe L.DatumUnknown L.DatumInBody d)
     getDatumWithHash (OutputDatum d) = do
-        pure $ Just (datumHash d, Just d)
+        pure $ Just (datumHash d, L.DatumInline d)
 
     script = fromReferenceScript refScript
 
@@ -221,7 +223,25 @@ handleQuery = \case
             mtxouts <- mapM getUtxoutFromRef (pageItems page)
             let txouts = [ (t, o) | (t, mo) <- List.zip (pageItems page) mtxouts, o <- maybeToList mo]
             pure $ QueryResponse txouts (nextPageQuery page)
-
+    DatumsAtAddress pageQuery cred -> do
+      state <- get
+      let outRefs = view (diskState . addressMap . at cred) state
+          txoRefs = fromMaybe mempty outRefs
+          utxo = view (utxoIndex . to utxoState) state
+          page = pageOf pageQuery txoRefs
+          resolveDatum (Just h, Nothing) = gets (view $ diskState . dataMap . at h)
+          resolveDatum (_, Just d)       = pure $ Just d
+          resolveDatum (_, _)            = pure Nothing
+          txOutToDatum txout = fromMaybe (Nothing, Nothing) $ do
+              (dh, mdatum) <- txout ^? L.decoratedTxOutDatum
+              pure (Just dh, mdatum ^? L.datumInDatumFromQuery)
+      txouts <- catMaybes <$> mapM getTxOutFromRef (pageItems page)
+      datums <- catMaybes <$> mapM (resolveDatum . txOutToDatum) txouts
+      case tip utxo of
+        TipAtGenesis -> do
+          logWarn TipIsGenesis
+          pure $ QueryResponse [] Nothing
+        _ -> pure $ QueryResponse datums (nextPageQuery page)
     UtxoSetWithCurrency pageQuery assetClass -> do
         state <- get
         let outRefs = view (diskState . assetClassMap . at assetClass) state

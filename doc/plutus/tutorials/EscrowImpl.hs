@@ -47,7 +47,7 @@ module EscrowImpl(
     , covIdx
     ) where
 
-import Control.Lens (makeClassyPrisms, review, view)
+import Control.Lens (_1, has, makeClassyPrisms, only, review, view)
 import Control.Monad (Monad ((>>)), void)
 import Control.Monad.Error.Lens (throwing)
 import Data.Aeson (FromJSON, ToJSON)
@@ -70,9 +70,9 @@ import Plutus.V1.Ledger.Api (Datum (Datum), DatumHash, ValidatorHash)
 import Plutus.V1.Ledger.Contexts (ScriptContext (ScriptContext, scriptContextTxInfo), TxInfo (txInfoValidRange))
 
 import Plutus.Contract (AsContractError (_ContractError), Contract, ContractError, Endpoint, HasEndpoint, Promise,
-                        adjustUnbalancedTx, awaitTime, currentTime, endpoint, mapError, mkTxConstraints,
-                        ownFirstPaymentPubKeyHash, promiseMap, selectList, submitUnbalancedTx, type (.\/), utxosAt,
-                        waitNSlots)
+                        adjustUnbalancedTx, awaitTime, currentNodeClientTimeRange, currentTime, endpoint, mapError,
+                        mkTxConstraints, ownFirstPaymentPubKeyHash, promiseMap, selectList, submitUnbalancedTx,
+                        type (.\/), utxosAt, waitNSlots)
 import PlutusTx qualified
 {- START imports -}
 import PlutusTx.Code qualified as PlutusTx
@@ -299,7 +299,7 @@ redeem ::
     -> Contract w s e RedeemSuccess
 redeem inst escrow = mapError (review _EscrowError) $ do
     let addr = Scripts.validatorAddress inst
-    current <- currentTime
+    current <- Haskell.snd <$> currentNodeClientTimeRange
     unspentOutputs <- utxosAt addr
     let
         valRange = Interval.to (Haskell.pred $ escrowDeadline escrow)
@@ -308,7 +308,7 @@ redeem inst escrow = mapError (review _EscrowError) $ do
                 <> Constraints.mustValidateIn valRange
     if current >= escrowDeadline escrow
     then throwing _RedeemFailed DeadlinePassed
-    else if foldMap (view Tx.ciTxOutValue) unspentOutputs `lt` targetTotal escrow
+    else if foldMap (view Tx.decoratedTxOutValue) unspentOutputs `lt` targetTotal escrow
          then throwing _RedeemFailed NotEnoughFundsAtAddress
          else do
            utx <- mkTxConstraints ( Constraints.typedValidatorLookups inst
@@ -338,7 +338,8 @@ refund ::
 refund inst escrow = do
     pk <- ownFirstPaymentPubKeyHash
     unspentOutputs <- utxosAt (Scripts.validatorAddress inst)
-    let flt _ ciTxOut = fst (Tx._ciTxOutScriptDatum ciTxOut) == Scripts.datumHash (Datum (PlutusTx.toBuiltinData pk))
+    let pkh = Scripts.datumHash $ Datum $ PlutusTx.toBuiltinData pk
+    let flt _ ciTxOut = has (Tx.decoratedTxOutScriptDatum . _1 . only pkh) ciTxOut
         tx' = Constraints.collectFromTheScriptFilter flt unspentOutputs Refund
                 <> Constraints.mustValidateIn (from (Haskell.succ $ escrowDeadline escrow))
     if Constraints.modifiesUtxoSet tx'
@@ -361,16 +362,16 @@ payRedeemRefund params vl = do
     let inst = typedValidator params
         go = do
             cur <- utxosAt (Scripts.validatorAddress inst)
-            let presentVal = foldMap (view Tx.ciTxOutValue) cur
+            let presentVal = foldMap (view Tx.decoratedTxOutValue) cur
             if presentVal `geq` targetTotal params
                 then Right <$> redeem inst params
                 else do
-                    time <- currentTime
+                    time <- Haskell.snd <$> currentNodeClientTimeRange
                     if time >= escrowDeadline params
                         then Left <$> refund inst params
                         else waitNSlots 1 >> go
     -- Pay the value 'vl' into the contract
-    _ <- pay inst params vl
+    void $ pay inst params vl
     go
 
 {- START covIdx -}
