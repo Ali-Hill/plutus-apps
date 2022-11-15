@@ -14,7 +14,7 @@
 {-# OPTIONS_GHC -fno-omit-interface-pragmas #-}
 {-# OPTIONS_GHC -fno-specialise #-}
 {-# OPTIONS_GHC -fno-spec-constr #-}
--- {-# OPTIONS_GHC -g -fplugin-opt PlutusTx.Plugin:coverage-all #-} --added for coverage
+{-# OPTIONS_GHC -g -fplugin-opt PlutusTx.Plugin:coverage-all #-} --added for coverage
 {-# LANGUAGE ViewPatterns       #-}
 -- | A basic governance contract in Plutus.
 module Plutus.Contracts.Governance (
@@ -34,7 +34,7 @@ module Plutus.Contracts.Governance (
     , votingValue
     , ownsVotingToken
     -- * Coverage
-    -- , covIdx
+    , covIdx
     ) where
 
 import Control.Lens (makeClassyPrisms, review)
@@ -298,5 +298,5 @@ PlutusTx.makeLift ''GovState
 PlutusTx.unstableMakeIsData ''GovInput
 PlutusTx.makeLift ''GovInput
 
--- covIdx :: CoverageIndex
--- covIdx = getCovIdx $$(PlutusTx.compile [|| mkValidator ||])
+covIdx :: CoverageIndex
+covIdx = getCovIdx $$(PlutusTx.compile [|| mkValidator ||])

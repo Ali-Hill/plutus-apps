@@ -20,7 +20,7 @@ module Spec.Governance(tests, doVoting,
                                 testTree,
                                 prop_Gov,
                                    prop_finishGovernance, prop_NoLockedFunds
-                                   -- ,check_propGovernanceWithCoverage
+                                   ,check_propGovernanceWithCoverage
                                    ) where
 
 --import Control.Lens (view)
@@ -60,7 +60,8 @@ import Test.QuickCheck qualified as QC
 import Data.Semigroup (Sum (..))
 
 
---import Data.Set qualified as Set --might not need
+options :: CheckOptions
+options = defaultCheckOptionsContractModel & (increaseTransactionLimits . increaseTransactionLimits . increaseTransactionLimits . increaseTransactionLimits)
 
 
 data GovernanceModel = GovernanceModel { _state        :: (BuiltinByteString, Bool)
@@ -244,7 +245,7 @@ params = Gov.Params
     }
 
 prop_Gov :: Actions GovernanceModel -> QC.Property
-prop_Gov = propRunActions_
+prop_Gov = propRunActionsWithOptions options defaultCoverageOptions (\ _ -> pure True)
 
 testWallets :: [Wallet]
 testWallets = [w1, w2, w3, w4, w5, w6, w7, w8, w9, w10]
@@ -295,14 +296,11 @@ prop_NoLockedFunds = checkNoLockedFundsProof noLockProof
 prop_NoLockedFundsFast :: QC.Property
 prop_NoLockedFundsFast = checkNoLockedFundsProofFast noLockProof
 
-
-{- coverage breaks the contract
 check_propGovernanceWithCoverage :: IO ()
 check_propGovernanceWithCoverage = do
   cr <- quickCheckWithCoverage QC.stdArgs (set coverageIndex Gov.covIdx $ defaultCoverageOptions) $ \covopts ->
-    QC.withMaxSuccess 100 $ propRunActionsWithOptions @GovernanceModel defaultCheckOptionsContractModel covopts (const (pure True))
+    QC.withMaxSuccess 100 $ propRunActionsWithOptions @GovernanceModel options covopts (const (pure True))
   writeCoverageReport "Governance" cr
--}
 
 ------------------------------------------------------------
 
@@ -310,17 +308,17 @@ check_propGovernanceWithCoverage = do
 tests :: TestTree
 tests =
     testGroup "governance tests"
-    [ checkPredicateOptions (defaultCheckOptions & increaseTransactionLimits) "vote all in favor, 2 rounds - SUCCESS"
+    [ checkPredicateOptions (defaultCheckOptions & increaseTransactionLimits . increaseTransactionLimits . increaseTransactionLimits . increaseTransactionLimits) "vote all in favor, 2 rounds - SUCCESS"
         (assertNoFailedTransactions
         .&&. dataAtAddress (Scripts.validatorAddress $ Gov.typedValidator params) (maybe False ((== Gov.Law lawv3) . Gov.law) . listToMaybe))
         (doVoting 10 0 2)
 
-    , checkPredicateOptions (defaultCheckOptions & increaseTransactionLimits) "vote 60/40, accepted - SUCCESS"
+    , checkPredicateOptions (defaultCheckOptions & increaseTransactionLimits . increaseTransactionLimits . increaseTransactionLimits . increaseTransactionLimits) "vote 60/40, accepted - SUCCESS"
         (assertNoFailedTransactions
         .&&. dataAtAddress (Scripts.validatorAddress $ Gov.typedValidator params) (maybe False ((== Gov.Law lawv2) . Gov.law) . listToMaybe))
         (doVoting 6 4 1)
 
-    , checkPredicateOptions (defaultCheckOptions & increaseTransactionLimits) "vote 50/50, rejected - SUCCESS"
+    , checkPredicateOptions (defaultCheckOptions & increaseTransactionLimits . increaseTransactionLimits . increaseTransactionLimits . increaseTransactionLimits) "vote 50/50, rejected - SUCCESS"
         (assertNoFailedTransactions
         .&&. dataAtAddress (Scripts.validatorAddress $ Gov.typedValidator params) (maybe False ((== Gov.Law lawv1) . Gov.law) . listToMaybe ))
         (doVoting 5 5 1)
