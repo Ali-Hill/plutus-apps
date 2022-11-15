@@ -19,9 +19,8 @@ module Spec.Governance(tests, doVoting,
                                 tf,
                                 testTree,
                                 prop_Gov,
-                                   prop_finishGovernance, prop_NoLockedFunds
-                                   -- ,check_propGovernanceWithCoverage
-                                   ) where
+                                   prop_finishGovernance, prop_NoLockedFunds,
+                                   check_propGovernanceWithCoverage ) where
 
 --import Control.Lens (view)
 import Control.Lens hiding (both, elements)
@@ -29,7 +28,7 @@ import Control.Lens hiding (both, elements)
 import Data.Foldable (traverse_)
 import Data.Maybe (listToMaybe)
 
-import Ledger hiding (increaseTransactionLimits)
+import Ledger
 import Ledger.TimeSlot qualified as TimeSlot
 import Ledger.Typed.Scripts qualified as Scripts
 import Wallet.Emulator qualified as EM
@@ -235,7 +234,7 @@ tokens = zipWith (const (Gov.mkTokenName (Gov.baseTokenName params))) (Gov.initi
 baseName :: Ledger.TokenName
 baseName = "TestLawToken"
 
--- | A governance contract that requires 5 votes out of 10
+-- | A governance contract that requires 6 votes out of 10
 params :: Gov.Params
 params = Gov.Params
     { Gov.initialHolders = EM.mockWalletPaymentPubKeyHash . knownWallet <$> [1..numberOfHolders]
@@ -296,13 +295,11 @@ prop_NoLockedFundsFast :: QC.Property
 prop_NoLockedFundsFast = checkNoLockedFundsProofFast noLockProof
 
 
-{- coverage breaks the contract
 check_propGovernanceWithCoverage :: IO ()
 check_propGovernanceWithCoverage = do
   cr <- quickCheckWithCoverage QC.stdArgs (set coverageIndex Gov.covIdx $ defaultCoverageOptions) $ \covopts ->
     QC.withMaxSuccess 100 $ propRunActionsWithOptions @GovernanceModel defaultCheckOptionsContractModel covopts (const (pure True))
   writeCoverageReport "Governance" cr
--}
 
 ------------------------------------------------------------
 
@@ -310,23 +307,22 @@ check_propGovernanceWithCoverage = do
 tests :: TestTree
 tests =
     testGroup "governance tests"
-    [ checkPredicateOptions (defaultCheckOptions & increaseTransactionLimits) "vote all in favor, 2 rounds - SUCCESS"
+    [ checkPredicate "vote all in favor, 2 rounds - SUCCESS"
         (assertNoFailedTransactions
         .&&. dataAtAddress (Scripts.validatorAddress $ Gov.typedValidator params) (maybe False ((== Gov.Law lawv3) . Gov.law) . listToMaybe))
         (doVoting 10 0 2)
 
-    , checkPredicateOptions (defaultCheckOptions & increaseTransactionLimits) "vote 60/40, accepted - SUCCESS"
+    , checkPredicate "vote 60/40, accepted - SUCCESS"
         (assertNoFailedTransactions
         .&&. dataAtAddress (Scripts.validatorAddress $ Gov.typedValidator params) (maybe False ((== Gov.Law lawv2) . Gov.law) . listToMaybe))
         (doVoting 6 4 1)
 
-    , checkPredicateOptions (defaultCheckOptions & increaseTransactionLimits) "vote 50/50, rejected - SUCCESS"
+    , checkPredicate "vote 50/50, rejected - SUCCESS"
         (assertNoFailedTransactions
         .&&. dataAtAddress (Scripts.validatorAddress $ Gov.typedValidator params) (maybe False ((== Gov.Law lawv1) . Gov.law) . listToMaybe ))
         (doVoting 5 5 1)
 
-    -- TODO: turn this on again when reproducibility issue in core is fixed
-    -- , goldenPir "test/Spec/governance.pir" $$(PlutusTx.compile [|| Gov.mkValidator ||])
+    , goldenPir "test/Spec/governance.pir" $$(PlutusTx.compile [|| Gov.mkValidator ||])
     , HUnit.testCase "script size is re-asonable"
                      ( reasonable (Scripts.validatorScript $ Gov.typedValidator params)
                                   23000
