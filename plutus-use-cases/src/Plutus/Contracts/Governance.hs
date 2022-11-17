@@ -194,7 +194,7 @@ transition Params{..} State{ stateData = s, stateValue} i = case (s, i) of
             -- @
             --   Interval (LowerBound NegInf True) (Interval.strictUpperBound $ votingDeadline p)
             -- @
-            -- See Note [Validity Interval's upper bound]
+            -- See Note [Validity Interval's upper bound
             validityTimeRange = Interval.to (votingDeadline p - 2)
             constraints = ownsVotingToken mph tokenName
                         <> Constraints.mustValidateIn validityTimeRange
@@ -230,44 +230,13 @@ contract params = forever $ mapError (review _GovError) endpoints where
     checkLaw = endpoint @"check-law" $ \l -> do
                 maybeState <- SM.getOnChainState theClient
                 case maybeState of
-                        -- Just (SM.OnChainState{SM.ocsTxOut=TypedScriptTxOut{tyTxOutData=(GovState law mph Nothing)}}, _)
                         Nothing
                             -> error ()
                         Just (SM.getStateData -> (GovState law mph Nothing), _)
-                            -> do if l == getLaw (GovState law mph Nothing) then void $ SM.runStep theClient $ Check else error ()
+                            -> do if l == getLaw (GovState law mph Nothing) then return () else error ()
                         Just (SM.getStateData -> (GovState law mph (Just (Voting p oldMap))), _)
-                            -> do if l == getLaw (GovState law mph Nothing) then void $ SM.runStep theClient $ Check else error () --
-                                    -- void $ SM.runStep theClient $ Check -- error ()
+                            -> error ()
                         _ -> do return ()
-                                -- changed runStep void $ SM.runStep theClient $ Check to return ()
-
-               {-
-                case maybeState of
-                        -- Just (SM.OnChainState{SM.ocsTxOut=TypedScriptTxOut{tyTxOutData=(GovState law mph Nothing)}}, _)
-                        Nothing
-                            -> error ()
-                        Just (SM.OnChainState{SM.ocsTxOut=TypedScriptTxOut{tyTxOutData=(GovState law mph Nothing)}}, _)
-                            -> if l == getLaw (GovState law mph Nothing) then void $ SM.runStep theClient $ Check else error ()
-                        Just (SM.OnChainState{SM.ocsTxOut=TypedScriptTxOut{tyTxOutData=(GovState law mph (Just (Voting p oldMap)))}}, _)
-                            -> if l == getLaw (GovState law mph Nothing) then void $ SM.runStep theClient $ Check else error () --
-                                    -- void $ SM.runStep theClient $ Check -- error ()
-                        _ -> return ()
-                                -- changed runStep void $ SM.runStep theClient $ Check to return ()
-                    -}
-{-
-    checkLaw = endpoint @"check-law" $ \l -> do
-                SM.getOnChainState theClient >>= \s
-                    -> case s of
-                        -- Just (SM.OnChainState{SM.ocsTxOut=TypedScriptTxOut{tyTxOutData=(GovState law mph Nothing)}}, _)
-                        Nothing
-                            -> error ()
-                        Just (SM.OnChainState{SM.ocsTxOut=TypedScriptTxOut{tyTxOutData=(GovState law mph Nothing)}}, _)
-                            -> void $ SM.runStep theClient $ Check
-                        _ -> void $ SM.runStep theClient $ Check
-                        -- void $ SM.runStep theClient $ Check
-                        --void $ SM.runStep theClient $ Check
--}
-    --getOnChainState
 
 -- | The contract for proposing changes to a law.
 proposalContract ::

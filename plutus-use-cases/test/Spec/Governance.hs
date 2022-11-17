@@ -21,6 +21,7 @@ module Spec.Governance(tests, doVoting,
                                 prop_Gov,
                                    prop_finishGovernance, prop_NoLockedFunds
                                    ,check_propGovernanceWithCoverage
+                                   ,prop_Fail
                                    ) where
 
 --import Control.Lens (view)
@@ -301,6 +302,44 @@ check_propGovernanceWithCoverage = do
   cr <- quickCheckWithCoverage QC.stdArgs (set coverageIndex Gov.covIdx $ defaultCoverageOptions) $ \covopts ->
     QC.withMaxSuccess 100 $ propRunActionsWithOptions @GovernanceModel options covopts (const (pure True))
   writeCoverageReport "Governance" cr
+
+failDL :: DL GovernanceModel ()
+failDL = do
+          action $ Init w10
+          action $ NewLaw w9 "lawv3"
+          action $ StartProposal w9 "lawv2" "TestLawToken9" (Slot {getSlot = 1054})
+          action $ AddVote w7 "TestLawToken7" True
+          action $ AddVote w5 "TestLawToken5" True
+          action $ AddVote w10 "TestLawToken10" True
+          action $ AddVote w4 "TestLawToken4" True
+          waitUntilDL 1054
+          action $ AddVote w6 "TestLawToken6" True
+          action $ CheckLaw w8
+
+prop_Fail :: QC.Property
+prop_Fail = QC.withMaxSuccess 1 $ forAllDL failDL prop_Gov
+
+
+
+{-
+fail :: DL EscrowModel ()
+fail = do
+          action $ Init w10
+          action $ NewLaw w9 "lawv3"
+          action $ Pay w2 val
+          action $ Pay w3 val
+          action $ Redeem w4
+ [Init (Wallet 10),
+  NewLaw (Wallet 9) "lawv3",
+  StartProposal (Wallet 9) "lawv2" "TestLawToken9" (Slot {getSlot = 1054}),
+  AddVote (Wallet 7) "TestLawToken7" True,
+  AddVote (Wallet 5) "TestLawToken5" True,
+  AddVote (Wallet 10) "TestLawToken10" True,
+  AddVote (Wallet 4) "TestLawToken4" True,
+  WaitUntil (Slot {getSlot = 1054}),
+  AddVote (Wallet 6) "TestLawToken6" True,
+  CheckLaw (Wallet 8)]
+-}
 
 ------------------------------------------------------------
 
