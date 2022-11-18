@@ -314,7 +314,7 @@ failDL = do
           action $ AddVote w4 "TestLawToken4" True
           waitUntilDL 1054
           action $ AddVote w6 "TestLawToken6" True
-          action $ CheckLaw w8
+          --action $ CheckLaw w8
 
 prop_Fail :: QC.Property
 prop_Fail = QC.withMaxSuccess 1 $ forAllDL failDL prop_Gov

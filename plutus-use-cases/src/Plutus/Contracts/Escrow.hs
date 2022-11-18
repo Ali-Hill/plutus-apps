@@ -55,9 +55,7 @@ import Plutus.V1.Ledger.Api (ScriptContext (..), TxInfo (..))
 import PlutusTx qualified
 import PlutusTx.Code
 import PlutusTx.Coverage
-import PlutusTx.Prelude (AdditiveGroup ((-)), AdditiveSemigroup ((+)), Bool (False), Either (..), Eq ((==)),
-                         Monoid (mempty), Ord ((>=)), all, return, snd, traceIfFalse, ($), (&&), (.), (<$>), (>>),
-                         (>>=))
+import PlutusTx.Prelude hiding (Applicative (..), Semigroup (..), check, foldMap)
 
 import Ledger (POSIXTime, PaymentPubKeyHash (unPaymentPubKeyHash), TxId, getCardanoTxId, interval, scriptOutputsAt,
                txSignedBy, valuePaidTo)
