@@ -22,6 +22,7 @@ module Spec.Governance(tests, doVoting,
                                    prop_finishGovernance, prop_NoLockedFunds
                                    ,check_propGovernanceWithCoverage
                                    ,prop_Fail
+                                   ,prop_Fail2
                                    ) where
 
 --import Control.Lens (view)
@@ -73,7 +74,7 @@ data GovernanceModel = GovernanceModel { _state        :: (BuiltinByteString, Bo
                                        , _proposedLaw  :: BuiltinByteString
                                       } deriving (Eq, Show, Data)
 
-data Phase = Initial | Establishing | Proposing | Voting | Finish deriving (Eq, Show, Data)
+data Phase = Initial | Establishing | Proposing | Voting | Tallying | Finish deriving (Eq, Show, Data)
 
 makeLenses ''GovernanceModel
 
@@ -87,6 +88,7 @@ instance ContractModel GovernanceModel where
                           | AddVote Wallet Ledger.TokenName Bool
                           | StartProposal Wallet BuiltinByteString TokenName Slot
                           | CheckLaw Wallet
+                          | Tally Wallet
     deriving (Eq, Show, Data)
 
   data ContractInstanceKey GovernanceModel w s e params where
@@ -131,6 +133,8 @@ instance ContractModel GovernanceModel where
     CheckLaw w    -> do
       Trace.callEndpoint @"check-law" (h $ GovH w) (fst (s ^. contractState . state))
       delay 1
+    Tally w -> do
+      delay 1
 
   nextState a = case a of
     Init w -> do
@@ -160,10 +164,13 @@ instance ContractModel GovernanceModel where
       endSlot .= slot
       targets .= Map.empty
       curSlot <- viewModelState currentSlot
-      when (curSlot < slot) $ phase .= Voting
+      when (curSlot <= slot) $ phase .= Voting
       wait 1
     CheckLaw w -> do
       phase .= Proposing
+      wait 1
+    Tally w -> do
+      phase .= Finish
       wait 1
 
   nextReactiveState slot = do
@@ -171,10 +178,12 @@ instance ContractModel GovernanceModel where
     s <- viewContractState phase
     votes <- (viewContractState targets)
     pLaw <- (viewContractState proposedLaw)
-    when ((slot > deadline) && (s == Voting)) $ do
-      phase .= Finish
+    when ((slot >= deadline) && (s == Voting)) $ do
       let Sum ayes = foldMap (\b -> Sum $ if b then 1 else 0) votes
       when (ayes >= 5) $ state .= (pLaw, True)
+      phase .= Tallying
+
+
 
 
   initialState = GovernanceModel { _state = ("" , False)
@@ -193,6 +202,8 @@ instance ContractModel GovernanceModel where
       = StartProposal <$> QC.elements testWallets <*> QC.elements laws <*> QC.elements tokens <*> (Slot . QC.getPositive <$> QC.scale (*10) QC.arbitrary)
     | s ^.contractState . phase == Finish
       = CheckLaw <$> QC.elements testWallets
+    | s ^.contractState . phase == Tallying
+      = Tally <$> QC.elements testWallets
     | otherwise
       =   AddVote <$> QC.elements testWallets <*> QC.elements tokens <*> QC.choose (True, False)
 
@@ -208,6 +219,7 @@ instance ContractModel GovernanceModel where
     StartProposal w l t slot -> currentPhase == Proposing
                                 && ownsVotingToken' w t (s ^. contractState . walletTokens)
                                 -- && viewModelState currentSlot < slot Note: I thought I would be able to do this
+    Tally w -> currentPhase == Tallying
     CheckLaw w -> currentPhase == Finish
                                 -- Gov.ownsVotingToken (Scripts.forwardingMintingPolicyHash (Gov.typedValidator params)) t
                                 -- && snd (s ^. contractState . state) == False
@@ -300,7 +312,7 @@ prop_NoLockedFundsFast = checkNoLockedFundsProofFast noLockProof
 check_propGovernanceWithCoverage :: IO ()
 check_propGovernanceWithCoverage = do
   cr <- quickCheckWithCoverage QC.stdArgs (set coverageIndex Gov.covIdx $ defaultCoverageOptions) $ \covopts ->
-    QC.withMaxSuccess 100 $ propRunActionsWithOptions @GovernanceModel options covopts (const (pure True))
+    QC.withMaxSuccess 1000 $ propRunActionsWithOptions @GovernanceModel options covopts (const (pure True))
   writeCoverageReport "Governance" cr
 
 failDL :: DL GovernanceModel ()
@@ -312,12 +324,80 @@ failDL = do
           action $ AddVote w5 "TestLawToken5" True
           action $ AddVote w10 "TestLawToken10" True
           action $ AddVote w4 "TestLawToken4" True
-          waitUntilDL 1054
+          waitUntilDL 1053
           action $ AddVote w6 "TestLawToken6" True
+          action $ Tally w8
           action $ CheckLaw w8
+
+-- fixed by changing next reactive state to (slot >= deadline) from (slot > deadline)
+-- then adding a tally action to allow the proposal contract to change to the right state
+
+failDL2 :: DL GovernanceModel ()
+failDL2 = do
+          action $ Init w6
+          action $ NewLaw w3 "lawv1"
+          waitUntilDL 127
+          action $ StartProposal w7 "lawv1" "TestLawToken7" (Slot {getSlot = 127})
+          action $ StartProposal w9 "lawv2" "TestLawToken9" (Slot {getSlot = 968})
+          action $ AddVote w2 "TestLawToken2" True
+          action $ AddVote w5 "TestLawToken5" True
+          action $ AddVote w7 "TestLawToken7" True
+          action $ AddVote w6 "TestLawToken6" True
+          action $ AddVote w4 "TestLawToken4" True
+          waitUntilDL 968
+          action $ Tally w3
+          action $ CheckLaw w3
+
+--fixed by changing
+-- when (curSlot < slot) $ phase .= Voting
+-- to
+-- when (curSlot <= slot) $ phase .= Voting
 
 prop_Fail :: QC.Property
 prop_Fail = QC.withMaxSuccess 1 $ forAllDL failDL prop_Gov
+
+prop_Fail2 :: QC.Property
+prop_Fail2 = QC.withMaxSuccess 1 $ forAllDL failDL2 prop_Gov
+
+{-
+ [Init (Wallet 8),
+  NewLaw (Wallet 10) "lawv1",
+  StartProposal (Wallet 10) "lawv3" "TestLawToken10" (Slot {getSlot = 133}),
+  AddVote (Wallet 3) "TestLawToken3" True,
+  AddVote (Wallet 7) "TestLawToken7" True,
+  AddVote (Wallet 1) "TestLawToken1" True,
+  AddVote (Wallet 6) "TestLawToken6" True,
+  AddVote (Wallet 8) "TestLawToken8" True,
+  WaitUntil (Slot {getSlot = 134}),
+  CheckLaw (Wallet 2)]
+-}
+
+
+{-
+ [Init (Wallet 6),
+  NewLaw (Wallet 3) "lawv1",
+  WaitUntil (Slot {getSlot = 127}),
+  StartProposal (Wallet 7) "lawv1" "TestLawToken7" (Slot {getSlot = 127}),
+  StartProposal (Wallet 9) "lawv2" "TestLawToken9" (Slot {getSlot = 968}),
+  AddVote (Wallet 2) "TestLawToken2" True,
+  AddVote (Wallet 5) "TestLawToken5" True,
+  AddVote (Wallet 7) "TestLawToken7" True,
+  AddVote (Wallet 6) "TestLawToken6" True,
+  AddVote (Wallet 4) "TestLawToken4" True,
+  WaitUntil (Slot {getSlot = 968}),
+  Tally (Wallet 3),
+  CheckLaw (Wallet 3)]
+-}
+
+
+
+{-
+ [Init (Wallet 8),
+  NewLaw (Wallet 6) "lawv2",
+  StartProposal (Wallet 3) "lawv1" "TestLawToken3" (Slot {getSlot = 285}),
+  WaitUntil (Slot {getSlot = 285}),
+  CheckLaw (Wallet 7)]
+-}
 
 
 

@@ -71,7 +71,7 @@
    194    <span style=background-color:white;color:black >            -- @</span><span style=background-color:lightgray;color:gray ></span>
    195    <span style=background-color:white;color:black >            --   Interval (LowerBound NegInf True) (Interval.strictUpperBound $ votingDeadline p)</span><span style=background-color:lightgray;color:gray ></span>
    196    <span style=background-color:white;color:black >            -- @</span><span style=background-color:lightgray;color:gray ></span>
-   197    <span style=background-color:white;color:black >            -- See Note [Validity Interval&#39;s upper bound]</span><span style=background-color:lightgray;color:gray ></span>
+   197    <span style=background-color:white;color:black >            -- See Note [Validity Interval&#39;s upper bound</span><span style=background-color:lightgray;color:gray ></span>
    198    <span style=background-color:white;color:black >            </span><span style=background-color:white;color:black >validityTimeRange = </span><span style=background-color:white;color:black >Interval.to </span><span style=background-color:white;color:black >(</span><span style=background-color:white;color:black >votingDeadline p </span><span style=background-color:white;color:black >- </span><span style=background-color:white;color:black >2)</span><span style=background-color:white;color:black ></span><span style=background-color:white;color:black ></span><span style=background-color:lightgray;color:gray ></span>
    199    <span style=background-color:white;color:black >            </span><span style=background-color:white;color:black >constraints = </span><span style=background-color:white;color:black >ownsVotingToken </span><span style=background-color:white;color:black >mph </span><span style=background-color:white;color:black >tokenName</span><span style=background-color:white;color:black ></span><span style=background-color:lightgray;color:gray ></span>
    200    <span style=background-color:white;color:black >                        &lt;&gt; </span><span style=background-color:white;color:black >Constraints.mustValidateIn </span><span style=background-color:white;color:black >validityTimeRange</span><span style=background-color:white;color:black ></span><span style=background-color:lightgray;color:gray ></span>
@@ -90,22 +90,22 @@
 .
 .
 .
-   285    <span style=background-color:lightgray;color:gray ></span>
-   286    <span style=background-color:lightgray;color:gray >        logInfo @Text &quot;Voting finished. Counting the votes.&quot;</span>
-   287    <span style=background-color:lightgray;color:gray >        void $ SM.runStep theClient FinishVoting</span>
-   288    <span style=background-color:lightgray;color:gray ></span>
-   289    <span style=background-color:lightgray;color:gray >PlutusTx.makeLift &#39;&#39;Params</span>
-   290    <span style=background-color:white;color:black >PlutusTx.unstableMakeIsData &#39;&#39;Law</span><span style=background-color:lightgray;color:gray ></span>
-   291    <span style=background-color:lightgray;color:gray >PlutusTx.makeLift &#39;&#39;Law</span>
-   292    <span style=background-color:white;color:black >PlutusTx.unstableMakeIsData &#39;&#39;Proposal</span><span style=background-color:lightgray;color:gray ></span>
-   293    <span style=background-color:lightgray;color:gray >PlutusTx.makeLift &#39;&#39;Proposal</span>
-   294    <span style=background-color:white;color:black >PlutusTx.unstableMakeIsData &#39;&#39;Voting</span><span style=background-color:lightgray;color:gray ></span>
-   295    <span style=background-color:lightgray;color:gray >PlutusTx.makeLift &#39;&#39;Voting</span>
-   296    <span style=background-color:white;color:black >PlutusTx.unstableMakeIsData &#39;&#39;GovState</span><span style=background-color:lightgray;color:gray ></span>
-   297    <span style=background-color:lightgray;color:gray >PlutusTx.makeLift &#39;&#39;GovState</span>
-   298    <span style=background-color:lightgray;color:gray >PlutusTx.unstableMakeIsData &#39;&#39;GovInput</span>
-   299    <span style=background-color:lightgray;color:gray >PlutusTx.makeLift &#39;&#39;GovInput</span>
-   300    <span style=background-color:lightgray;color:gray ></span>
-   301    <span style=background-color:lightgray;color:gray >covIdx :: CoverageIndex</span>
-   302    <span style=background-color:lightgray;color:gray >covIdx = getCovIdx $$(</span><span style=background-color:black;color:orangered >PlutusTx.compile [|| mkValidator ||])</span><span style=background-color:lightgray;color:gray ></span>
+   254    <span style=background-color:lightgray;color:gray ></span>
+   255    <span style=background-color:lightgray;color:gray >        logInfo @Text &quot;Voting finished. Counting the votes.&quot;</span>
+   256    <span style=background-color:lightgray;color:gray >        void $ SM.runStep theClient FinishVoting</span>
+   257    <span style=background-color:lightgray;color:gray ></span>
+   258    <span style=background-color:lightgray;color:gray >PlutusTx.makeLift &#39;&#39;Params</span>
+   259    <span style=background-color:white;color:black >PlutusTx.unstableMakeIsData &#39;&#39;Law</span><span style=background-color:lightgray;color:gray ></span>
+   260    <span style=background-color:lightgray;color:gray >PlutusTx.makeLift &#39;&#39;Law</span>
+   261    <span style=background-color:white;color:black >PlutusTx.unstableMakeIsData &#39;&#39;Proposal</span><span style=background-color:lightgray;color:gray ></span>
+   262    <span style=background-color:lightgray;color:gray >PlutusTx.makeLift &#39;&#39;Proposal</span>
+   263    <span style=background-color:white;color:black >PlutusTx.unstableMakeIsData &#39;&#39;Voting</span><span style=background-color:lightgray;color:gray ></span>
+   264    <span style=background-color:lightgray;color:gray >PlutusTx.makeLift &#39;&#39;Voting</span>
+   265    <span style=background-color:white;color:black >PlutusTx.unstableMakeIsData &#39;&#39;GovState</span><span style=background-color:lightgray;color:gray ></span>
+   266    <span style=background-color:lightgray;color:gray >PlutusTx.makeLift &#39;&#39;GovState</span>
+   267    <span style=background-color:lightgray;color:gray >PlutusTx.unstableMakeIsData &#39;&#39;GovInput</span>
+   268    <span style=background-color:lightgray;color:gray >PlutusTx.makeLift &#39;&#39;GovInput</span>
+   269    <span style=background-color:lightgray;color:gray ></span>
+   270    <span style=background-color:lightgray;color:gray >covIdx :: CoverageIndex</span>
+   271    <span style=background-color:lightgray;color:gray >covIdx = getCovIdx $$(</span><span style=background-color:black;color:orangered >PlutusTx.compile [|| mkValidator ||])</span><span style=background-color:lightgray;color:gray ></span>
 </pre></body>
