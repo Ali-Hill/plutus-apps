@@ -23,6 +23,8 @@ module Spec.Governance(tests, doVoting,
                                    ,check_propGovernanceWithCoverage
                                    ,prop_Fail
                                    ,prop_Fail2
+                                   ,prop_FinishFast
+                                   ,prop_NoLockedFundsFast
                                    ) where
 
 --import Control.Lens (view)
@@ -40,8 +42,8 @@ import Plutus.Contract.Test
 import Plutus.Contracts.Governance qualified as Gov
 import Plutus.Trace.Emulator (EmulatorTrace)
 import Plutus.Trace.Emulator qualified as Trace
-import PlutusTx qualified
-import PlutusTx.Prelude (BuiltinByteString, fromBuiltin)
+-- import PlutusTx qualified
+import PlutusTx.Prelude (BuiltinByteString)
 
 import Test.Tasty (TestTree, defaultMain, testGroup)
 import Test.Tasty.HUnit qualified as HUnit
@@ -53,14 +55,12 @@ import Data.Default (Default (..))
 import Data.Map (Map)
 import Data.Map qualified as Map
 import Ledger.Ada qualified as Ada
-import Plutus.Contract (Contract, EmptySchema, selectList)
+import Plutus.Contract (EmptySchema)
 import Plutus.Contract.Test.ContractModel
 import Plutus.Contract.Test.Coverage
-import PlutusTx.AssocMap qualified as AssocMap
 import Test.QuickCheck qualified as QC
 
 import Data.Semigroup (Sum (..))
-import Test.QuickCheck (sublistOf)
 
 
 options :: CheckOptions
@@ -84,7 +84,7 @@ deriving instance Eq (ContractInstanceKey GovernanceModel w s e params)
 deriving instance Show (ContractInstanceKey GovernanceModel w s e params)
 
 instance ContractModel GovernanceModel where
-  data Action GovernanceModel = Init ([Wallet], Int)
+  data Action GovernanceModel = Init Wallet --might not need wallet here
                           | NewLaw Wallet BuiltinByteString
                           | AddVote Wallet Ledger.TokenName Bool
                           | StartProposal Wallet BuiltinByteString TokenName Slot
@@ -93,7 +93,7 @@ instance ContractModel GovernanceModel where
     deriving (Eq, Show, Data)
 
   data ContractInstanceKey GovernanceModel w s e params where
-      GovH  :: Wallet -> ContractInstanceKey GovernanceModel () Gov.Schema Gov.GovError Gov.Params
+      GovH  :: Wallet -> ContractInstanceKey GovernanceModel () Gov.Schema Gov.GovError ()
       ProposalH :: Wallet -> ContractInstanceKey GovernanceModel () EmptySchema Gov.GovError Gov.Proposal
 
   --start a contract instance in each of the test wallets (with contract parameter ()),
@@ -106,11 +106,11 @@ instance ContractModel GovernanceModel where
 
 
   -- tells the framework which contract to run for each key
-  instanceContract _ GovH{} params = Gov.contract @Gov.GovError params
+  instanceContract _ GovH{} _      = Gov.contract @Gov.GovError params
   instanceContract _ ProposalH{} p = Gov.proposalContract @Gov.GovError params p
 
-  startInstances _ (Init (ws , v)) =
-    [StartContract (GovH w) (genParams (ws , v)) | w <- ws]
+  startInstances _ (Init _) =
+    [StartContract (GovH w) () | w <- testWallets]
   startInstances _ (StartProposal w l t slot) =
     [StartContract (ProposalH w)
               Gov.Proposal { Gov.newLaw = Gov.Law l
@@ -134,20 +134,20 @@ instance ContractModel GovernanceModel where
     CheckLaw w    -> do
       Trace.callEndpoint @"check-law" (h $ GovH w) (fst (s ^. contractState . state))
       delay 1
-    Tally w -> do
+    Tally _ -> do
       delay 1
 
   nextState a = case a of
-    Init w -> do
+    Init _ -> do
       phase .= Establishing
     NewLaw w l -> do
         -- will all wallets not get 2 ada and a token
         let mph = Scripts.forwardingMintingPolicyHash (Gov.typedValidator params)
 
-        walletTokens .= Map.fromList [(w , t) | w <- testWallets | t <- tokens]
+        walletTokens .= Map.fromList [(w' , t) | w' <- testWallets | t <- tokens]
 
-        sequence_ [deposit w $ Ada.toValue Ledger.minAdaTxOut | w <- testWallets]
-        sequence_ [deposit w $ Gov.votingValue mph t | w <- testWallets | t <- tokens]
+        sequence_ [deposit w' $ Ada.toValue Ledger.minAdaTxOut | w' <- testWallets]
+        sequence_ [deposit w' $ Gov.votingValue mph t | w' <- testWallets | t <- tokens]
 
         -- the current wallet loses the minimum ada * (no of wallets + 1) since we deposit ada to all wallets
         withdraw w $ Ada.toValue (Ledger.minAdaTxOut * (fromInteger $ numberOfHolders + 1))
@@ -155,22 +155,22 @@ instance ContractModel GovernanceModel where
         state .= (l , True)
         phase .= Proposing
         wait 2
-    AddVote w t v -> do
+    AddVote _ t v -> do
         -- adds vote but there is no change in wallet.
         oldMap <- viewContractState targets
         targets .= Map.insert t v oldMap
         wait 1
-    StartProposal w l t slot  -> do
+    StartProposal _ l _ slot  -> do
       proposedLaw .= l
       endSlot .= slot
       targets .= Map.empty
       curSlot <- viewModelState currentSlot
       when (curSlot <= slot) $ phase .= Voting
       wait 1
-    CheckLaw w -> do
+    CheckLaw _ -> do
       phase .= Proposing
       wait 1
-    Tally w -> do
+    Tally _ -> do
       phase .= Finish
       wait 1
 
@@ -180,11 +180,9 @@ instance ContractModel GovernanceModel where
     votes <- (viewContractState targets)
     pLaw <- (viewContractState proposedLaw)
     when ((slot >= deadline) && (s == Voting)) $ do
-      let Sum ayes = foldMap (\b -> Sum $ if b then 1 else 0) votes
+      let Sum ayes = foldMap (\b -> Sum $ if b then 1 else (0 :: Int)) votes
       when (ayes >= 5) $ state .= (pLaw, True)
       phase .= Tallying
-
-
 
 
   initialState = GovernanceModel { _state = ("" , False)
@@ -192,11 +190,12 @@ instance ContractModel GovernanceModel where
                              , _walletTokens = Map.empty
                              , _endSlot = 0
                              , _phase = Initial
+                             , _proposedLaw = ""
                              }
 
   arbitraryAction s
     | s ^.contractState . phase == Initial
-      = Init <$> arbitraryTargets
+      = Init <$> QC.elements testWallets
     | s ^.contractState . phase == Establishing
       = NewLaw <$> QC.elements testWallets <*> QC.elements laws
     | s ^.contractState . phase == Proposing
@@ -213,15 +212,15 @@ instance ContractModel GovernanceModel where
 
   precondition s a = case a of
     Init _ -> currentPhase == Initial
-    NewLaw w l -> currentPhase /= Initial
+    NewLaw _ _ -> currentPhase /= Initial
                   && snd (s ^. contractState . state) == False
-    AddVote w t v  -> currentPhase == Voting
+    AddVote w t _  -> currentPhase == Voting
                       && ownsVotingToken' w t (s ^. contractState . walletTokens)
-    StartProposal w l t slot -> currentPhase == Proposing
+    StartProposal w _ t _ -> currentPhase == Proposing
                                 && ownsVotingToken' w t (s ^. contractState . walletTokens)
                                 -- && viewModelState currentSlot < slot Note: I thought I would be able to do this
-    Tally w -> currentPhase == Tallying
-    CheckLaw w -> currentPhase == Finish
+    Tally _ -> currentPhase == Tallying
+    CheckLaw _ -> currentPhase == Finish
                                 -- Gov.ownsVotingToken (Scripts.forwardingMintingPolicyHash (Gov.typedValidator params)) t
                                 -- && snd (s ^. contractState . state) == False
     where currentPhase = s ^. contractState . phase
@@ -236,9 +235,6 @@ ownsVotingToken' w t m = case Map.lookup w m of
 laws :: [ BuiltinByteString ]
 laws = ["lawv1", "lawv2", "lawv3"]
 
-tokenExample :: [ Ledger.TokenName ]
-tokenExample = ["token1", "token2", "token3"]
-
 -- this sets the number of wallets
 numberOfHolders :: Integer
 numberOfHolders = 10
@@ -246,20 +242,15 @@ numberOfHolders = 10
 tokens :: [TokenName]
 tokens = zipWith (const (Gov.mkTokenName (Gov.baseTokenName params))) (Gov.initialHolders params) [1..]
 
+
 baseName :: Ledger.TokenName
 baseName = "TestLawToken"
 
-arbitraryTargets :: QC.Gen ([Wallet] , Int)
-arbitraryTargets = do
-  ws <- sublistOf testWallets
-  v <- QC.choose (1 , length ws)
-  return (ws , v)
-
 -- | A governance contract that requires 5 votes out of 10
-genParams :: ([Wallet] , Int) -> Gov.Params
-genParams (ws, v) = Gov.Params
-    { Gov.initialHolders = EM.mockWalletPaymentPubKeyHash <$> ws
-    , Gov.requiredVotes = toInteger v
+params :: Gov.Params
+params = Gov.Params
+    { Gov.initialHolders = EM.mockWalletPaymentPubKeyHash . knownWallet <$> [1..numberOfHolders]
+    , Gov.requiredVotes = 5
     , Gov.baseTokenName = baseName
     }
 
@@ -280,16 +271,16 @@ finishingStrategy = do
     -- contribs <- viewContractState contributions
     -- monitor (tabulate "Refunded wallets" [show . Map.size $ contribs])
     slot     <- viewModelState currentSlot
-    phase <- viewContractState phase
-    monitor $ QC.tabulate "Phase" [show phase]
-    when (phase == Proposing) $ do
+    currentPhase <- viewContractState phase
+    monitor $ QC.tabulate "Phase" [show currentPhase]
+    when (currentPhase == Proposing) $ do
       action $ StartProposal w1 "lawv1" "TestLawToken1" (slot + 10)
-    when (phase /= Initial && phase /= Establishing) $ do
+    when (currentPhase /= Initial && currentPhase /= Establishing) $ do
       waitUntilDeadline
     --sequence_ [action $ Refund w | w <- testWallets, w `Map.member` contribs]
 
 walletStrategy :: Wallet -> DL GovernanceModel ()
-walletStrategy w = do
+walletStrategy _ = do
     waitUntilDeadline
 
 waitUntilDeadline :: DL GovernanceModel ()
@@ -320,7 +311,6 @@ check_propGovernanceWithCoverage = do
   cr <- quickCheckWithCoverage QC.stdArgs (set coverageIndex Gov.covIdx $ defaultCoverageOptions) $ \covopts ->
     QC.withMaxSuccess 1000 $ propRunActionsWithOptions @GovernanceModel options covopts (const (pure True))
   writeCoverageReport "Governance" cr
-
 
 failDL :: DL GovernanceModel ()
 failDL = do
@@ -430,36 +420,29 @@ fail = do
 
 ------------------------------------------------------------
 
-params2 :: Gov.Params
-params2 = Gov.Params
-    { Gov.initialHolders = EM.mockWalletPaymentPubKeyHash . knownWallet <$> [1..numberOfHolders]
-    , Gov.requiredVotes = 6
-    , Gov.baseTokenName = baseName
-    }
-
 
 tests :: TestTree
 tests =
     testGroup "governance tests"
     [ checkPredicateOptions (defaultCheckOptions & increaseTransactionLimits . increaseTransactionLimits . increaseTransactionLimits . increaseTransactionLimits) "vote all in favor, 2 rounds - SUCCESS"
         (assertNoFailedTransactions
-        .&&. dataAtAddress (Scripts.validatorAddress $ Gov.typedValidator params2) (maybe False ((== Gov.Law lawv3) . Gov.law) . listToMaybe))
+        .&&. dataAtAddress (Scripts.validatorAddress $ Gov.typedValidator params) (maybe False ((== Gov.Law lawv3) . Gov.law) . listToMaybe))
         (doVoting 10 0 2)
 
     , checkPredicateOptions (defaultCheckOptions & increaseTransactionLimits . increaseTransactionLimits . increaseTransactionLimits . increaseTransactionLimits) "vote 60/40, accepted - SUCCESS"
         (assertNoFailedTransactions
-        .&&. dataAtAddress (Scripts.validatorAddress $ Gov.typedValidator params2) (maybe False ((== Gov.Law lawv2) . Gov.law) . listToMaybe))
+        .&&. dataAtAddress (Scripts.validatorAddress $ Gov.typedValidator params) (maybe False ((== Gov.Law lawv2) . Gov.law) . listToMaybe))
         (doVoting 6 4 1)
 
     , checkPredicateOptions (defaultCheckOptions & increaseTransactionLimits . increaseTransactionLimits . increaseTransactionLimits . increaseTransactionLimits) "vote 50/50, rejected - SUCCESS"
         (assertNoFailedTransactions
-        .&&. dataAtAddress (Scripts.validatorAddress $ Gov.typedValidator params2) (maybe False ((== Gov.Law lawv1) . Gov.law) . listToMaybe ))
+        .&&. dataAtAddress (Scripts.validatorAddress $ Gov.typedValidator params) (maybe False ((== Gov.Law lawv1) . Gov.law) . listToMaybe ))
         (doVoting 5 5 1)
 
     -- TODO: turn this on again when reproducibility issue in core is fixed
     -- , goldenPir "test/Spec/governance.pir" $$(PlutusTx.compile [|| Gov.mkValidator ||])
     , HUnit.testCase "script size is re-asonable"
-                     ( reasonable (Scripts.validatorScript $ Gov.typedValidator params2)
+                     ( reasonable (Scripts.validatorScript $ Gov.typedValidator params)
                                   23000
                      )
     ]
@@ -473,6 +456,7 @@ lawv3 = "Law v3"
 
 -- | Proposal
 -- slot should always be now
+{-
 proposal :: Slot -> TokenName -> BuiltinByteString -> Gov.Proposal
 proposal s t l = Gov.Proposal { Gov.newLaw = Gov.Law l
                         , Gov.votingDeadline = TimeSlot.slotToEndPOSIXTime
@@ -480,7 +464,7 @@ proposal s t l = Gov.Proposal { Gov.newLaw = Gov.Law l
                                                      $ s + 20 --double check what this does
                         , Gov.tokenName = t
                         }
-
+-}
 
 {-
 data Proposal = Proposal
@@ -500,7 +484,7 @@ doVoting :: Int -> Int -> Integer -> EmulatorTrace ()
 doVoting ayes nays rounds = do
     let activate w = (Gov.mkTokenName baseName w,)
                  <$> Trace.activateContractWallet (knownWallet w)
-                                                  (Gov.contract @Gov.GovError params2)
+                                                  (Gov.contract @Gov.GovError params)
     namesAndHandles <- traverse activate [1..numberOfHolders]
     let handle1 = snd (head namesAndHandles)
     let token2 = fst (namesAndHandles !! 1)
@@ -510,7 +494,7 @@ doVoting ayes nays rounds = do
     let votingRound (_, law) = do
             now <- view Trace.currentSlot <$> Trace.chainState
             void $ Trace.activateContractWallet w2
-                (Gov.proposalContract @Gov.GovError params2
+                (Gov.proposalContract @Gov.GovError params
                     Gov.Proposal { Gov.newLaw = law
                                  , Gov.votingDeadline = TimeSlot.slotToEndPOSIXTime slotCfg $ now + 20
                                  , Gov.tokenName = token2
@@ -542,11 +526,3 @@ data EscrowModel = EscrowModel { _contributions :: Map Wallet Value.Value
 
 makeLenses ''EscrowModel
 -}
-
-
-
-
-
-
-
-
