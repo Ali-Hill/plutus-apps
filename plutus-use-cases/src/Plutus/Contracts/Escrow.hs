@@ -43,6 +43,7 @@ module Plutus.Contracts.Escrow(
     , Action(..)
     -- * Coverage
     , covIdx
+    , datumHash
     ) where
 
 import Control.Lens (_1, has, makeClassyPrisms, only, review, view)
