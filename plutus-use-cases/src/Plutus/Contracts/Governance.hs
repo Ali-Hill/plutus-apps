@@ -35,6 +35,7 @@ module Plutus.Contracts.Governance (
     , ownsVotingToken
     -- * Coverage
     , covIdx
+    , covIdx'
     ) where
 
 import Control.Lens (makeClassyPrisms, review)
@@ -54,6 +55,7 @@ import Ledger.Value qualified as Value
 import Plutus.Contract
 import Plutus.Contract.StateMachine (AsSMContractError, State (..), StateMachine (..), Void)
 import Plutus.Contract.StateMachine qualified as SM
+import Plutus.Contract.Test.Coverage.Analysis
 import Plutus.V1.Ledger.Scripts (MintingPolicyHash)
 import PlutusTx qualified
 import PlutusTx.AssocMap qualified as AssocMap
@@ -61,6 +63,7 @@ import PlutusTx.Code
 import PlutusTx.Coverage
 import PlutusTx.Prelude
 import Prelude qualified as Haskell
+
 
 -- $governance
 -- * When the contract starts it produces a number of tokens that represent voting rights.
@@ -268,4 +271,7 @@ PlutusTx.unstableMakeIsData ''GovInput
 PlutusTx.makeLift ''GovInput
 
 covIdx :: CoverageIndex
-covIdx = getCovIdx $$(PlutusTx.compile [|| mkValidator ||])
+covIdx =  getCovIdx $$(PlutusTx.compile [|| mkValidator ||])
+
+covIdx' :: CoverageIndex
+covIdx' = computeRefinedCoverageIndex $$(PlutusTx.compile [|| mkValidator ||])
