@@ -309,7 +309,7 @@ prop_NoLockedFundsFast = checkNoLockedFundsProofFast noLockProof
 check_propGovernanceWithCoverage :: IO ()
 check_propGovernanceWithCoverage = do
   cr <- quickCheckWithCoverage QC.stdArgs (set coverageIndex Gov.covIdx' $ defaultCoverageOptions) $ \covopts ->
-    QC.withMaxSuccess 1000 $ propRunActionsWithOptions @GovernanceModel options covopts (const (pure True))
+    QC.withMaxSuccess 50 $ propRunActionsWithOptions @GovernanceModel options covopts (const (pure True))
   writeCoverageReport "Governance" cr
 
 failDL :: DL GovernanceModel ()

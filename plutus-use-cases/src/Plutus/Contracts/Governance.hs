@@ -237,7 +237,7 @@ contract params = forever $ mapError (review _GovError) endpoints where
                             -> error ()
                         Just (SM.getStateData -> (GovState law mph Nothing), _)
                             -> do if l == getLaw (GovState law mph Nothing) then return () else error ()
-                        Just (SM.getStateData -> (GovState law mph (Just (Voting p oldMap))), _)
+                        Just (SM.getStateData -> (GovState _ _ (Just (Voting _ _))), _)
                             -> error ()
                         _ -> do return ()
 
@@ -274,4 +274,4 @@ covIdx :: CoverageIndex
 covIdx =  getCovIdx $$(PlutusTx.compile [|| mkValidator ||])
 
 covIdx' :: CoverageIndex
-covIdx' = computeRefinedCoverageIndex $$(PlutusTx.compile [|| mkValidator ||])
+covIdx' = computeRefinedCoverageIndex $$(PlutusTx.compile [|| \a b c d -> check (mkValidator a b c d) ||])
