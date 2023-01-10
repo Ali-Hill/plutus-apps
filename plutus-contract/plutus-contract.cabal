@@ -97,7 +97,6 @@ library
     Wallet.API
     Wallet.Effects
     Wallet.Emulator
-    Wallet.Emulator.Chain
     Wallet.Emulator.Error
     Wallet.Emulator.Folds
     Wallet.Emulator.LogMessages
@@ -119,25 +118,31 @@ library
   -- Local components
   --------------------
   build-depends:
+    , cardano-node-emulator      >=1.0.0
     , freer-extras               >=1.0.0
     , plutus-chain-index-core    >=1.0.0
     , plutus-ledger              >=1.0.0
     , plutus-ledger-constraints  >=1.0.0
     , plutus-script-utils        >=1.0.0
+    , plutus-tx-constraints      >=1.0.0
 
   --------------------------
   -- Other IOG dependencies
   --------------------------
   build-depends:
-    , cardano-api            >=1.35
+    , cardano-api             >=1.35
     , cardano-crypto
+    , cardano-crypto-class
     , cardano-ledger-alonzo
+    , cardano-ledger-babbage
     , cardano-ledger-core
+    , cardano-ledger-shelley
     , cardano-wallet-core
-    , plutus-core            >=1.0.0
-    , plutus-ledger-api      >=1.0.0
-    , plutus-tx              >=1.0.0
-    , quickcheck-dynamic
+    , contractmodel
+    , plutus-core             >=1.0.0
+    , plutus-ledger-api       >=1.0.0
+    , plutus-tx               >=1.0.0
+    , quickcheck-dynamic      >=2.0.0
 
   if !(impl(ghcjs) || os(ghcjs))
     build-depends: plutus-tx-plugin >=1.0.0
@@ -155,7 +160,6 @@ library
     , data-default
     , deepseq
     , directory
-    , either
     , filepath
     , flat
     , foldl
@@ -179,11 +183,11 @@ library
     , servant
     , stm
     , streaming
+    , strict-containers
     , template-haskell
     , text
     , text-class
     , transformers
-    , uniplate
     , unordered-containers
     , uuid
 
@@ -195,8 +199,9 @@ library
       Plutus.Contract.Test
       Plutus.Contract.Test.ContractModel
       Plutus.Contract.Test.ContractModel.CrashTolerance
-      Plutus.Contract.Test.ContractModel.DoubleSatisfaction
+      Plutus.Contract.Test.ContractModel.Interface
       Plutus.Contract.Test.ContractModel.Internal
+      Plutus.Contract.Test.ContractModel.Internal.ContractInstance
       Plutus.Contract.Test.ContractModel.Symbolics
       Plutus.Contract.Test.Coverage
       Plutus.Contract.Test.Coverage.Analysis
@@ -236,6 +241,7 @@ test-suite plutus-contract-test
   other-modules:
     Spec.Balancing
     Spec.Contract
+    Spec.Contract.Error
     Spec.Contract.Tx.Constraints.MustIncludeDatum
     Spec.Contract.Tx.Constraints.MustMint
     Spec.Contract.Tx.Constraints.MustPayToOtherScript
@@ -246,6 +252,7 @@ test-suite plutus-contract-test
     Spec.Contract.Tx.Constraints.MustSpendAtLeast
     Spec.Contract.Tx.Constraints.MustSpendPubKeyOutput
     Spec.Contract.Tx.Constraints.MustSpendScriptOutput
+    Spec.Contract.Tx.Constraints.MustUseOutputAsCollateral
     Spec.Contract.Tx.Constraints.RequiredSigner
     Spec.Contract.Tx.Constraints.Spec
     Spec.Contract.Tx.Constraints.TimeValidity
@@ -262,6 +269,7 @@ test-suite plutus-contract-test
   -- Local components
   --------------------
   build-depends:
+    , cardano-node-emulator      >=1.0.0
     , freer-extras               >=1.0.0
     , plutus-chain-index-core    >=1.0.0
     , plutus-contract            >=1.0.0
@@ -275,9 +283,11 @@ test-suite plutus-contract-test
   --------------------------
   build-depends:
     , cardano-api:{cardano-api, gen}  >=1.35
+    , contractmodel
     , plutus-core                     >=1.0.0
     , plutus-ledger-api               >=1.0.0
     , plutus-tx                       >=1.0.0
+    , quickcheck-dynamic              >=2.0.0
 
   if !(impl(ghcjs) || os(ghcjs))
     build-depends: plutus-tx-plugin >=1.0.0

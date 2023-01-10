@@ -1,6 +1,6 @@
 cabal-version:   3.0
 name:            plutus-ledger
-version:         1.0.0
+version:         1.0.0.0
 license:         Apache-2.0
 license-files:
   LICENSE
@@ -69,17 +69,13 @@ library
     Ledger.Crypto
     Ledger.Crypto.Orphans
     Ledger.DCert.Orphans
-    Ledger.Fee
-    Ledger.Generators
     Ledger.Index
     Ledger.Index.Internal
     Ledger.Orphans
-    Ledger.Params
     Ledger.Scripts
     Ledger.Scripts.Orphans
     Ledger.Slot
     Ledger.Test
-    Ledger.TimeSlot
     Ledger.Tokens
     Ledger.Tx
     Ledger.Tx.CardanoAPI
@@ -93,7 +89,6 @@ library
     Ledger.Typed.Scripts.Validators
     Ledger.Typed.Tx
     Ledger.Typed.TypeUtils
-    Ledger.Validation
     Ledger.Value
     Ledger.Value.Orphans
     Prettyprinter.Extras
@@ -123,7 +118,7 @@ library
   -- Other IOG dependencies
   --------------------------
   build-depends:
-    , cardano-api:{cardano-api, gen}  >=1.35
+    , cardano-api                  >=1.35
     , cardano-binary
     , cardano-crypto
     , cardano-crypto-class
@@ -135,30 +130,29 @@ library
     , cardano-ledger-shelley-ma
     , cardano-slotting
     , iohk-monitoring
-    , ouroboros-consensus
     , ouroboros-consensus-shelley
-    , plutus-core                     >=1.0.0
-    , plutus-ledger-api               >=1.0.0
-    , plutus-tx                       >=1.0.0
+    , plutus-core                  >=1.0.0
+    , plutus-ledger-api            >=1.0.0
+    , plutus-tx                    >=1.0.0
 
   ------------------------
   -- Non-IOG dependencies
   ------------------------
+  -- TODO: remove the contractmodel dependency once the dependency on cardano-node
+  -- has been bumped to include the instance of Ord for AddressInEra
+  -- defined there.
   build-depends:
     , aeson
-    , array
     , base               >=4.9  && <5
     , base16-bytestring
     , bytestring
     , cborg
     , containers
+    , contractmodel
     , cryptonite         >=0.25
-    , data-default
     , deepseq
-    , either
     , flat
     , hashable
-    , hedgehog
     , http-api-data
     , lens
     , memory
@@ -173,7 +167,6 @@ library
     , tagged
     , template-haskell
     , text
-    , time
     , time-units
     , transformers
 
@@ -208,7 +201,6 @@ test-suite plutus-ledger-test
     , cardano-api:{cardano-api, gen}  >=1.35
     , cardano-crypto-class            >=2.0.0
     , plutus-ledger-api               >=1.0.0
-    , plutus-tx                       >=1.0.0
 
   ------------------------
   -- Non-IOG dependencies

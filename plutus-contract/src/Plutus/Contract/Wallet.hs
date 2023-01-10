@@ -26,6 +26,8 @@ module Plutus.Contract.Wallet(
     ) where
 
 import Cardano.Api qualified as C
+import Cardano.Node.Emulator.Params (Params (emulatorPParams, pNetworkId))
+import Cardano.Node.Emulator.Validation (CardanoLedgerError, makeTransactionBody)
 import Control.Applicative ((<|>))
 import Control.Monad ((>=>))
 import Control.Monad.Error.Lens (throwing)
@@ -34,7 +36,7 @@ import Control.Monad.Freer.Error (Error, throwError)
 import Data.Aeson (FromJSON (parseJSON), Object, ToJSON (toJSON), Value (String), object, withObject, (.:), (.=))
 import Data.Aeson.Extras qualified as JSON
 import Data.Aeson.Types (Parser, parseFail)
-import Data.Bifunctor (first)
+import Data.Bifunctor (Bifunctor (bimap), first)
 import Data.Map (Map)
 import Data.Map qualified as Map
 import Data.Maybe (mapMaybe)
@@ -43,15 +45,13 @@ import Data.Set qualified as Set
 import Data.Typeable (Typeable)
 import Data.Void (Void)
 import GHC.Generics (Generic)
-import Ledger (DCert, Redeemer, StakingCredential, txRedeemers)
+import Ledger (DCert, Redeemer, StakingCredential, toPlutusAddress, txRedeemers)
 import Ledger qualified (ScriptPurpose (..))
 import Ledger qualified as P
 import Ledger.Ada qualified as Ada
-import Ledger.Constraints (mustPayToPubKey)
-import Ledger.Constraints.OffChain (UnbalancedTx (unBalancedTxRequiredSignatories, unBalancedTxUtxoIndex),
-                                    unBalancedTxTx)
+import Ledger.Constraints (UnbalancedTx (UnbalancedCardanoTx, UnbalancedEmulatorTx), mustPayToAddress)
 import Ledger.Tx (CardanoTx, TxId (TxId), TxIn (..), TxOutRef, getCardanoTxInputs, txInRef)
-import Ledger.Validation (CardanoLedgerError, fromPlutusIndex, makeTransactionBody)
+import Ledger.Tx.CardanoAPI (fromPlutusIndex)
 import Ledger.Value (currencyMPSHash)
 import Plutus.Contract.CardanoAPI qualified as CardanoAPI
 import Plutus.Contract.Error (AsContractError (_OtherContractError))
@@ -111,8 +111,8 @@ handleTx = balanceTx >=> either throwError WAPI.signTxAndSubmit
 -- | Get an unspent output belonging to the wallet.
 getUnspentOutput :: AsContractError e => Contract w s e TxOutRef
 getUnspentOutput = do
-    ownPkh <- Contract.ownFirstPaymentPubKeyHash
-    let constraints = mustPayToPubKey ownPkh (Ada.lovelaceValueOf 1)
+    addr <- Contract.ownAddress
+    let constraints = mustPayToAddress (toPlutusAddress addr) (Ada.lovelaceValueOf 1)
     utx <- Contract.mkTxConstraints @Void mempty constraints
     tx <- Contract.adjustUnbalancedTx utx >>= Contract.balanceTx
     case getCardanoTxInputs tx of
@@ -250,39 +250,41 @@ instance ToJSON ExportTxInput where
             ]
 
 export
-    :: P.Params
+    :: Params
     -> UnbalancedTx
     -> Either CardanoLedgerError ExportTx
-export params utx =
-    let requiredSigners = Set.toList (unBalancedTxRequiredSignatories utx)
-        fromCardanoTx ctx = do
-            utxo <- fromPlutusIndex $ P.UtxoIndex (unBalancedTxUtxoIndex utx)
+export params (UnbalancedEmulatorTx tx sigs utxos) =
+    let requiredSigners = Set.toList sigs
+     in ExportTx
+        <$> bimap Right (C.makeSignedTransaction []) (CardanoAPI.toCardanoTxBody (pNetworkId params) (emulatorPParams params) requiredSigners tx)
+        <*> first Right (mkInputs utxos)
+        <*> pure (mkRedeemers tx)
+export params (UnbalancedCardanoTx tx utxos) =
+    let fromCardanoTx ctx = do
+            utxo <- fromPlutusIndex $ P.UtxoIndex utxos
             makeTransactionBody params utxo ctx
      in ExportTx
-        <$> fmap (C.makeSignedTransaction [])
-                 (either
-                     fromCardanoTx
-                     (first Right . CardanoAPI.toCardanoTxBody params requiredSigners)
-                     (unBalancedTxTx utx))
-        <*> first Right (mkInputs (P.pNetworkId params) (unBalancedTxUtxoIndex utx))
-        <*> either (const $ Right []) (Right . mkRedeemers) (unBalancedTxTx utx)
+        <$> fmap (C.makeSignedTransaction []) (fromCardanoTx tx)
+        <*> first Right (mkInputs utxos)
+        <*> pure []
 
-mkInputs :: C.NetworkId -> Map Plutus.TxOutRef P.TxOut -> Either CardanoAPI.ToCardanoError [ExportTxInput]
-mkInputs networkId = traverse (uncurry (toExportTxInput networkId)) . Map.toList
+mkInputs :: Map Plutus.TxOutRef P.TxOut -> Either CardanoAPI.ToCardanoError [ExportTxInput]
+mkInputs = traverse (uncurry toExportTxInput) . Map.toList
 
-toExportTxInput :: C.NetworkId -> Plutus.TxOutRef -> P.TxOut -> Either CardanoAPI.ToCardanoError ExportTxInput
-toExportTxInput networkId Plutus.TxOutRef{Plutus.txOutRefId, Plutus.txOutRefIdx} txOut = do
+toExportTxInput :: Plutus.TxOutRef -> P.TxOut -> Either CardanoAPI.ToCardanoError ExportTxInput
+toExportTxInput Plutus.TxOutRef{Plutus.txOutRefId, Plutus.txOutRefIdx} txOut = do
     cardanoValue <- CardanoAPI.toCardanoValue (P.txOutValue txOut)
     let otherQuantities = mapMaybe (\case { (C.AssetId policyId assetName, quantity) -> Just (policyId, assetName, quantity); _ -> Nothing }) $ C.valueToList cardanoValue
     ExportTxInput
         <$> CardanoAPI.toCardanoTxId txOutRefId
         <*> pure (C.TxIx $ fromInteger txOutRefIdx)
-        <*> CardanoAPI.toCardanoAddressInEra networkId (P.txOutAddress txOut)
+        <*> pure (P.txOutAddress txOut)
         <*> pure (C.selectLovelace cardanoValue)
         <*> sequence (CardanoAPI.toCardanoScriptDataHash <$> P.txOutDatumHash txOut)
         <*> pure otherQuantities
 
 -- TODO: Here there's hidden error of script DCert missing its redeemer - this just counts as no DCert. Don't know if bad.
+-- TODO: Refactor with getGardanoTxRedeemers once we are ceady to move to Cardano Txs
 mkRedeemers :: P.Tx -> [ExportTxRedeemer]
 mkRedeemers = map (uncurry scriptPurposeToExportRedeemer) . Map.assocs . txRedeemers
 

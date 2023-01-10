@@ -1,5 +1,5 @@
 {-# LANGUAGE DataKinds          #-}
-{-# LANGUAGE DeriveDataTypeable #-}
+{-# LANGUAGE DeriveGeneric      #-}
 {-# LANGUAGE FlexibleInstances  #-}
 {-# LANGUAGE GADTs              #-}
 {-# LANGUAGE StandaloneDeriving #-}
@@ -15,12 +15,11 @@ module Escrow
 
 import Control.Lens (makeLenses, to, (%=), (.=), (^.))
 import Control.Monad (void)
-import Data.Data (Data)
 import Data.Foldable (Foldable (fold))
 import Data.Map (Map)
 import Data.Map qualified as Map
 
-import Ledger (minAdaTxOut)
+import Ledger (minAdaTxOutEstimated)
 import Ledger.Ada qualified as Ada
 import Ledger.Typed.Scripts qualified as Scripts
 import Ledger.Value qualified as Value
@@ -39,7 +38,7 @@ import Test.Tasty.QuickCheck (Arbitrary (shrink), Property, choose, elements, fr
 {- START EscrowModel -}
 data EscrowModel = EscrowModel { _contributions :: Map Wallet Value.Value
                                , _targets       :: Map Wallet Value.Value
-                               } deriving (Eq, Show, Data)
+                               } deriving (Eq, Show, CM.Generic)
 
 makeLenses ''EscrowModel
 {- END EscrowModel -}
@@ -57,7 +56,7 @@ instance CM.ContractModel EscrowModel where
 {- START ActionType -}
   data Action EscrowModel = Pay Wallet Integer
                           | Redeem Wallet -- ^ Refund Wallet
-    deriving (Eq, Show, Data)
+    deriving (Eq, Show, CM.Generic)
 {- END ActionType -}
 
 {- START ContractInstanceKeyType -}
@@ -169,14 +168,14 @@ precondition s a = case a of
     Redeem _ -> (s ^. contractState . contributions . to fold)
                 `geq`
                 (s ^. contractState . targets . to fold)
-    Pay _ v  -> Ada.adaValueOf (fromInteger v) `geq` Ada.toValue minAdaTxOut
+    Pay _ v  -> Ada.adaValueOf (fromInteger v) `geq` Ada.toValue minAdaTxOutEstimated
 {- END precondition2 -}
 -}
   precondition s a = case a of
     Redeem _ -> (s ^. CM.contractState . contributions . to fold) `Value.geq` (s ^. CM.contractState . targets . to fold)
     --Redeem _ -> (s ^. contractState . contributions . to fold) == (s ^. contractState . targets . to fold)
     --Refund w -> Nothing /= (s ^. contractState . contributions . at w)
-    Pay _ v  -> Ada.adaValueOf (fromInteger v) `Value.geq` Ada.toValue minAdaTxOut
+    Pay _ v  -> Ada.adaValueOf (fromInteger v) `Value.geq` Ada.toValue minAdaTxOutEstimated
 
 {- START perform -}
   perform h _ _ a = case a of

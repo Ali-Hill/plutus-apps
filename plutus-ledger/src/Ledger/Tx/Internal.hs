@@ -28,6 +28,10 @@ import Control.Applicative (empty, (<|>))
 import Control.DeepSeq (NFData, rnf)
 import Control.Lens ((&), (.~), (?~))
 
+import Cardano.Ledger.Core qualified as Ledger (TxOut)
+import Cardano.Ledger.Serialization qualified as Ledger (Sized, mkSized)
+import Ouroboros.Consensus.Shelley.Eras qualified as Ledger
+
 import Control.Lens qualified as L
 import Control.Monad.State.Strict (execState, modify')
 import Data.Aeson (FromJSON, ToJSON)
@@ -38,18 +42,18 @@ import Data.Map (Map)
 import Data.Map qualified as Map
 import Data.OpenApi qualified as OpenApi
 import GHC.Generics (Generic)
+
+import Ledger.Address (CardanoAddress, cardanoPubKeyHash, toPlutusAddress)
 import Ledger.Contexts.Orphans ()
 import Ledger.Crypto
 import Ledger.DCert.Orphans ()
 import Ledger.Slot
-import Ledger.Tx.CardanoAPI.Internal (fromCardanoAddressInEra, fromCardanoTxOutDatum, fromCardanoTxOutValue,
-                                      fromCardanoValue)
+import Ledger.Tx.CardanoAPI.Internal (fromCardanoTxOutDatum, fromCardanoTxOutValue, fromCardanoValue)
 import Ledger.Tx.CardanoAPITemp qualified as C
 import Ledger.Tx.Orphans ()
 import Ledger.Tx.Orphans.V2 ()
+
 import Plutus.Script.Utils.Scripts
-import Plutus.V1.Ledger.Address (toPubKeyHash)
-import Plutus.V1.Ledger.Address qualified as V1
 import Plutus.V1.Ledger.Api (Credential, DCert, ScriptPurpose (..), StakingCredential (StakingHash), dataToBuiltinData)
 import Plutus.V1.Ledger.Scripts
 import Plutus.V1.Ledger.Tx hiding (TxIn (..), TxInType (..), TxOut (..), inRef, inScripts, inType, pubKeyTxIn,
@@ -59,6 +63,7 @@ import Plutus.V2.Ledger.Api qualified as PV2
 import PlutusTx.Lattice
 import PlutusTx.Prelude (BuiltinByteString)
 import PlutusTx.Prelude qualified as PlutusTx
+
 import Prettyprinter (Pretty (..), hang, viaShow, vsep, (<+>))
 
 -- | The type of a transaction input.
@@ -235,12 +240,11 @@ instance OpenApi.ToSchema TxOut where
           ]
         & OpenApi.required .~ ["address","value"]
 
-
 instance Pretty TxOut where
   pretty (TxOut (C.TxOut addr v d rs)) =
     hang 2 $ vsep $
       ["-" <+> pretty (fromCardanoTxOutValue v) <+> "addressed to"
-      , pretty (fromCardanoAddressInEra addr)
+      , pretty (toPlutusAddress addr)
       ]
       <> case fromCardanoTxOutDatum d of
           PV2.NoOutputDatum      -> []
@@ -250,6 +254,10 @@ instance Pretty TxOut where
           C.ReferenceScript _ (C.ScriptInAnyLang _ s) ->
             ["with reference script hash" <+> viaShow (C.hashScript s)]
           C.ReferenceScriptNone -> []
+
+toSizedTxOut :: TxOut -> Ledger.Sized (Ledger.TxOut Ledger.StandardBabbage)
+toSizedTxOut = Ledger.mkSized . C.toShelleyTxOut C.ShelleyBasedEraBabbage . getTxOut
+
 
 type ScriptsMap = Map ScriptHash (Versioned Script)
 type MintingWitnessesMap = Map MintingPolicyHash (Redeemer, Maybe (Versioned TxOutRef))
@@ -473,12 +481,12 @@ txOutDatumHash (TxOut (C.TxOut _aie _tov tod _rs)) =
       Just $ datumHash $ Datum $ dataToBuiltinData $ C.toPlutusData scriptData
 
 txOutPubKey :: TxOut -> Maybe PubKeyHash
-txOutPubKey (TxOut (C.TxOut aie _ _ _)) = toPubKeyHash $ fromCardanoAddressInEra aie
+txOutPubKey (TxOut (C.TxOut aie _ _ _)) = cardanoPubKeyHash aie
 
-txOutAddress :: TxOut -> V1.Address
-txOutAddress (TxOut (C.TxOut aie _tov _tod _rs)) = fromCardanoAddressInEra aie
+txOutAddress :: TxOut -> CardanoAddress
+txOutAddress (TxOut (C.TxOut aie _tov _tod _rs)) = aie
 
-outAddress :: L.Lens TxOut TxOut V1.Address (C.AddressInEra C.BabbageEra)
+outAddress :: L.Lens' TxOut (C.AddressInEra C.BabbageEra)
 outAddress = L.lens
   txOutAddress
   (\(TxOut (C.TxOut _ tov tod rs)) aie -> TxOut (C.TxOut aie tov tod rs))

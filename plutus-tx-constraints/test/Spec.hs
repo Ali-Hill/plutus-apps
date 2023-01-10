@@ -7,6 +7,7 @@ module Main(main) where
 
 import Cardano.Api qualified as C
 import Cardano.Api.Shelley qualified as C
+import Cardano.Node.Emulator.Generators qualified as Gen
 import Control.Lens (preview, toListOf, view)
 import Control.Monad (forM_, guard, replicateM, void)
 import Control.Monad.IO.Class (MonadIO (liftIO))
@@ -23,10 +24,9 @@ import Hedgehog.Range qualified as Range
 import Language.Haskell.TH.Syntax
 import Ledger qualified
 import Ledger.Ada qualified as Ada
-import Ledger.Address (StakePubKeyHash (StakePubKeyHash), addressStakingCredential)
+import Ledger.Address (StakePubKeyHash (StakePubKeyHash), addressStakingCredential, stakePubKeyHashCredential)
 import Ledger.Credential (Credential (PubKeyCredential, ScriptCredential), StakingCredential (StakingHash))
 import Ledger.Crypto (PubKeyHash (PubKeyHash))
-import Ledger.Generators qualified as Gen
 import Ledger.Tx (Tx (txOutputs), TxOut (TxOut), txOutAddress)
 import Ledger.Tx.CardanoAPI qualified as C
 import Ledger.Tx.Constraints as Constraints
@@ -84,8 +84,8 @@ nonNegativeValue =
 mustPayToPubKeyAddressStakePubKeyNotNothingProp :: Property
 mustPayToPubKeyAddressStakePubKeyNotNothingProp = property $ do
     pkh <- forAll $ Ledger.paymentPubKeyHash <$> Gen.element Gen.knownPaymentPublicKeys
-    let skh = StakePubKeyHash $ Ledger.pubKeyHash $ Ledger.PubKey "00000000000000000000000000000000000000000000000000000000"
-        txE = mkTx @Void def mempty (Constraints.mustPayToPubKeyAddress pkh skh (Ada.toValue Ledger.minAdaTxOut))
+    let sc = stakePubKeyHashCredential $ StakePubKeyHash $ Ledger.pubKeyHash $ Ledger.PubKey "00000000000000000000000000000000000000000000000000000000"
+        txE = mkTx @Void def mempty (Constraints.mustPayToPubKeyAddress pkh sc (Ada.toValue Ledger.minAdaTxOutEstimated))
     case txE of
         Left err -> do
             Hedgehog.annotateShow err
@@ -95,15 +95,10 @@ mustPayToPubKeyAddressStakePubKeyNotNothingProp = property $ do
                 outputs = view OC.txOuts tx
                 stakingCreds = mapMaybe stakePaymentPubKeyHash outputs
             Hedgehog.assert $ not $ null stakingCreds
-            forM_ stakingCreds ((===) skh)
+            forM_ stakingCreds ((===) sc)
     where
-        stakePaymentPubKeyHash :: C.TxOut C.CtxTx C.BabbageEra -> Maybe StakePubKeyHash
-        stakePaymentPubKeyHash (C.TxOut addr _ _ _) = do
-            let txOutAddress = C.fromCardanoAddressInEra addr
-            stakeCred <- addressStakingCredential txOutAddress
-            case stakeCred of
-                StakingHash (PubKeyCredential pkh) -> Just $ StakePubKeyHash pkh
-                _                                  -> Nothing
+        stakePaymentPubKeyHash :: C.TxOut C.CtxTx C.BabbageEra -> Maybe StakingCredential
+        stakePaymentPubKeyHash (C.TxOut addr _ _ _) = Ledger.cardanoStakingCredential addr
 
 
 -- txOut0 :: Ledger.ChainIndexTxOut

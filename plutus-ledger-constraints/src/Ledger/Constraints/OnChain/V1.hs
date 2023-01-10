@@ -16,33 +16,31 @@ module Ledger.Constraints.OnChain.V1
     ) where
 
 import PlutusTx (ToData (toBuiltinData))
-import PlutusTx.Prelude (AdditiveSemigroup ((+)), Bool (False, True), Eq ((==)), Functor (fmap), Maybe (Just),
-                         Ord ((<=), (>=)), all, any, elem, isJust, isNothing, maybe, snd, traceIfFalse, ($), (&&), (.))
+import PlutusTx.Prelude (Bool (False, True), Eq ((==)), Functor (fmap), Maybe (Just), all, any, elem, isJust, isNothing,
+                         maybe, snd, traceIfFalse, ($), (&&), (.))
 
 import Ledger qualified
-import Ledger.Ada qualified as Ada
-import Ledger.Address (PaymentPubKeyHash (PaymentPubKeyHash, unPaymentPubKeyHash))
-import Ledger.Constraints.TxConstraints (ScriptInputConstraint (ScriptInputConstraint, icTxOutRef),
+import Ledger.Address (PaymentPubKeyHash (unPaymentPubKeyHash))
+import Ledger.Constraints.TxConstraints (ScriptInputConstraint (ScriptInputConstraint, icRedeemer, icReferenceTxOutRef, icTxOutRef),
                                          ScriptOutputConstraint (ScriptOutputConstraint, ocDatum, ocReferenceScriptHash, ocValue),
-                                         TxConstraint (MustBeSignedBy, MustIncludeDatumInTx, MustIncludeDatumInTxWithHash, MustMintValue, MustPayToOtherScript, MustPayToPubKeyAddress, MustProduceAtLeast, MustReferenceOutput, MustSatisfyAnyOf, MustSpendAtLeast, MustSpendPubKeyOutput, MustSpendScriptOutput, MustUseOutputAsCollateral, MustValidateIn),
+                                         TxConstraint (MustBeSignedBy, MustIncludeDatumInTx, MustIncludeDatumInTxWithHash, MustMintValue, MustPayToAddress, MustProduceAtLeast, MustReferenceOutput, MustSatisfyAnyOf, MustSpendAtLeast, MustSpendPubKeyOutput, MustSpendScriptOutput, MustUseOutputAsCollateral, MustValidateIn),
                                          TxConstraintFun (MustSpendScriptOutputWithMatchingDatumAndValue),
                                          TxConstraintFuns (TxConstraintFuns),
                                          TxConstraints (TxConstraints, txConstraintFuns, txConstraints, txOwnInputs, txOwnOutputs),
-                                         TxOutDatum (TxOutDatumHash, TxOutDatumInTx), getTxOutDatum)
+                                         TxOutDatum (TxOutDatumHash, TxOutDatumInTx))
 import Ledger.Credential (Credential (ScriptCredential))
+import Ledger.Value (leq)
 import Ledger.Value qualified as Value
-import Plutus.V1.Ledger.Address qualified as Address
-import Plutus.V1.Ledger.Contexts (ScriptContext (ScriptContext, scriptContextTxInfo),
-                                  TxInInfo (TxInInfo, txInInfoOutRef, txInInfoResolved),
-                                  TxInfo (txInfoData, txInfoInputs, txInfoMint, txInfoValidRange),
-                                  TxOut (TxOut, txOutAddress, txOutDatumHash, txOutValue))
-import Plutus.V1.Ledger.Contexts qualified as V
+import Plutus.Script.Utils.V1.Contexts (ScriptContext (ScriptContext, scriptContextTxInfo),
+                                        TxInInfo (TxInInfo, txInInfoResolved),
+                                        TxInfo (txInfoData, txInfoInputs, txInfoMint, txInfoValidRange),
+                                        TxOut (TxOut, txOutAddress, txOutDatumHash))
+import Plutus.Script.Utils.V1.Contexts qualified as V
 import Plutus.V1.Ledger.Interval (contains)
-import Plutus.V1.Ledger.Value (leq)
 
 {-# INLINABLE checkScriptContext #-}
 -- | Does the 'ScriptContext' satisfy the constraints?
-checkScriptContext :: forall i o. ToData o => TxConstraints i o -> ScriptContext -> Bool
+checkScriptContext :: forall i o. (ToData i, ToData o) => TxConstraints i o -> ScriptContext -> Bool
 checkScriptContext TxConstraints{txConstraints, txConstraintFuns = TxConstraintFuns txCnsFuns, txOwnInputs, txOwnOutputs} ptx =
     traceIfFalse "L!" -- "checkScriptContext failed"
     $ all (checkTxConstraint ptx) txConstraints
@@ -51,12 +49,14 @@ checkScriptContext TxConstraints{txConstraints, txConstraintFuns = TxConstraintF
     && all (checkOwnOutputConstraint ptx) txOwnOutputs
 
 {-# INLINABLE checkOwnInputConstraint #-}
-checkOwnInputConstraint :: ScriptContext -> ScriptInputConstraint a -> Bool
-checkOwnInputConstraint ScriptContext{scriptContextTxInfo} ScriptInputConstraint{icTxOutRef} =
-    let checkInput TxInInfo{txInInfoOutRef} =
-            txInInfoOutRef == icTxOutRef -- TODO: We should also check the redeemer but we can't right now because it's hashed
-    in traceIfFalse "L0" -- "Input constraint"
-    $ any checkInput (txInfoInputs scriptContextTxInfo)
+checkOwnInputConstraint
+    :: ToData i
+    => ScriptContext
+    -> ScriptInputConstraint i
+    -> Bool
+checkOwnInputConstraint ctx ScriptInputConstraint{icTxOutRef, icRedeemer, icReferenceTxOutRef} =
+    traceIfFalse "L0" -- "Input constraint"
+    $ checkTxConstraint ctx (MustSpendScriptOutput icTxOutRef (Ledger.Redeemer $ toBuiltinData icRedeemer) icReferenceTxOutRef)
 
 {-# INLINABLE checkOwnOutputConstraint #-}
 checkOwnOutputConstraint
@@ -64,25 +64,12 @@ checkOwnOutputConstraint
     => ScriptContext
     -> ScriptOutputConstraint o
     -> Bool
-checkOwnOutputConstraint ctx@ScriptContext{scriptContextTxInfo} ScriptOutputConstraint{ocDatum, ocValue, ocReferenceScriptHash} =
+checkOwnOutputConstraint ctx ScriptOutputConstraint{ocDatum, ocValue, ocReferenceScriptHash} =
     let d = fmap (Ledger.Datum . toBuiltinData) ocDatum
-        hsh = V.findDatumHash (getTxOutDatum d) scriptContextTxInfo
-        checkOutput (TxOutDatumHash _) TxOut{txOutValue, txOutDatumHash=Just _} =
-            -- The datum is not added in the tx body with so we can't verify
-            -- that the tx output's datum hash is the correct one w.r.t the
-            -- provide datum.
-               Ada.fromValue txOutValue >= Ada.fromValue ocValue
-            && Ada.fromValue txOutValue <= Ada.fromValue ocValue + Ledger.maxMinAdaTxOut
-            && Value.noAdaValue txOutValue == Value.noAdaValue ocValue
-        checkOutput (TxOutDatumInTx _) TxOut{txOutValue, txOutDatumHash=Just svh} =
-               Ada.fromValue txOutValue >= Ada.fromValue ocValue
-            && Ada.fromValue txOutValue <= Ada.fromValue ocValue + Ledger.maxMinAdaTxOut
-            && Value.noAdaValue txOutValue == Value.noAdaValue ocValue
-            && hsh == Just svh
-        checkOutput _ _ = False
     in traceIfFalse "L1" -- "Output constraint"
-    $ any (checkOutput d) (V.getContinuingOutputs ctx)
-        && isNothing ocReferenceScriptHash
+    $ maybe False (\TxInInfo{txInInfoResolved=TxOut{txOutAddress}} ->
+                        checkTxConstraint ctx (MustPayToAddress txOutAddress (Just d) ocReferenceScriptHash ocValue))
+        (V.findOwnInput ctx)
 
 {-# INLINABLE checkTxConstraint #-}
 checkTxConstraint :: ScriptContext -> TxConstraint -> Bool
@@ -114,7 +101,7 @@ checkTxConstraint ctx@ScriptContext{scriptContextTxInfo} = \case
     MustMintValue mps _ tn v _ ->
         traceIfFalse "L9" -- "Value minted not OK"
         $ Value.valueOf (txInfoMint scriptContextTxInfo) (Value.mpsSymbol mps) tn == v
-    MustPayToPubKeyAddress (PaymentPubKeyHash pk) _ mdv refScript vl ->
+    MustPayToAddress addr mdv refScript vl ->
         let outs = V.txInfoOutputs scriptContextTxInfo
             hsh dv = V.findDatumHash dv scriptContextTxInfo
             checkOutput (TxOutDatumHash _) TxOut{txOutDatumHash=Just _} =
@@ -126,35 +113,9 @@ checkTxConstraint ctx@ScriptContext{scriptContextTxInfo} = \case
                 hsh dv == Just svh
             checkOutput _ _ = False
         in
-        traceIfFalse "La" -- "MustPayToPubKey"
-        $ vl `leq` V.valuePaidTo scriptContextTxInfo pk
+        traceIfFalse "La" -- "MustPayToAddress"
+        $ vl `leq` V.valuePaidTo scriptContextTxInfo addr
             && maybe True (\dv -> any (checkOutput dv) outs) mdv
-            && isNothing refScript
-    MustPayToOtherScript vlh _ dv refScript vl ->
-        let outs = V.txInfoOutputs scriptContextTxInfo
-            hsh d = V.findDatumHash d scriptContextTxInfo
-            addr = Address.scriptHashAddress vlh
-            checkOutput (TxOutDatumHash _) TxOut{txOutAddress, txOutValue, txOutDatumHash=Just _} =
-                -- The datum is not added in the tx body with so we can't verify
-                -- that the tx output's datum hash is the correct one w.r.t the
-                -- provide datum.
-                   Ada.fromValue txOutValue >= Ada.fromValue vl
-                && Ada.fromValue txOutValue <= Ada.fromValue vl + Ledger.maxMinAdaTxOut
-                && Value.noAdaValue txOutValue == Value.noAdaValue vl
-                && txOutAddress == addr
-            checkOutput (TxOutDatumInTx d) TxOut{txOutAddress, txOutValue, txOutDatumHash=Just h} =
-                   Ada.fromValue txOutValue >= Ada.fromValue vl
-                && Ada.fromValue txOutValue <= Ada.fromValue vl + Ledger.maxMinAdaTxOut
-                && Value.noAdaValue txOutValue == Value.noAdaValue vl
-                && hsh d == Just h
-                && txOutAddress == addr
-            -- By ledger rules, a script output with no datum is unspendable.
-            -- Therefore, we always return False if there is no Datum with the
-            -- script output.
-            checkOutput _ _ = False
-        in
-        traceIfFalse "Lb" -- "MustPayToOtherScript"
-        $ any (checkOutput dv) outs
             && isNothing refScript
     MustIncludeDatumInTxWithHash dvh dv ->
         traceIfFalse "Lc" -- "missing datum"

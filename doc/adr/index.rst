@@ -43,3 +43,7 @@ The general process for creating an ADR is:
    0011-support-return-and-total-collateral-when-building-transactions
    0012-commit-to-data-types-in-cardano-api
    0013-tx-validity-time-range-fix
+   0014-marconi-query-interface
+   0015-time-conversion
+   0016-cardano-node-emulator
+   0017-end-to-end-testing-strategy

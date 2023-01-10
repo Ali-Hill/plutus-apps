@@ -1,5 +1,5 @@
 {-# LANGUAGE DataKinds           #-}
-{-# LANGUAGE DeriveDataTypeable  #-}
+{-# LANGUAGE DeriveGeneric       #-}
 {-# LANGUAGE FlexibleInstances   #-}
 {-# LANGUAGE GADTs               #-}
 {-# LANGUAGE ImportQualifiedPost #-}
@@ -24,16 +24,15 @@ module Spec.Escrow( tests
 
 import Control.Lens hiding (both)
 import Control.Monad (void, when)
-import Data.Data
 import Data.Default (Default (def))
 import Data.Foldable
 import Data.Map (Map)
 import Data.Map qualified as Map
 
-import Ledger (Slot (..), minAdaTxOut)
+import Cardano.Node.Emulator.TimeSlot qualified as TimeSlot
+import Ledger (Slot (..), minAdaTxOutEstimated)
 import Ledger.Ada qualified as Ada
 import Ledger.Time (POSIXTime)
-import Ledger.TimeSlot qualified as TimeSlot
 import Ledger.Typed.Scripts qualified as Scripts
 import Ledger.Value
 import Plutus.Contract hiding (currentSlot)
@@ -60,7 +59,7 @@ import Plutus.Contract.Test.Coverage
 data EscrowModel = EscrowModel { _contributions :: Map Wallet Value
                                , _refundSlot    :: Slot
                                , _targets       :: Map Wallet Value
-                               } deriving (Eq, Show, Data)
+                               } deriving (Eq, Show, Generic)
 
 makeLenses ''EscrowModel
 
@@ -78,7 +77,7 @@ instance ContractModel EscrowModel where
                           | Redeem Wallet
                           | Refund Wallet
                           | BadRefund Wallet Wallet
-                          deriving (Eq, Show, Data)
+                          deriving (Eq, Show, Generic)
 
   data ContractInstanceKey EscrowModel w s e params where
     WalletKey :: Wallet -> ContractInstanceKey EscrowModel () EscrowTestSchema EscrowError ()
@@ -136,7 +135,7 @@ instance ContractModel EscrowModel where
     Refund w -> s ^. currentSlot >= s ^. contractState . refundSlot
              && Nothing /= (s ^. contractState . contributions . at w)
     Pay _ v -> s ^. currentSlot + 1 < s ^. contractState . refundSlot
-            && Ada.adaValueOf (fromInteger v) `geq` Ada.toValue minAdaTxOut
+            && Ada.adaValueOf (fromInteger v) `geq` Ada.toValue minAdaTxOutEstimated
     BadRefund w w' -> s ^. currentSlot < s ^. contractState . refundSlot - 2  -- why -2?
                    || w /= w'
 

@@ -1,5 +1,5 @@
 {-# LANGUAGE DataKinds          #-}
-{-# LANGUAGE DeriveDataTypeable #-}
+{-# LANGUAGE DeriveGeneric      #-}
 {-# LANGUAGE FlexibleInstances  #-}
 {-# LANGUAGE GADTs              #-}
 {-# LANGUAGE StandaloneDeriving #-}
@@ -18,12 +18,11 @@ module Escrow3(prop_Escrow, prop_FinishEscrow, prop_NoLockedFunds, EscrowModel) 
 
 import Control.Lens (At (at), makeLenses, to, (%=), (.=), (^.))
 import Control.Monad (void, when)
-import Data.Data (Data)
 import Data.Foldable (fold)
 import Data.Map (Map)
 import Data.Map qualified as Map
 
-import Ledger (minAdaTxOut)
+import Ledger (minAdaTxOutEstimated)
 import Ledger.Ada qualified as Ada
 import Ledger.Value qualified as Value
 import Plutus.Contract (Contract, selectList)
@@ -42,9 +41,9 @@ import Test.QuickCheck (Arbitrary (shrink), Gen, Property, choose, elements, fre
 data EscrowModel = EscrowModel { _contributions :: Map Wallet Value.Value
                                , _targets       :: Map Wallet Value.Value
                                , _phase         :: Phase
-                               } deriving (Eq, Show, Data)
+                               } deriving (Eq, Show, CM.Generic)
 
-data Phase = Initial | Running deriving (Eq, Show, Data)
+data Phase = Initial | Running deriving (Eq, Show, CM.Generic)
 
 makeLenses ''EscrowModel
 
@@ -57,7 +56,7 @@ instance CM.ContractModel EscrowModel where
                           | Redeem Wallet
                           | Pay Wallet Integer
                           | Refund Wallet            -- NEW!
-    deriving (Eq, Show, Data)
+    deriving (Eq, Show, CM.Generic)
 {- END EscrowModel -}
 
   data ContractInstanceKey EscrowModel w s e params where
@@ -103,12 +102,12 @@ instance CM.ContractModel EscrowModel where
 
   precondition s a = case a of
     Init tgts   -> currentPhase == Initial
-                && and [Ada.adaValueOf (fromInteger n) `Value.geq` Ada.toValue minAdaTxOut | (_,n) <- tgts]
+                && and [Ada.adaValueOf (fromInteger n) `Value.geq` Ada.toValue minAdaTxOutEstimated | (_,n) <- tgts]
     Redeem _    -> currentPhase == Running
                 && fold (s ^. CM.contractState . contributions) `Value.geq` fold (s ^. CM.contractState . targets)
              --   && fold (s ^. contractState . contributions) == fold (s ^. contractState . targets)
     Pay _ v     -> currentPhase == Running
-                && Ada.adaValueOf (fromInteger v) `Value.geq` Ada.toValue minAdaTxOut
+                && Ada.adaValueOf (fromInteger v) `Value.geq` Ada.toValue minAdaTxOutEstimated
     Refund w    -> currentPhase == Running
                 && w `Map.member` (s ^. CM.contractState . contributions)
     where currentPhase = s ^. CM.contractState . phase
@@ -230,7 +229,7 @@ finishingStrategy w = do
       currentContribs <- viewContractState contributions
       let deficit = fold currentTargets <> inv (fold currentContribs)
       when (deficit `gt` Ada.adaValueOf 0) $
-        action $ Pay w $ round $ Ada.getAda $ max minAdaTxOut $ Ada.fromValue deficit
+        action $ Pay w $ round $ Ada.getAda $ max minAdaTxOutEstimated $ Ada.fromValue deficit
       action $ Redeem w
 {- END finishingStrategy -}
 

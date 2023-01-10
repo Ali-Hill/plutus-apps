@@ -1,5 +1,5 @@
 {-# LANGUAGE DataKinds           #-}
-{-# LANGUAGE DeriveDataTypeable  #-}
+{-# LANGUAGE DeriveGeneric       #-}
 {-# LANGUAGE FlexibleInstances   #-}
 {-# LANGUAGE GADTs               #-}
 {-# LANGUAGE ImportQualifiedPost #-}
@@ -19,12 +19,11 @@ module Escrow2(prop_Escrow, EscrowModel) where
 
 import Control.Lens (makeLenses, to, (%=), (.=), (^.))
 import Control.Monad (void)
-import Data.Data (Data)
 import Data.Foldable (fold)
 import Data.Map (Map)
 import Data.Map qualified as Map
 
-import Ledger (minAdaTxOut)
+import Ledger (minAdaTxOutEstimated)
 import Ledger.Ada qualified as Ada
 import Ledger.Value qualified as Value
 import Plutus.Contract (Contract, selectList)
@@ -44,10 +43,10 @@ import Test.QuickCheck (Arbitrary (shrink), Gen, Property, choose, elements, fre
 data EscrowModel = EscrowModel { _contributions :: Map Wallet Value.Value
                                , _targets       :: Map Wallet Value.Value
                                , _phase         :: Phase             -- NEW!
-                               } deriving (Eq, Show, Data)
+                               } deriving (Eq, Show, CM.Generic)
 {- END ModelState -}
 
-data Phase = Initial | Running deriving (Eq, Show, Data)
+data Phase = Initial | Running deriving (Eq, Show, CM.Generic)
 
 makeLenses ''EscrowModel
 
@@ -59,7 +58,7 @@ instance CM.ContractModel EscrowModel where
   data Action EscrowModel = Init [(Wallet, Integer)]    -- NEW!
                           | Redeem Wallet
                           | Pay Wallet Integer
-    deriving (Eq, Show, Data)
+    deriving (Eq, Show, CM.Generic)
 {- END Action -}
 
 {- START ContractInstanceKey -}
@@ -130,7 +129,7 @@ instance CM.ContractModel EscrowModel where
 {- START tightprecondition -}
   precondition s a = case a of
     Init tgts-> currentPhase == Initial
-             && and [Ada.adaValueOf (fromInteger n) `geq` Ada.toValue minAdaTxOut | (w,n) <- tgts]
+             && and [Ada.adaValueOf (fromInteger n) `geq` Ada.toValue minAdaTxOutEstimated | (w,n) <- tgts]
     ...
 {- END tightprecondition -}
 -}
@@ -140,7 +139,7 @@ instance CM.ContractModel EscrowModel where
     Redeem _ -> currentPhase == Running
              && (s ^. CM.contractState . contributions . to fold) `Value.geq` (s ^. CM.contractState . targets . to fold)
     Pay _ v  -> currentPhase == Running
-             && Ada.adaValueOf (fromInteger v) `Value.geq` Ada.toValue minAdaTxOut
+             && Ada.adaValueOf (fromInteger v) `Value.geq` Ada.toValue minAdaTxOutEstimated
     where currentPhase = s ^. CM.contractState . phase
 
 {-

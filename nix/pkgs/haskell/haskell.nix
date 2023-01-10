@@ -12,6 +12,7 @@
   # Whether to set the `defer-plugin-errors` flag on those packages that need
   # it. If set to true, we will also build the haddocks for those packages.
 , deferPluginErrors
+, CHaP
 }:
 let
   project = haskell-nix.cabalProject' ({ pkgs, config, ... }: {
@@ -26,6 +27,9 @@ let
         name = "plutus-apps";
       };
     sha256map = import ./sha256map.nix;
+    inputMap = {
+      "https://input-output-hk.github.io/cardano-haskell-packages" = CHaP;
+    };
     # Configuration settings needed for cabal configure to work when cross compiling
     # for windows. We can't use `modules` for these as `modules` are only applied
     # after cabal has been configured.
@@ -49,6 +53,7 @@ let
           packages = {
             # Things that need plutus-tx-plugin
             freer-extras.package.buildable = false;
+            cardano-node-emulator.package.buildable = false;
             cardano-streaming.package.buildable = false;
             marconi.package.buildable = false;
             pab-blockfrost.package.buildable = false;
@@ -64,13 +69,11 @@ let
             plutus-ledger-constraints.package.buildable = false;
             plutus-pab.package.buildable = false;
             plutus-pab-executables.package.buildable = false;
-            plutus-playground-server.package.buildable = false; # Would also require libpq
             plutus-script-utils.package.buildable = false;
             plutus-tx-constraints.package.buildable = false;
             plutus-tx-plugin.package.buildable = false;
             plutus-use-cases.package.buildable = false;
             plutus-example.package.buildable = false;
-            web-ghc.package.buildable = false;
             # These need R
             plutus-core.components.benchmarks.cost-model-test.buildable = lib.mkForce false;
             plutus-core.components.benchmarks.update-cost-model.buildable = lib.mkForce false;
@@ -107,6 +110,12 @@ let
             };
           }
         )
+        (lib.mkIf pkgs.stdenv.hostPlatform.isDarwin {
+          packages = {
+            plutus-pab-executables.components.tests.plutus-pab-test-full-long-running.buildable = lib.mkForce false;
+            playground-common.doHaddock = false; # Segfault 11
+          };
+        })
         ({ pkgs, config, ... }: {
           packages = {
             marconi.doHaddock = deferPluginErrors;
@@ -162,10 +171,6 @@ let
             # Relies on cabal-doctest, just turn it off in the Nix build
             prettyprinter-configurable.components.tests.prettyprinter-configurable-doctest.buildable = lib.mkForce false;
 
-            plutus-pab-executables.components.tests.plutus-pab-test-full-long-running = {
-              platforms = lib.platforms.linux;
-            };
-
             # Broken due to warnings, unclear why the setting that fixes this for the build doesn't work here.
             iohk-monitoring.doHaddock = false;
             cardano-wallet.doHaddock = false;
@@ -183,7 +188,6 @@ let
             plutus-example.ghcOptions = [ "-Werror" ];
             plutus-ledger.ghcOptions = [ "-Werror" ];
             plutus-ledger-constraints.ghcOptions = [ "-Werror" ];
-            plutus-playground-server.ghcOptions = [ "-Werror" ];
             plutus-pab.ghcOptions = [ "-Werror" ];
             plutus-pab-executables.ghcOptions = [ "-Werror" ];
             plutus-script-utils.ghcOptions = [ "-Werror" ];

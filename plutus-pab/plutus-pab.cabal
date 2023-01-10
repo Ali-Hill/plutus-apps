@@ -126,6 +126,7 @@ library
   -- Local components
   --------------------
   build-depends:
+    , cardano-node-emulator      >=1.0.0
     , freer-extras               >=1.0.0
     , pab-blockfrost
     , playground-common          >=1.0.0
@@ -144,8 +145,6 @@ library
     , cardano-addresses
     , cardano-api                      >=1.35
     , cardano-ledger-alonzo
-    , cardano-ledger-core
-    , cardano-ledger-shelley
     , cardano-slotting
     , cardano-wallet
     , cardano-wallet-cli
@@ -215,7 +214,6 @@ library
     , time
     , time-units
     , transformers
-    , unordered-containers
     , uuid
     , wai
     , wai-cors
@@ -242,6 +240,7 @@ test-suite plutus-pab-test-light
   -- Local components
   --------------------
   build-depends:
+    , cardano-node-emulator      >=1.0.0
     , plutus-contract            >=1.0.0
     , plutus-ledger              >=1.0.0
     , plutus-ledger-constraints  >=1.0.0

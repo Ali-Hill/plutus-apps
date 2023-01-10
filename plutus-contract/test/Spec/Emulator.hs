@@ -12,17 +12,24 @@
 {-# OPTIONS_GHC -fno-warn-unused-do-bind #-}
 module Spec.Emulator(tests) where
 
-
+import Cardano.Api.Shelley qualified as C
+import Cardano.Node.Emulator.Chain qualified as Chain
+import Cardano.Node.Emulator.Fee (selectCoin)
+import Cardano.Node.Emulator.Generators (Mockchain (Mockchain))
+import Cardano.Node.Emulator.Generators qualified as Gen
+import Cardano.Node.Emulator.Params (Params (Params, pNetworkId))
+import Cardano.Node.Emulator.Validation qualified as Validation
 import Control.Lens ((&), (.~), (^.))
 import Control.Monad (void)
 import Control.Monad.Freer qualified as Eff
-import Control.Monad.Freer.Error qualified as E
+import Control.Monad.Freer.Extras.Log (LogLevel (Debug))
 import Control.Monad.Freer.Writer (Writer, runWriter, tell)
 import Data.ByteString.Lazy qualified as BSL
 import Data.ByteString.Lazy.Char8 (pack)
 import Data.Default (Default (def))
 import Data.Foldable (fold)
 import Data.Map qualified as Map
+import Data.Maybe (fromMaybe)
 import Data.Text qualified as Text
 import Hedgehog (Property, forAll, property)
 import Hedgehog qualified
@@ -33,12 +40,8 @@ import Ledger (CardanoTx (..), Language (PlutusV1), OnChainTx (Valid), PaymentPu
                Versioned (Versioned, unversioned), cardanoTxMap, getCardanoTxOutRefs, getCardanoTxOutputs,
                mkValidatorScript, onCardanoTx, outputs, txOutValue, unitDatum, unitRedeemer, unspentOutputs)
 import Ledger.Ada qualified as Ada
-import Ledger.Generators (Mockchain (Mockchain))
-import Ledger.Generators qualified as Gen
 import Ledger.Index qualified as Index
-import Ledger.Params (Params (Params, pNetworkId))
-import Ledger.Tx.CardanoAPI (toCardanoTxOut, toCardanoTxOutDatumInTx)
-import Ledger.Validation qualified as Validation
+import Ledger.Tx.CardanoAPI (fromPlutusIndex, toCardanoAddressInEra, toCardanoTxOutDatumInTx, toCardanoTxOutValue)
 import Ledger.Value qualified as Value
 import Plutus.Contract.Test hiding (not)
 import Plutus.Script.Utils.V1.Address (mkValidatorAddress)
@@ -46,17 +49,14 @@ import Plutus.Script.Utils.V1.Typed.Scripts (mkUntypedValidator)
 import Plutus.Trace (EmulatorTrace, PrintEffect (PrintLn))
 import Plutus.Trace qualified as Trace
 import Plutus.V1.Ledger.Contexts (ScriptContext)
-import Plutus.V2.Ledger.Api qualified as PV2
 import PlutusTx qualified
 import PlutusTx.Numeric qualified as P
 import PlutusTx.Prelude qualified as PlutusTx
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.Golden (goldenVsString)
 import Test.Tasty.Hedgehog (testPropertyNamed)
-import Wallet (WalletAPIError, payToPaymentPublicKeyHash_, submitTxn)
+import Wallet (payToPaymentPublicKeyHash_, submitTxn)
 import Wallet.API qualified as W
-import Wallet.Emulator.Chain qualified as Chain
-import Wallet.Emulator.Types (selectCoin)
 import Wallet.Graph qualified
 
 tests :: TestTree
@@ -102,7 +102,8 @@ captureTrace
 captureTrace trace
   = pack $ unlines output
   where
-    output = capturePrintEffect $ Trace.runEmulatorTraceEff def def trace
+    output = capturePrintEffect
+           $ Trace.runEmulatorTraceEff (def { Trace.traceConfigMinLogLevel = Debug }) def trace
 
 capturePrintEffect
          :: Eff.Eff '[PrintEffect] r
@@ -138,12 +139,12 @@ selectCoinProp :: Property
 selectCoinProp = property $ do
     inputs <- forAll $ zip [(1 :: Integer) ..] <$> Gen.list (Range.linear 1 100) Gen.genValueNonNegative
     target <- forAll Gen.genValueNonNegative
-    let result = Eff.run $ E.runError @WalletAPIError (selectCoin inputs target)
+    let result = selectCoin inputs target
     case result of
         Left _ ->
             Hedgehog.assert $ not $ foldMap snd inputs `Value.geq` target
         Right (ins, change) ->
-            Hedgehog.assert $ foldMap snd ins == (target P.+ change)
+            Hedgehog.assert $ foldMap (fromMaybe mempty . (`lookup` inputs)) ins == (target P.+ change)
 
 txnUpdateUtxo :: Property
 txnUpdateUtxo = property $ do
@@ -165,7 +166,7 @@ txnUpdateUtxo = property $ do
                 ] -> "ApplyTxError [UtxowFailure (UtxoFailure (FromAlonzoUtxoFail (ValueNotConserved" `Text.isInfixOf` msg
                      || "[CollectErrors [BadTranslation (TranslationLogicMissingInput" `Text.isInfixOf` msg
             _ -> False
-    checkPredicateInner options (assertChainEvents pred) trace Hedgehog.annotate Hedgehog.assert (const $ pure ())
+    void $  checkPredicateInner options (assertChainEvents pred) trace Hedgehog.annotate Hedgehog.assert (const $ pure ())
 
 validTrace :: Property
 validTrace = property $ do
@@ -173,7 +174,7 @@ validTrace = property $ do
     let options = defaultCheckOptions & emulatorConfig . Trace.initialChainState .~ Right m
         signedTx = Gen.signTx params utxo txn
         trace = Trace.liftWallet wallet1 (submitTxn signedTx)
-    checkPredicateInner options assertNoFailedTransactions trace Hedgehog.annotate Hedgehog.assert (const $ pure ())
+    void $  checkPredicateInner options assertNoFailedTransactions trace Hedgehog.annotate Hedgehog.assert (const $ pure ())
 
 validTrace2 :: Property
 validTrace2 = property $ do
@@ -184,7 +185,7 @@ validTrace2 = property $ do
             Trace.liftWallet wallet1 (submitTxn signedTx)
             Trace.liftWallet wallet1 (submitTxn signedTx)
         predicate = assertFailedTransaction (\_ _ -> True)
-    checkPredicateInner options predicate trace Hedgehog.annotate Hedgehog.assert (const $ pure ())
+    void $  checkPredicateInner options predicate trace Hedgehog.annotate Hedgehog.assert (const $ pure ())
 
 invalidTrace :: Property
 invalidTrace = property $ do
@@ -200,7 +201,7 @@ invalidTrace = property $ do
                 , Chain.SlotAdd _
                 ] -> "ValueNotConservedUTxO" `Text.isInfixOf` msg
             _ -> False
-    checkPredicateInner options (assertChainEvents pred) trace Hedgehog.annotate Hedgehog.assert (const $ pure ())
+    void $ checkPredicateInner options (assertChainEvents pred) trace Hedgehog.annotate Hedgehog.assert (const $ pure ())
 
 invalidScript :: Property
 invalidScript = property $ do
@@ -211,13 +212,10 @@ invalidScript = property $ do
     let emulatorTx = onCardanoTx id (\_ -> error "Unexpected Cardano.Api.Tx") txn1
     let setOutputs o =
             either (const Hedgehog.failure) (pure . TxOut)
-          $ toCardanoTxOut pNetworkId
-              (\(PV2.OutputDatum d) -> Right $ toCardanoTxOutDatumInTx d)
-          $ PV2.TxOut
-                (mkValidatorAddress $ unversioned failValidator)
-                (txOutValue o)
-                (PV2.OutputDatum unitDatum)
-                Nothing
+          $ C.TxOut <$> toCardanoAddressInEra pNetworkId (mkValidatorAddress $ unversioned failValidator)
+            <*> toCardanoTxOutValue (txOutValue o)
+            <*> Right (toCardanoTxOutDatumInTx unitDatum)
+            <*> pure C.ReferenceScriptNone
     outs <- traverse setOutputs $ emulatorTx ^. outputs
     let scriptTxn = EmulatorTx $
             emulatorTx
@@ -234,23 +232,16 @@ invalidScript = property $ do
             totalVal
     Hedgehog.annotateShow invalidTxn
 
-    let cUtxoIndex = either (error . show) id $ Validation.fromPlutusIndex $ Index.UtxoIndex $ Map.fromList invalidTxnUtxo
+    let cUtxoIndex = either (error . show) id $ fromPlutusIndex $ Index.UtxoIndex $ Map.fromList invalidTxnUtxo
         signedInvalidTxn = onCardanoTx
           (\t -> Validation.fromPlutusTxSigned' params cUtxoIndex t Gen.knownPaymentKeys)
           (const $ error "unexpected CardanoTx")
           invalidTxn
 
     Hedgehog.annotateShow signedInvalidTxn
-    Hedgehog.assert (signedInvalidTxn ==
-      Left (
-        Left ( Index.Phase2
-             , Index.ScriptFailure
-               ( EvaluationError
-                   ["I always fail everything"]
-                   "CekEvaluationFailure: An error has occurred:  User error:\nThe machine terminated because of an error, either from a built-in function or from an explicit use of 'error'."
-                )
-              )
-            )
+    Hedgehog.assert (case signedInvalidTxn of
+      Left (Left (Index.Phase2, Index.ScriptFailure (EvaluationError msgs _))) -> elem "I always fail everything" msgs
+      _                                                                        -> False
       )
     where
         failValidator :: Versioned Validator
@@ -318,7 +309,7 @@ pubKeyTransactions2 = do
 evalEmulatorTraceTest :: Property
 evalEmulatorTraceTest = property $ do
     let trace = Trace.payToWallet wallet1 wallet2 (Ada.adaValueOf 10)
-        res = Trace.evalEmulatorTrace def trace
+        res = Trace.evalEmulatorTrace def def trace
     Hedgehog.annotateShow res
     Hedgehog.assert (either (const False) (const True) res)
 

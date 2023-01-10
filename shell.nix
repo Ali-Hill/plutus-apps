@@ -5,9 +5,9 @@
 , packages ? import ./. { inherit system enableHaskellProfiling sources sourcesOverride; }
 }:
 let
-  inherit (packages) pkgs plutus-apps plutus-playground pab-nami-demo docs webCommon;
+  inherit (packages) pkgs plutus-apps docs webCommon;
   inherit (pkgs) stdenv lib utillinux python3 nixpkgs-fmt glibcLocales;
-  inherit (plutus-apps) haskell stylish-haskell sphinxcontrib-haddock sphinx-markdown-tables sphinxemoji nix-pre-commit-hooks cabal-fmt;
+  inherit (plutus-apps) haskell stylish-haskell sphinxcontrib-haddock sphinx-markdown-tables sphinxemoji scriv nix-pre-commit-hooks cabal-fmt;
 
   # Feed cardano-wallet, cardano-cli & cardano-node to our shell. This is stable as it doesn't mix
   # dependencies with this code-base; the fetched binaries are the "standard" builds that people
@@ -27,13 +27,14 @@ let
     (pkgs.fetchgit {
       url = "https://github.com/input-output-hk/cardano-node";
       # A standard release compatible with the cardano-wallet commit above is always preferred.
-      rev = "1.35.3";
-      sha256 = "020fwimsm24yblr1fmnwx240wj8r3x715p89cpjgnnd8axwf32p0";
+      rev = "1.35.4";
+      sha256 = "1j01m2cp2vdcl26zx9xmipr551v3b2rz9kfn9ik8byfwj1z7652r";
     })
     { };
 
-  # For Sphinx, and ad-hoc usage
-  sphinxTools = python3.withPackages (ps: [
+  # For Sphinx, scriv, and ad-hoc usage
+  pythonTools = python3.withPackages (ps: [
+    scriv
     sphinxcontrib-haddock.sphinxcontrib-domaintools
     sphinx-markdown-tables
     sphinxemoji
@@ -128,11 +129,9 @@ let
     haskell-language-server-wrapper
     hie-bios
     hlint
-    pab-nami-demo.start-backend
-    plutus-playground.start-backend
     psa
     purescript-language-server
-    purs
+    purs-0_14_3
     purs-tidy
     spago
     spago2nix
@@ -142,7 +141,7 @@ let
 
 in
 haskell.project.shellFor {
-  nativeBuildInputs = nixpkgsInputs ++ localInputs ++ [ sphinxTools ];
+  nativeBuildInputs = nixpkgsInputs ++ localInputs ++ [ pythonTools ];
   # We don't currently use this, and it's a pain to materialize, and otherwise
   # costs a fair bit of eval time.
   withHoogle = false;
@@ -159,7 +158,14 @@ haskell.project.shellFor {
     ${utillinux}/bin/taskset -pc 0-1000 $$
   ''
   + ''
+    export GITHUB_SHA=$(git rev-parse HEAD)
     export WEB_COMMON_SRC=${webCommon.cleanSrc}
+
+    # This is probably set by haskell.nix's shellFor, but it interferes 
+    # with the pythonTools in nativeBuildInputs above.
+    # This workaround will become obsolete soon once this respository 
+    # is migrated to Standard.
+    export PYTHONPATH=
   '';
 
   # This is no longer set automatically as of more recent `haskell.nix` revisions,

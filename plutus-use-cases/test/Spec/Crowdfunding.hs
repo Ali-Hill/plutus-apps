@@ -1,5 +1,6 @@
 {-# LANGUAGE DataKinds           #-}
 {-# LANGUAGE DeriveDataTypeable  #-}
+{-# LANGUAGE DeriveGeneric       #-}
 {-# LANGUAGE FlexibleInstances   #-}
 {-# LANGUAGE GADTs               #-}
 {-# LANGUAGE NamedFieldPuns      #-}
@@ -36,12 +37,12 @@ import Test.Tasty.Golden (goldenVsString)
 import Test.Tasty.HUnit qualified as HUnit
 import Test.Tasty.QuickCheck hiding ((.&&.))
 
+import Cardano.Node.Emulator.TimeSlot qualified as TimeSlot
 import Ledger (Value)
 import Ledger qualified
 import Ledger.Ada qualified as Ada
 import Ledger.Slot (Slot (..))
 import Ledger.Time (POSIXTime)
-import Ledger.TimeSlot qualified as TimeSlot
 import Plutus.Contract hiding (currentSlot, runError)
 import Plutus.Contract.Test
 import Plutus.Contract.Test.ContractModel
@@ -210,7 +211,7 @@ deriving instance Show (ContractInstanceKey CrowdfundingModel w schema err param
 instance ContractModel CrowdfundingModel where
   data Action CrowdfundingModel = CContribute Wallet Value
                                 | CStart
-                                deriving (Eq, Show, Data)
+                                deriving (Eq, Show, Generic)
 
   data ContractInstanceKey CrowdfundingModel w schema err params where
     ContributorKey :: Wallet -> ContractInstanceKey CrowdfundingModel () CrowdfundingSchema ContractError ()
@@ -233,16 +234,22 @@ instance ContractModel CrowdfundingModel where
   instanceContract _ ContributorKey{} _ = crowdfunding params
 
   perform h _ s a = case a of
-    CContribute w v -> Trace.callEndpoint @"contribute" (h $ ContributorKey w) Contribution{contribValue=v}
-    CStart          -> Trace.callEndpoint @"schedule collection" (h $ OwnerKey $ s ^. contractState . ownerWallet) ()
+    CContribute w v -> do
+      Trace.callEndpoint @"contribute" (h $ ContributorKey w) Contribution{contribValue=v}
+      delay 1
+    CStart          -> do
+      Trace.callEndpoint @"schedule collection" (h $ OwnerKey $ s ^. contractState . ownerWallet) ()
+      delay 1
 
   nextState a = case a of
     CContribute w v -> do
       withdraw w v
-      contributions $~ Map.insert w v
+      contributions %= Map.insert w v
+      wait 1
     CStart -> do
       slot' <- viewModelState currentSlot
       end <- viewContractState endSlot
+      wait 1
       -- Collecting happens immediately if the campaign deadline has passed
       if slot' < end
         then do
@@ -260,7 +267,7 @@ instance ContractModel CrowdfundingModel where
     -- they collect all the money
     end <- viewContractState endSlot
     online <- viewContractState ownerOnline
-    when (slot' >= end && online) $ do
+    when (slot' > end && online) $ do
       owner <- viewContractState ownerWallet
       cMap <- viewContractState contributions
       deposit owner (fold cMap)
@@ -270,7 +277,7 @@ instance ContractModel CrowdfundingModel where
     -- If its after the end of the collection time range
     -- the remaining funds are collected by the contracts
     collectDeadline <- viewContractState collectDeadlineSlot
-    when (slot' >= collectDeadline) $ do
+    when (slot' > collectDeadline) $ do
       cMap <- viewContractState contributions
       mapM_ (uncurry deposit) (Map.toList cMap)
       contributions .= Map.empty
@@ -282,7 +289,7 @@ instance ContractModel CrowdfundingModel where
     CContribute w v -> w `notElem` Map.keys (s ^. contractState . contributions)
                     && w /= (s ^. contractState . ownerWallet)
                     && s ^. currentSlot < s ^. contractState . endSlot
-                    && Ada.fromValue v >= Ledger.minAdaTxOut
+                    && Ada.fromValue v >= Ledger.minAdaTxOutEstimated
     CStart          -> Prelude.not (s ^. contractState . ownerOnline || s ^. contractState . ownerContractDone)
 
   -- To generate a random test case we need to know how to generate a random
