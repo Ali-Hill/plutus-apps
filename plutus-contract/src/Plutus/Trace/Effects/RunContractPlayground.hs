@@ -24,6 +24,7 @@ module Plutus.Trace.Effects.RunContractPlayground(
     , handleRunContractPlayground
     ) where
 
+import Cardano.Api (NetworkId)
 import Control.Lens
 import Control.Monad (void)
 import Control.Monad.Freer (Eff, Member, type (~>))
@@ -67,14 +68,14 @@ makeEffect ''RunContractPlayground
 
 -- | Handle the 'RunContractPlayground' effect.
 handleRunContractPlayground ::
-    forall w s e effs effs2.
+    forall w s e effs effs2 a.
     ( ContractConstraints s
     , Show e
     , JSON.ToJSON e
     , JSON.ToJSON w
     , Monoid w
     , Member ContractInstanceIdEff effs
-    , Member (Yield (EmSystemCall effs2 EmulatorMessage) (Maybe EmulatorMessage)) effs
+    , Member (Yield (EmSystemCall effs2 EmulatorMessage a) (Maybe EmulatorMessage)) effs
     , Member (LogMsg EmulatorEvent') effs2
     , Member (Error EmulatorRuntimeError) effs2
     , Member (State EmulatorThreads) effs2
@@ -82,21 +83,22 @@ handleRunContractPlayground ::
     , Member (State (Map Wallet ContractInstanceId)) effs2
     , Member (State (Map Wallet ContractInstanceId)) effs
     )
-    => Contract w s e ()
+    => NetworkId
+    -> Contract w s e ()
     -> RunContractPlayground
     ~> Eff effs
-handleRunContractPlayground contract = \case
-    CallEndpoint wallet ep vl -> handleCallEndpoint @effs @effs2 wallet ep vl
-    LaunchContract wllt       -> handleLaunchContract @w @s @e @effs @effs2 contract wllt
+handleRunContractPlayground networkId contract = \case
+    CallEndpoint wallet ep vl -> handleCallEndpoint @effs @effs2 @a wallet ep vl
+    LaunchContract wllt       -> handleLaunchContract @w @s @e @effs @effs2 @a networkId contract wllt
 
 handleLaunchContract ::
-    forall w s e effs effs2.
+    forall w s e effs effs2 a.
     ( ContractConstraints s
     , Show e
     , JSON.ToJSON e
     , JSON.ToJSON w
     , Monoid w
-    , Member (Yield (EmSystemCall effs2 EmulatorMessage) (Maybe EmulatorMessage)) effs
+    , Member (Yield (EmSystemCall effs2 EmulatorMessage a) (Maybe EmulatorMessage)) effs
     , Member ContractInstanceIdEff effs
     , Member (LogMsg EmulatorEvent') effs2
     , Member (Error EmulatorRuntimeError) effs2
@@ -104,20 +106,21 @@ handleLaunchContract ::
     , Member MultiAgentEffect effs2
     , Member (State (Map Wallet ContractInstanceId)) effs
     )
-    => Contract w s e ()
+    => NetworkId
+    -> Contract w s e ()
     -> Wallet
     -> Eff effs ()
-handleLaunchContract contract wllt = do
+handleLaunchContract networkId contract wllt = do
     i <- nextId
-    let handle = ContractHandle{chContract=contract, chInstanceId = i, chInstanceTag = walletInstanceTag wllt}
-    void $ startContractThread @w @s @e @effs @effs2 wllt handle
+    let handle = ContractHandle{chContract=contract, chInstanceId = i, chInstanceTag = walletInstanceTag wllt, chNetworkId = networkId}
+    void $ startContractThread @w @s @e @effs @effs2 @a wllt handle
     modify @(Map Wallet ContractInstanceId) (set (at wllt) (Just i))
 
 handleCallEndpoint ::
-    forall effs effs2.
+    forall effs effs2 a.
     ( Member (State (Map Wallet ContractInstanceId)) effs2
     , Member (Error EmulatorRuntimeError) effs2
-    , Member (Yield (EmSystemCall effs2 EmulatorMessage) (Maybe EmulatorMessage)) effs
+    , Member (Yield (EmSystemCall effs2 EmulatorMessage a) (Maybe EmulatorMessage)) effs
     , Member (State EmulatorThreads) effs2
     )
     => Wallet
@@ -130,8 +133,8 @@ handleCallEndpoint wllt endpointName endpointValue = do
         thr = do
             threadId <- getInstance wllt >>= getThread
             ownId <- ask @ThreadId
-            void $ mkSysCall @effs2 @EmulatorMessage Normal (Left $ Message threadId $ EndpointCall ownId (EndpointDescription endpointName) epJson)
-    void $ fork @effs2 @EmulatorMessage "call endpoint" Normal thr
+            void $ mkSysCall @effs2 @EmulatorMessage @_ @a Normal (Left $ Message threadId $ EndpointCall ownId (EndpointDescription endpointName) epJson)
+    void $ fork @effs2 @EmulatorMessage @_ @a "call endpoint" Normal thr
 
 getInstance ::
     ( Member (State (Map Wallet ContractInstanceId)) effs

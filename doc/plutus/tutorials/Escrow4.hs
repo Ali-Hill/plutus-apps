@@ -1,5 +1,5 @@
 {-# LANGUAGE DataKinds           #-}
-{-# LANGUAGE DeriveDataTypeable  #-}
+{-# LANGUAGE DeriveGeneric       #-}
 {-# LANGUAGE FlexibleInstances   #-}
 {-# LANGUAGE GADTs               #-}
 {-# LANGUAGE ImportQualifiedPost #-}
@@ -19,12 +19,11 @@ module Escrow4(prop_Escrow, prop_FinishEscrow, prop_NoLockedFunds, EscrowModel) 
 
 import Control.Lens (At (at), makeLenses, to, (%=), (.=), (^.))
 import Control.Monad (void, when)
-import Data.Data (Data)
 import Data.Foldable (fold)
 import Data.Map (Map)
 import Data.Map qualified as Map
 
-import Ledger (POSIXTime (POSIXTime), Slot (Slot, getSlot), minAdaTxOut)
+import Ledger (POSIXTime (POSIXTime), Slot (Slot, getSlot), minAdaTxOutEstimated)
 import Ledger.Ada qualified as Ada
 import Ledger.Value qualified as Value
 import Plutus.Contract (Contract, selectList)
@@ -35,8 +34,8 @@ import Plutus.V1.Ledger.Api (Datum)
 import Plutus.Trace.Emulator qualified as Trace
 import PlutusTx.Monoid (inv)
 
+import Cardano.Node.Emulator.TimeSlot (SlotConfig (scSlotLength), scSlotZeroTime)
 import Data.Default (Default (def))
-import Ledger.TimeSlot (SlotConfig (scSlotLength), scSlotZeroTime)
 import Plutus.Contracts.Escrow (EscrowError, EscrowParams (EscrowParams, escrowDeadline, escrowTargets), EscrowSchema,
                                 payEp, payToPaymentPubKeyTarget, redeemEp, refundEp)
 import Test.QuickCheck (Arbitrary (arbitrary, shrink), Gen, Positive (getPositive), Property, choose, elements,
@@ -49,11 +48,11 @@ data EscrowModel =
         , _targets       :: Map Wallet Value.Value
         , _refundSlot    :: Slot             -- NEW!!!
         , _phase         :: Phase
-        } deriving (Eq, Show, Data)
+        } deriving (Eq, Show, CM.Generic)
 {- END EscrowModel -}
 
 {- START Phase -}
-data Phase = Initial | Running | Refunding deriving (Eq, Show, Data)
+data Phase = Initial | Running | Refunding deriving (Eq, Show, CM.Generic)
 {- END Phase -}
 
 makeLenses ''EscrowModel
@@ -68,7 +67,7 @@ instance CM.ContractModel EscrowModel where
                           | Redeem Wallet
                           | Pay Wallet Integer
                           | Refund Wallet
-    deriving (Eq, Show, Data)
+    deriving (Eq, Show, CM.Generic)
 {- END Action -}
 
   data ContractInstanceKey EscrowModel w s e params where
@@ -132,11 +131,11 @@ instance CM.ContractModel EscrowModel where
   precondition s a = case a of
     Init s tgts -> currentPhase == Initial
                 && s > 1
-                && and [Ada.adaValueOf (fromInteger n) `Value.geq` Ada.toValue minAdaTxOut | (_,n) <- tgts]
+                && and [Ada.adaValueOf (fromInteger n) `Value.geq` Ada.toValue minAdaTxOutEstimated | (_,n) <- tgts]
     Redeem _    -> currentPhase == Running
                 && fold (s ^. CM.contractState . contributions) `Value.geq` fold (s ^. CM.contractState . targets)
     Pay _ v     -> currentPhase == Running
-                && Ada.adaValueOf (fromInteger v) `Value.geq` Ada.toValue minAdaTxOut
+                && Ada.adaValueOf (fromInteger v) `Value.geq` Ada.toValue minAdaTxOutEstimated
     Refund w    -> currentPhase == Refunding           -- NEW!!!
                 && w `Map.member` (s ^. CM.contractState . contributions)
     where currentPhase = s ^. CM.contractState . phase

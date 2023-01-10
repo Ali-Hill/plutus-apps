@@ -9,8 +9,10 @@ module Spec.Escrow.Endpoints where
 
 import Data.Text (unpack)
 
+import Control.Lens (_1, has, only)
 import Control.Monad (void)
 
+import Cardano.Node.Emulator.Params (pNetworkId)
 import Ledger (PaymentPubKeyHash)
 import Ledger.Constraints qualified as Constraints
 import Ledger.Interval (from)
@@ -46,12 +48,14 @@ badRefund ::
     -> PaymentPubKeyHash
     -> Contract w s EscrowError ()
 badRefund inst pk = do
-    unspentOutputs <- utxosAt (Scripts.validatorAddress inst)
-    current <- currentTime
-    let flt _ ciTxOut = fst (Tx._ciTxOutScriptDatum ciTxOut) == Ledger.datumHash (Datum (PlutusTx.toBuiltinData pk))
+    networkId <- pNetworkId <$> getParams
+    unspentOutputs <- utxosAt (Scripts.validatorCardanoAddress networkId inst)
+    current <- snd <$> currentNodeClientTimeRange
+    let pkh = Ledger.datumHash $ Datum $ PlutusTx.toBuiltinData pk
+        flt _ ciTxOut = has (Tx.decoratedTxOutScriptDatum . _1 . only pkh) ciTxOut
         tx' = Constraints.collectFromTheScriptFilter flt unspentOutputs Refund
            <> Constraints.mustValidateIn (from (current - 1))
-    utx <- mkTxConstraints ( Constraints.plutusV1TypedValidatorLookups inst
+    utx <- mkTxConstraints ( Constraints.typedValidatorLookups inst
                           <> Constraints.unspentOutputs unspentOutputs
                            ) tx'
     handleError (\err -> logError $ "Caught error: " ++ unpack err) $

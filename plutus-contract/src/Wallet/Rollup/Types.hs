@@ -14,9 +14,8 @@ import Data.Aeson (FromJSON, FromJSONKey, ToJSON, ToJSONKey)
 import Data.Map (Map)
 import Data.OpenApi.Schema qualified as OpenApi
 import GHC.Generics
-import Ledger
-import Ledger.Credential (Credential (..))
-import Plutus.V1.Ledger.Api (ValidatorHash)
+import Ledger (CardanoTx, PaymentPubKeyHash (PaymentPubKeyHash), TxIn, TxOut, cardanoAddressCredential, txOutAddress)
+import Plutus.V1.Ledger.Api (Credential (PubKeyCredential, ScriptCredential), TxId, ValidatorHash, Value)
 import Prettyprinter (Pretty, pretty, viaShow)
 
 data TxKey =
@@ -64,8 +63,8 @@ data BeneficialOwner
     deriving anyclass (FromJSON, ToJSON, OpenApi.ToSchema, FromJSONKey, ToJSONKey)
 
 toBeneficialOwner :: TxOut -> BeneficialOwner
-toBeneficialOwner TxOut {txOutAddress=Address{addressCredential}} =
-    case addressCredential of
+toBeneficialOwner txOut =
+    case cardanoAddressCredential (txOutAddress txOut) of
         PubKeyCredential pkh -> OwnedByPaymentPubKey (PaymentPubKeyHash pkh)
         ScriptCredential vh  -> OwnedByScript vh
 

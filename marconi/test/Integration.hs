@@ -5,6 +5,7 @@
 {-# LANGUAGE OverloadedStrings  #-}
 {-# LANGUAGE TemplateHaskell    #-}
 {-# OPTIONS_GHC -Wno-orphans    #-}
+{-# OPTIONS_GHC -Wno-unused-top-binds #-}
 
 module Integration (tests) where
 
@@ -18,6 +19,7 @@ import Data.ByteString.Lazy qualified as LBS
 import Data.ByteString.Short qualified as SBS
 import Data.Functor (($>))
 import Data.List.NonEmpty (NonEmpty ((:|)))
+import Data.List.NonEmpty qualified as NE
 import Data.Map qualified as Map
 import Data.Set qualified as Set
 import GHC.Stack qualified as GHC
@@ -25,7 +27,6 @@ import Streaming.Prelude qualified as S
 import System.Directory qualified as IO
 import System.Environment qualified as IO
 import System.FilePath ((</>))
-import System.IO.Temp qualified as IO
 import System.Info qualified as IO
 
 import Hedgehog (MonadTest, Property, assert, (===))
@@ -34,16 +35,16 @@ import Hedgehog.Extras.Stock.IO.Network.Sprocket qualified as IO
 import Hedgehog.Extras.Test qualified as HE
 import Hedgehog.Extras.Test.Base qualified as H
 import Test.Tasty (TestTree, testGroup)
-import Test.Tasty.Hedgehog (testProperty)
+import Test.Tasty.Hedgehog (testPropertyNamed)
 
 import Cardano.Api qualified as C
 import Cardano.Api.Shelley qualified as C
 import Cardano.BM.Setup (withTrace)
 import Cardano.BM.Trace (logError)
 import Cardano.BM.Tracing (defaultConfigStdout)
+import Cardano.Streaming (ChainSyncEventException (NoIntersectionFound), withChainSyncEventStream)
 import Gen.Cardano.Api.Typed qualified as CGen
 import Ouroboros.Network.Protocol.LocalTxSubmission.Type (SubmitResult (SubmitFail, SubmitSuccess))
-import Plutus.Streaming (ChainSyncEventException (NoIntersectionFound), withChainSyncEventStream)
 import Plutus.V1.Ledger.Scripts qualified as Plutus
 import PlutusTx qualified
 import Prettyprinter (defaultLayoutOptions, layoutPretty, pretty, (<+>))
@@ -52,14 +53,15 @@ import Test.Base qualified as H
 import Testnet.Cardano qualified as TN
 import Testnet.Conf qualified as TC (Conf (..), ProjectBase (ProjectBase), YamlFilePath (YamlFilePath), mkConf)
 
-import Hedgehog.Extras qualified as H
 import Marconi.Index.ScriptTx qualified as ScriptTx
 import Marconi.Indexers qualified as M
 import Marconi.Logging ()
+import RewindableIndex.Storable qualified as Storable
 
 tests :: TestTree
 tests = testGroup "Integration"
-  [ testProperty "prop_script_hash_in_local_testnet_tx_match" testIndex ]
+  [ testPropertyNamed "prop_script_hash_in_local_testnet_tx_match" "testIndex" testIndex
+  ]
 
 {- | We test the script transaction indexer by setting up a testnet,
    adding a script to it and then spending it, and then see if the
@@ -76,8 +78,7 @@ tests = testGroup "Integration"
       the indexer to see if it was indexed properly
 -}
 testIndex :: Property
-testIndex = H.integration . HE.runFinallies . workspace "chairman" $ \tempAbsBasePath' -> do
-
+testIndex = H.integration $ (liftIO setDarwinTmpdir >>) $ HE.runFinallies $ H.workspace "." $ \tempAbsBasePath' -> do
   base <- HE.noteM $ liftIO . IO.canonicalizePath =<< HE.getProjectBase
   (socketPathAbs, networkId, tempAbsPath) <- startTestnet base tempAbsBasePath'
 
@@ -85,7 +86,7 @@ testIndex = H.integration . HE.runFinallies . workspace "chairman" $ \tempAbsBas
   -- can write index updates to it and we can await for them (also
   -- making us not need threadDelay)
   indexedTxs <- liftIO IO.newChan
-  let writeScriptUpdate (ScriptTx.ScriptTxUpdate txScripts _slotNo) = case txScripts of
+  let writeScriptUpdate (ScriptTx.ScriptTxEvent txScripts _slotNo) = case txScripts of
         (x : xs) -> IO.writeChan indexedTxs $ x :| xs
         _        -> pure ()
 
@@ -95,14 +96,14 @@ testIndex = H.integration . HE.runFinallies . workspace "chairman" $ \tempAbsBas
 
     coordinator <- M.initialCoordinator 1
     ch <- IO.atomically . IO.dupTChan $ M._channel coordinator
-    (loop, indexer) <- M.scriptTxWorker_ (\_ update -> writeScriptUpdate update $> []) (ScriptTx.Depth 0) coordinator ch sqliteDb
+    (loop, indexer) <- M.scriptTxWorker_ (\update -> writeScriptUpdate update $> []) (ScriptTx.Depth 1) coordinator ch sqliteDb
 
     -- Receive ChainSyncEvents and pass them on to indexer's channel
     void $ IO.forkIO $ do
       let chainPoint = C.ChainPointAtGenesis :: C.ChainPoint
       c <- defaultConfigStdout
       withTrace c "marconi" $ \trace -> let
-        indexerWorker = withChainSyncEventStream socketPathAbs networkId chainPoint $ S.mapM_ $
+        indexerWorker = withChainSyncEventStream socketPathAbs networkId [chainPoint] $ S.mapM_ $
           \chainSyncEvent -> IO.atomically $ IO.writeTChan ch chainSyncEvent
         handleException NoIntersectionFound = logError trace $ renderStrict $ layoutPretty defaultLayoutOptions $
           "No intersection found for chain point" <+> pretty chainPoint <> "."
@@ -157,7 +158,7 @@ testIndex = H.integration . HE.runFinallies . workspace "chairman" $ \tempAbsBas
           , C.localNodeSocketPath = socketPathAbs
           }
 
-  (tx1in, C.TxOut _ v _) <- do
+  (tx1in, C.TxOut _ v _ _) <- do
     utxo <- findUTxOByAddress localNodeConnectInfo (C.toAddressAny address)
     headM $ Map.toList $ C.unUTxO utxo
   let totalLovelace = C.txOutValueToLovelace v
@@ -181,18 +182,23 @@ testIndex = H.integration . HE.runFinallies . workspace "chairman" $ \tempAbsBas
           (C.AddressInEra (C.ShelleyAddressInEra C.ShelleyBasedEraAlonzo) plutusScriptAddr)
           (C.TxOutValue C.MultiAssetInAlonzoEra $ C.lovelaceToValue amountPaid)
           (C.TxOutDatumHash C.ScriptDataInAlonzoEra scriptDatumHash)
+          C.ReferenceScriptNone
       txOut2 :: C.TxOut ctx C.AlonzoEra
       txOut2 =
         C.TxOut
           (C.AddressInEra (C.ShelleyAddressInEra C.ShelleyBasedEraAlonzo) address)
           (C.TxOutValue C.MultiAssetInAlonzoEra $ C.lovelaceToValue amountReturned)
           C.TxOutDatumNone
+          C.ReferenceScriptNone
       txBodyContent :: C.TxBodyContent C.BuildTx C.AlonzoEra
       txBodyContent =
         C.TxBodyContent {
           C.txIns              = [(tx1in, C.BuildTxWith $ C.KeyWitness C.KeyWitnessForSpending)],
           C.txInsCollateral    = C.TxInsCollateralNone,
+          C.txInsReference     = C.TxInsReferenceNone,
           C.txOuts             = [txOut1, txOut2],
+          C.txTotalCollateral  = C.TxTotalCollateralNone,
+          C.txReturnCollateral = C.TxReturnCollateralNone,
           C.txFee              = C.TxFeeExplicit C.TxFeesExplicitInAlonzoEra tx1fee,
           C.txValidityRange    = (C.TxValidityNoLowerBound, C.TxValidityNoUpperBound C.ValidityNoUpperBoundInAlonzoEra),
           C.txMetadata         = C.TxMetadataNone,
@@ -219,7 +225,7 @@ testIndex = H.integration . HE.runFinallies . workspace "chairman" $ \tempAbsBas
 
   tx2collateralTxIn <- headM . Map.keys . C.unUTxO =<< findUTxOByAddress localNodeConnectInfo (C.toAddressAny address)
 
-  (scriptTxIn, C.TxOut _ valueAtScript _) <- do
+  (scriptTxIn, C.TxOut _ valueAtScript _ _) <- do
     scriptUtxo <- findUTxOByAddress localNodeConnectInfo $ C.toAddressAny plutusScriptAddr
     headM $ Map.toList $ C.unUTxO scriptUtxo
 
@@ -238,7 +244,7 @@ testIndex = H.integration . HE.runFinallies . workspace "chairman" $ \tempAbsBas
 
       scriptWitness :: C.Witness C.WitCtxTxIn C.AlonzoEra
       scriptWitness = C.ScriptWitness C.ScriptWitnessForSpending $
-        C.PlutusScriptWitness C.PlutusScriptV1InAlonzo C.PlutusScriptV1 plutusScript
+        C.PlutusScriptWitness C.PlutusScriptV1InAlonzo C.PlutusScriptV1 (C.PScript plutusScript)
         (C.ScriptDatumForTxIn scriptDatum) redeemer executionUnits
 
       collateral = C.TxInsCollateral C.CollateralInAlonzoEra [tx2collateralTxIn]
@@ -250,13 +256,17 @@ testIndex = H.integration . HE.runFinallies . workspace "chairman" $ \tempAbsBas
              -- send ADA back to the original genesis address               ^
             (C.TxOutValue C.MultiAssetInAlonzoEra $ C.lovelaceToValue $ lovelaceAtScript - tx2fee)
             C.TxOutDatumNone
+            C.ReferenceScriptNone
 
       tx2bodyContent :: C.TxBodyContent C.BuildTx C.AlonzoEra
       tx2bodyContent =
         C.TxBodyContent {
           C.txIns              = [(scriptTxIn, C.BuildTxWith scriptWitness)],
           C.txInsCollateral    = collateral,
+          C.txInsReference     = C.TxInsReferenceNone,
           C.txOuts             = [tx2out],
+          C.txTotalCollateral  = C.TxTotalCollateralNone,
+          C.txReturnCollateral = C.TxReturnCollateralNone,
           C.txFee              = C.TxFeeExplicit C.TxFeesExplicitInAlonzoEra tx2fee,
           C.txValidityRange    = (C.TxValidityNoLowerBound, C.TxValidityNoUpperBound C.ValidityNoUpperBoundInAlonzoEra),
           C.txMetadata         = C.TxMetadataNone,
@@ -275,7 +285,6 @@ testIndex = H.integration . HE.runFinallies . workspace "chairman" $ \tempAbsBas
 
   submitTx localNodeConnectInfo tx2
 
-
   {- Test if what the indexer got is what we sent.
 
   We test both of (1) what we get from `onInsert` callback and (2)
@@ -284,25 +293,25 @@ testIndex = H.integration . HE.runFinallies . workspace "chairman" $ \tempAbsBas
   because the indexer runs in a separate thread and there is no way
   of awaiting the data to be flushed into the database. -}
 
-  (ScriptTx.TxCbor tx, indexedScriptHashes) :| _ <- liftIO $ IO.readChan indexedTxs
+  indexedWithScriptHashes <- liftIO $ IO.readChan indexedTxs
 
-  ScriptTx.ScriptAddress indexedScriptHash <- headM indexedScriptHashes
+  -- We have to filter out the txs the empty scripts hashes because
+  -- sometimes the RollForward event contains a block with the first transaction 'tx1'
+  -- which has no scripts. The test fails because of that in 'headM indexedScriptHashes'.
+  -- For more details see https://github.com/input-output-hk/plutus-apps/issues/775
+  let (ScriptTx.TxCbor tx, indexedScriptHashes) = head $ NE.filter (\(_, hashes) -> hashes /= []) indexedWithScriptHashes
+
+  ScriptTx.ScriptTxAddress indexedScriptHash <- headM indexedScriptHashes
 
   indexedTx2 :: C.Tx C.AlonzoEra <- H.leftFail $ C.deserialiseFromCBOR (C.AsTx C.AsAlonzoEra) tx
 
   plutusScriptHash === indexedScriptHash
   tx2 === indexedTx2
 
-  -- The query poll
   queriedTx2 :: C.Tx C.AlonzoEra <- do
-    let
-      queryLoop n = do
-        H.threadDelay 250_000 -- wait 250ms before querying
-        txCbors <- liftIO $ ScriptTx.query indexer (ScriptTx.ScriptAddress plutusScriptHash) []
-        case txCbors of
-          result : _ -> pure result
-          _          -> queryLoop (n + 1)
-    ScriptTx.TxCbor txCbor <- queryLoop (0 :: Integer)
+    ScriptTx.ScriptTxResult (ScriptTx.TxCbor txCbor : _) <- liftIO $ do
+      ix <- IO.readMVar indexer
+      Storable.query Storable.QEverything ix (ScriptTx.ScriptTxAddress plutusScriptHash)
     H.leftFail $ C.deserialiseFromCBOR (C.AsTx C.AsAlonzoEra) txCbor
 
   tx2 === queriedTx2
@@ -318,14 +327,11 @@ startTestnet base tempAbsBasePath' = do
       Nothing
   assert $ tempAbsPath == (tempAbsBasePath' <> "/")
         && tempAbsPath == (tempBaseAbsPath <> "/")
-  TN.TestnetRuntime { TN.bftSprockets, TN.testnetMagic } <- TN.testnet TN.defaultTestnetOptions conf
-  let networkId = C.Testnet $ C.NetworkMagic $ fromIntegral testnetMagic
-  socketPath <- IO.sprocketArgumentName <$> headM bftSprockets
+  tn <- TN.testnet TN.defaultTestnetOptions conf
+  let networkId = C.Testnet $ C.NetworkMagic $ fromIntegral (TN.testnetMagic tn)
+  socketPath <- IO.sprocketArgumentName <$> headM (TN.nodeSprocket <$> TN.bftNodes tn)
   socketPathAbs <- H.note =<< (liftIO $ IO.canonicalizePath $ tempAbsPath </> socketPath)
   pure (socketPathAbs, networkId, tempAbsPath)
-
-deriving instance Real C.Lovelace
-deriving instance Integral C.Lovelace
 
 readAs :: (C.HasTextEnvelope a, MonadIO m, MonadTest m) => C.AsType a -> FilePath -> m a
 readAs as path = H.leftFailM . liftIO $ C.readFileTextEnvelope as path
@@ -356,17 +362,5 @@ headM :: (MonadTest m, GHC.HasCallStack) => [a] -> m a
 headM (a:_) = return a
 headM []    = GHC.withFrozenCallStack $ H.failMessage GHC.callStack "Cannot take head of empty list"
 
-workspace :: (MonadTest m, MonadIO m, GHC.HasCallStack) => FilePath -> (FilePath -> m ()) -> m ()
-workspace prefixPath f = GHC.withFrozenCallStack $ do
-  systemTemp <- case IO.os of
-    "darwin" -> pure "/tmp"
-    _        -> H.evalIO IO.getCanonicalTemporaryDirectory
-  maybeKeepWorkspace <- H.evalIO $ IO.lookupEnv "KEEP_WORKSPACE"
-  let systemPrefixPath = systemTemp <> "/" <> prefixPath
-  H.evalIO $ IO.createDirectoryIfMissing True systemPrefixPath
-  ws <- H.evalIO $ IO.createTempDirectory systemPrefixPath "test"
-  H.annotate $ "Workspace: " <> ws
-  -- liftIO $ IO.writeFile (ws <> "/module") callerModuleName
-  f ws
-  when (IO.os /= "mingw32" && maybeKeepWorkspace /= Just "1") $ do
-    H.evalIO $ IO.removeDirectoryRecursive ws
+setDarwinTmpdir :: IO ()
+setDarwinTmpdir = when (IO.os == "darwin") $ IO.setEnv "TMPDIR" "/tmp"

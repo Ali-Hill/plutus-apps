@@ -33,10 +33,11 @@ import Control.Lens (makeClassyPrisms)
 import Control.Monad (void)
 import Data.Aeson (FromJSON, ToJSON)
 import GHC.Generics (Generic)
-import Ledger (POSIXTime, PaymentPubKeyHash, Value)
+import Ledger (Address, POSIXTime, Value, toPlutusAddress)
 import Ledger.Ada qualified as Ada
 import Ledger.Constraints qualified as Constraints
 import Ledger.Constraints.TxConstraints (TxConstraints)
+import Ledger.Interval (Interval (Interval))
 import Ledger.Interval qualified as Interval
 import Ledger.Typed.Scripts qualified as Scripts
 import Ledger.Value qualified as Value
@@ -77,7 +78,7 @@ type SellerSchema = Endpoint "payout" ()
 -- | Definition of an auction
 data AuctionParams
     = AuctionParams
-        { apOwner      :: PaymentPubKeyHash -- ^ Current owner of the asset. This is where the proceeds of the auction will be sent.
+        { apOwner      :: Address -- ^ Current owner of the asset. This is where the proceeds of the auction will be sent.
         , apAsset      :: Value -- ^ The asset itself. This value is going to be locked by the auction script output.
         , apEndTime    :: POSIXTime -- ^ When the time window for bidding ends.
         , apPayoutTime :: POSIXTime -- ^ When the time window for revealing your bid ends.
@@ -91,7 +92,7 @@ PlutusTx.makeLift ''AuctionParams
 data SealedBid =
     SealedBid
         { sealedBid       :: BuiltinByteString
-        , sealedBidBidder :: PaymentPubKeyHash
+        , sealedBidBidder :: Address
         }
     deriving stock (Haskell.Eq, Haskell.Show, Generic)
     deriving anyclass (ToJSON, FromJSON)
@@ -104,7 +105,7 @@ instance Eq SealedBid where
 data RevealedBid =
     RevealedBid
         { revealedBid       :: Integer
-        , revealedBidBidder :: PaymentPubKeyHash
+        , revealedBidBidder :: Address
         }
     deriving stock (Haskell.Eq, Haskell.Show, Generic)
     deriving anyclass (ToJSON, FromJSON)
@@ -175,8 +176,13 @@ auctionTransition AuctionParams{apOwner, apAsset, apEndTime, apPayoutTime} State
     -- A new bid is placed, a bidder is only allowed to bid once
     (Ongoing bids, PlaceBid bid)
       | sealedBidBidder bid `notElem` map sealedBidBidder bids ->
-        -- We have to subtract '2', see Note [Validity Interval's upper bound]
-        let constraints = Constraints.mustValidateIn (Interval.to $ apEndTime - 2)
+        -- Correct validity interval should be:
+        -- @
+        --   Interval (LowerBound NegInf True) (Interval.strictUpperBound apEndTime)
+        -- @
+        -- See Note [Validity Interval's upper bound]
+        let validityTimeRange = Interval.to $ apEndTime - 2
+            constraints = Constraints.mustValidateIn validityTimeRange
             newState =
               State
                   { stateData  = Ongoing (bid:bids)
@@ -187,8 +193,11 @@ auctionTransition AuctionParams{apOwner, apAsset, apEndTime, apPayoutTime} State
     -- The first bid is revealed
     (Ongoing bids, RevealBid bid)
       | sealBid bid `elem` bids ->
-        -- We have to subtract '2', see Note [Validity Interval's upper bound]
-        let constraints = Constraints.mustValidateIn (Interval.interval apEndTime (apPayoutTime - 2))
+        let validityTimeRange =
+                Interval
+                    (Interval.lowerBound apEndTime)
+                    (Interval.strictUpperBound apPayoutTime)
+            constraints = Constraints.mustValidateIn validityTimeRange
             newState =
               State
                   { stateData  = AwaitingPayout bid (filter (/= sealBid bid) bids)
@@ -199,7 +208,7 @@ auctionTransition AuctionParams{apOwner, apAsset, apEndTime, apPayoutTime} State
     -- Nobody has revealed their bid and the deadline has arrived
     (Ongoing _, Payout) ->
       let constraints = Constraints.mustValidateIn (Interval.from apPayoutTime)
-                      <> Constraints.mustPayToPubKey apOwner apAsset
+                      <> Constraints.mustPayToAddress apOwner apAsset
           newState =
             State
                 { stateData  = Finished
@@ -212,9 +221,14 @@ auctionTransition AuctionParams{apOwner, apAsset, apEndTime, apPayoutTime} State
     (AwaitingPayout highestBid sealedBids, RevealBid bid)
       | revealedBid bid > revealedBid highestBid
         && sealBid bid `elem` sealedBids ->
-        -- We have to subtract '2', see Note [Validity Interval's upper bound]
-        let constraints = Constraints.mustValidateIn (Interval.to $ apPayoutTime - 2)
-                        <> Constraints.mustPayToPubKey (revealedBidBidder highestBid) (valueOfBid highestBid)
+        -- Correct validity interval should be:
+        -- @
+        --   Interval (LowerBound NegInf True) (Interval.strictUpperBound apPayoutTime)
+        -- @
+        -- See Note [Validity Interval's upper bound]
+        let validityTimeRange = Interval.to apPayoutTime
+            constraints = Constraints.mustValidateIn validityTimeRange
+                        <> Constraints.mustPayToAddress (revealedBidBidder highestBid) (valueOfBid highestBid)
             newState =
               State
                   { stateData = AwaitingPayout bid (filter (/= sealBid bid) sealedBids)
@@ -225,8 +239,8 @@ auctionTransition AuctionParams{apOwner, apAsset, apEndTime, apPayoutTime} State
     -- At least one bid has been revealed and the payout is triggered
     (AwaitingPayout highestBid _, Payout) ->
       let constraints = Constraints.mustValidateIn (Interval.from apPayoutTime)
-                      <> Constraints.mustPayToPubKey apOwner (valueOfBid highestBid)
-                      <> Constraints.mustPayToPubKey (revealedBidBidder highestBid) apAsset
+                      <> Constraints.mustPayToAddress apOwner (valueOfBid highestBid)
+                      <> Constraints.mustPayToAddress (revealedBidBidder highestBid) apAsset
           newState =
             State
                 { stateData  = Finished
@@ -280,19 +294,19 @@ client auctionParams =
 
 startAuction :: Value -> POSIXTime -> POSIXTime -> Contract () SellerSchema AuctionError ()
 startAuction asset endTime payoutTime = do
-    self <- ownFirstPaymentPubKeyHash
+    self <- toPlutusAddress <$> ownAddress
     let params = AuctionParams self asset endTime payoutTime
     void $ SM.runInitialise (client params) (Ongoing []) (apAsset params)
 
 bid :: AuctionParams -> Promise () BidderSchema AuctionError ()
 bid params = endpoint @"bid" $ \ BidArgs{secretBid} -> do
-    self <- ownFirstPaymentPubKeyHash
+    self <- toPlutusAddress <$> ownAddress
     let sBid = extractSecret secretBid
     void $ SM.runStep (client params) (PlaceBid $ SealedBid (hashSecretInteger sBid) self)
 
 reveal :: AuctionParams -> Promise () BidderSchema AuctionError ()
 reveal params = endpoint @"reveal" $ \ RevealArgs{publicBid} -> do
-    self <- ownFirstPaymentPubKeyHash
+    self <- toPlutusAddress <$> ownAddress
     void $ SM.runStep (client params) (RevealBid $ RevealedBid publicBid self)
 
 payout :: (HasEndpoint "payout" () s) => AuctionParams -> Promise () s AuctionError ()

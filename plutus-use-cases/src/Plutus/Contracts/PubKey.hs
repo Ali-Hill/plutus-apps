@@ -23,10 +23,11 @@ import Data.Aeson (FromJSON, ToJSON)
 import Data.Map qualified as Map
 import GHC.Generics (Generic)
 
+import Cardano.Node.Emulator.Params (pNetworkId)
 import Ledger hiding (initialise, to)
 import Ledger.Typed.Scripts (TypedValidator)
 import Ledger.Typed.Scripts qualified as Scripts
-import Plutus.V1.Ledger.Contexts as V
+import Plutus.V1.Ledger.Contexts qualified as V
 import PlutusTx qualified
 
 import Ledger.Constraints qualified as Constraints
@@ -69,19 +70,20 @@ pubKeyContract
     )
     => PaymentPubKeyHash
     -> Value
-    -> Contract w s e (TxOutRef, Maybe ChainIndexTxOut, TypedValidator PubKeyContract)
+    -> Contract w s e (TxOutRef, Maybe DecoratedTxOut, TypedValidator PubKeyContract)
 pubKeyContract pk vl = mapError (review _PubKeyError   ) $ do
+    networkId <- pNetworkId <$> getParams
     let inst = typedValidator pk
-        address = Scripts.validatorAddress inst
-        tx = Constraints.mustPayToTheScript () vl
+        address = Scripts.validatorCardanoAddress networkId inst
+        tx = Constraints.mustPayToTheScriptWithDatumInTx () vl
 
-    ledgerTx <- mkTxConstraints (Constraints.plutusV1TypedValidatorLookups inst) tx
+    ledgerTx <- mkTxConstraints (Constraints.typedValidatorLookups inst) tx
         >>= adjustUnbalancedTx >>= submitUnbalancedTx
 
     _ <- awaitTxConfirmed (getCardanoTxId ledgerTx)
     let refs = Map.keys
                $ Map.filter ((==) address . txOutAddress)
-               $ getCardanoTxUnspentOutputsTx ledgerTx
+               $ getCardanoTxProducedOutputs ledgerTx
 
     case refs of
         []                   -> throwing _ScriptOutputMissing pk
@@ -105,7 +107,7 @@ pubKeyContract pk vl = mapError (review _PubKeyError   ) $ do
             -- The 'awaitChainIndexSlot' blocks the contract until the chain-index
             -- is synced until the current slot. This is not a good solution,
             -- as the chain-index is always some time behind the current slot.
-            slot <- currentPABSlot
+            slot <- currentNodeClientSlot
             awaitChainIndexSlot slot
 
             ciTxOut <- unspentTxOutFromRef outRef

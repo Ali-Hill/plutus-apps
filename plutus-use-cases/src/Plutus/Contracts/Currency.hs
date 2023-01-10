@@ -37,7 +37,7 @@ import PlutusTx qualified
 import PlutusTx.AssocMap qualified as AssocMap
 import PlutusTx.Prelude hiding (Monoid (..), Semigroup (..))
 
-import Ledger (CurrencySymbol, PaymentPubKeyHash, TxId, TxOutRef (..), getCardanoTxId, pubKeyHashAddress)
+import Ledger (CardanoAddress, CurrencySymbol, TxId, TxOutRef (..), getCardanoTxId)
 import Ledger.Constraints qualified as Constraints
 import Ledger.Scripts
 import Ledger.Typed.Scripts qualified as Scripts
@@ -45,7 +45,7 @@ import Ledger.Value (TokenName, Value)
 import Ledger.Value qualified as Value
 import Plutus.Contract as Contract
 import Plutus.Contract.Wallet (getUnspentOutput)
-import Plutus.Script.Utils.V1.Scripts (scriptCurrencySymbol)
+import Plutus.Script.Utils.V1.Scripts qualified as PV1
 import Schema (ToSchema)
 
 import Prelude (Semigroup (..))
@@ -127,7 +127,7 @@ mintedValue :: OneShotCurrency -> Value
 mintedValue cur = currencyValue (currencySymbol cur) cur
 
 currencySymbol :: OneShotCurrency -> CurrencySymbol
-currencySymbol = scriptCurrencySymbol . curPolicy
+currencySymbol = PV1.scriptCurrencySymbol . curPolicy
 
 newtype CurrencyError =
     CurContractError ContractError
@@ -148,12 +148,12 @@ mintContract
     :: forall w s e.
     ( AsCurrencyError e
     )
-    => PaymentPubKeyHash
+    => CardanoAddress
     -> [(TokenName, Integer)]
     -> Contract w s e OneShotCurrency
-mintContract pk amounts = mapError (review _CurrencyError) $ do
+mintContract addr amounts = mapError (review _CurrencyError) $ do
     txOutRef <- getUnspentOutput
-    utxos <- utxosAt (pubKeyHashAddress pk Nothing)
+    utxos <- utxosAt addr
     let theCurrency = mkCurrency txOutRef amounts
         curVali     = curPolicy theCurrency
         lookups     = Constraints.plutusV1MintingPolicy curVali
@@ -181,7 +181,7 @@ type CurrencySchema =
 mintCurrency
     :: Promise (Maybe (Last OneShotCurrency)) CurrencySchema CurrencyError OneShotCurrency
 mintCurrency = endpoint @"Create native token" $ \SimpleMPS{tokenName, amount} -> do
-    ownPK <- ownFirstPaymentPubKeyHash
-    cur <- mintContract ownPK [(tokenName, amount)]
+    ownAddr <- ownAddress
+    cur <- mintContract ownAddr [(tokenName, amount)]
     tell (Just (Last cur))
     pure cur

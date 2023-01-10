@@ -1,14 +1,13 @@
 {-# LANGUAGE DataKinds         #-}
 {-# LANGUAGE FlexibleContexts  #-}
-{-# LANGUAGE NamedFieldPuns    #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE TemplateHaskell   #-}
 {-# LANGUAGE TypeApplications  #-}
 
 module Main(main) where
 
 import Cardano.Api qualified as C
 import Cardano.Api.Shelley qualified as C
+import Cardano.Node.Emulator.Generators qualified as Gen
 import Control.Lens (preview, toListOf, view)
 import Control.Monad (forM_, guard, replicateM, void)
 import Control.Monad.IO.Class (MonadIO (liftIO))
@@ -25,11 +24,10 @@ import Hedgehog.Range qualified as Range
 import Language.Haskell.TH.Syntax
 import Ledger qualified
 import Ledger.Ada qualified as Ada
-import Ledger.Address (StakePubKeyHash (StakePubKeyHash), addressStakingCredential)
+import Ledger.Address (StakePubKeyHash (StakePubKeyHash), addressStakingCredential, stakePubKeyHashCredential)
 import Ledger.Credential (Credential (PubKeyCredential, ScriptCredential), StakingCredential (StakingHash))
 import Ledger.Crypto (PubKeyHash (PubKeyHash))
-import Ledger.Generators qualified as Gen
-import Ledger.Tx (Tx (txOutputs), TxOut (TxOut, txOutAddress))
+import Ledger.Tx (Tx (txOutputs), TxOut (TxOut), txOutAddress)
 import Ledger.Tx.CardanoAPI qualified as C
 import Ledger.Tx.Constraints as Constraints
 import Ledger.Tx.Constraints.OffChain qualified as OC
@@ -44,16 +42,19 @@ import PlutusTx.AssocMap qualified as AMap
 import PlutusTx.Builtins.Internal (BuiltinByteString (..))
 import PlutusTx.Prelude qualified as Pl
 import Test.Tasty (TestTree, defaultMain, testGroup)
-import Test.Tasty.Hedgehog (testProperty)
+import Test.Tasty.Hedgehog (testPropertyNamed)
 
 main :: IO ()
 main = defaultMain tests
 
 tests :: TestTree
 tests = testGroup "all tests"
-    [ testProperty "mustPayToPubKeyAddress should create output addresses with stake pub key hash"
-        mustPayToPubKeyAddressStakePubKeyNotNothingProp
-    -- , testProperty "mustSpendScriptOutputWithMatchingDatumAndValue" testMustSpendScriptOutputWithMatchingDatumAndValue
+    [ testPropertyNamed "mustPayToPubKeyAddress should create output addresses with stake pub key hash"
+                        "mustPayToPubKeyAddressStakePubKeyNotNothingProp"
+                        mustPayToPubKeyAddressStakePubKeyNotNothingProp
+    -- , testPropertyNamed "mustSpendScriptOutputWithMatchingDatumAndValue"
+    --                     "testMustSpendScriptOutputWithMatchingDatumAndValue"
+    --                     testMustSpendScriptOutputWithMatchingDatumAndValue
     ]
 
 -- | Reduce one of the elements in a 'Value' by one.
@@ -83,8 +84,8 @@ nonNegativeValue =
 mustPayToPubKeyAddressStakePubKeyNotNothingProp :: Property
 mustPayToPubKeyAddressStakePubKeyNotNothingProp = property $ do
     pkh <- forAll $ Ledger.paymentPubKeyHash <$> Gen.element Gen.knownPaymentPublicKeys
-    let skh = StakePubKeyHash $ Ledger.pubKeyHash $ Ledger.PubKey "00000000000000000000000000000000000000000000000000000000"
-        txE = mkTx @Void def mempty (Constraints.mustPayToPubKeyAddress pkh skh (Ada.toValue Ledger.minAdaTxOut))
+    let sc = stakePubKeyHashCredential $ StakePubKeyHash $ Ledger.pubKeyHash $ Ledger.PubKey "00000000000000000000000000000000000000000000000000000000"
+        txE = mkTx @Void def mempty (Constraints.mustPayToPubKeyAddress pkh sc (Ada.toValue Ledger.minAdaTxOutEstimated))
     case txE of
         Left err -> do
             Hedgehog.annotateShow err
@@ -94,15 +95,10 @@ mustPayToPubKeyAddressStakePubKeyNotNothingProp = property $ do
                 outputs = view OC.txOuts tx
                 stakingCreds = mapMaybe stakePaymentPubKeyHash outputs
             Hedgehog.assert $ not $ null stakingCreds
-            forM_ stakingCreds ((===) skh)
+            forM_ stakingCreds ((===) sc)
     where
-        stakePaymentPubKeyHash :: C.TxOut C.CtxTx C.AlonzoEra -> Maybe StakePubKeyHash
-        stakePaymentPubKeyHash (C.TxOut addr _ _) = do
-            txOutAddress <- either (const Nothing) Just $ C.fromCardanoAddressInEra addr
-            stakeCred <- addressStakingCredential txOutAddress
-            case stakeCred of
-                StakingHash (PubKeyCredential pkh) -> Just $ StakePubKeyHash pkh
-                _                                  -> Nothing
+        stakePaymentPubKeyHash :: C.TxOut C.CtxTx C.BabbageEra -> Maybe StakingCredential
+        stakePaymentPubKeyHash (C.TxOut addr _ _ _) = Ledger.cardanoStakingCredential addr
 
 
 -- txOut0 :: Ledger.ChainIndexTxOut

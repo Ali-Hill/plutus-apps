@@ -8,12 +8,13 @@
 
 module Cardano.Node.Client where
 
+import Cardano.Node.Emulator.Params (Params)
 import Control.Monad.Freer
 import Control.Monad.Freer.Error (Error, throwError)
 import Control.Monad.Freer.Reader (Reader, ask)
 import Control.Monad.IO.Class
 import Data.Proxy (Proxy (Proxy))
-import Ledger (Params, onCardanoTx)
+import Ledger (onCardanoTx)
 import Servant (NoContent, (:<|>) (..))
 import Servant.Client (ClientM, client)
 
@@ -61,7 +62,7 @@ handleNodeClientClient params e = do
               Just handle ->
                   liftIO $
                       onCardanoTx (MockClient.queueTx handle)
-                                  (const $ error "Cardano.Node.Client: Expecting a mock tx, not an Alonzo tx when publishing it.")
+                                  (const $ error "Cardano.Node.Client: Expecting a mock tx, not a cardano-api tx when publishing it.")
                                   tx
         GetClientSlot ->
             either (liftIO . MockClient.getCurrentSlot)
@@ -81,10 +82,11 @@ runChainSyncWithCfg PABServerConfig { pscSocketPath
                                     , pscNetworkId
                                     , pscSlotConfig } =
     case pscNodeMode of
-      AlonzoNode ->
+      MockNode   ->
+          Left <$> MockClient.runChainSync' pscSocketPath pscSlotConfig
+      _ ->
           Right <$> Client.runChainSync' pscSocketPath
                                          pscSlotConfig
                                          (unNetworkIdWrapper pscNetworkId)
                                          []
-      MockNode   ->
-          Left <$> MockClient.runChainSync' pscSocketPath pscSlotConfig
+

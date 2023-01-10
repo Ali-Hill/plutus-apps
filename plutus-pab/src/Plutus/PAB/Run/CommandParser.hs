@@ -13,7 +13,7 @@ module Plutus.PAB.Run.CommandParser (parseOptions, AppOpts(..)) where
 import Cardano.Api (ChainPoint (..), deserialiseFromRawBytesHex, proxyToAsType)
 import Cardano.BM.Data.Severity (Severity (..))
 import Cardano.Slotting.Slot (SlotNo (..))
-import Data.Either.Combinators (maybeToRight)
+import Data.Either.Combinators (mapLeft, maybeToRight)
 import Data.List (elemIndex)
 import Data.Proxy (Proxy (Proxy))
 import Data.Text (Text, pack)
@@ -62,7 +62,7 @@ ekgFlag =
 inMemoryFlag :: Parser StorageBackend
 inMemoryFlag =
     flag
-        BeamSqliteBackend
+        BeamBackend
         InMemoryBackend
         (short 'm' <> long "memory" <> help "Use the memory-backed backend. If false, the beam backend is used.")
 
@@ -102,10 +102,8 @@ chainPointReader = eitherReader $
                         elemIndex ',' chainPoint
     let (hash, slot') = splitAt idx chainPoint
     slot <- readEither (drop 1 slot')
-    hsh  <- maybeToRight ("Failed to parse hash " <> hash) $
-                         deserialiseFromRawBytesHex
-                           (proxyToAsType Proxy)
-                           (encodeUtf8 $ pack hash)
+    hsh  <- mapLeft (const $ "Failed to parse hash " <> hash) $
+        deserialiseFromRawBytesHex (proxyToAsType Proxy) (encodeUtf8 $ pack hash)
     pure $ fromCardanoPoint $ ChainPoint (SlotNo slot) hsh
 
 chainPointParser :: Parser Point

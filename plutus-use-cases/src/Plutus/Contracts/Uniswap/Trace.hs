@@ -22,14 +22,14 @@ import Data.Void (Void)
 import Ledger
 import Ledger.Ada (adaSymbol, adaToken)
 import Ledger.Constraints hiding (adjustUnbalancedTx)
-import Ledger.Value as Value
+import Ledger.Value qualified as Value
 import Plutus.Contract as Contract hiding (throwError)
 import Plutus.Contracts.Currency qualified as Currency
 import Plutus.Contracts.Uniswap.OffChain as OffChain
 import Plutus.Contracts.Uniswap.Types as Types
 import Plutus.Trace.Emulator (EmulatorRuntimeError (GenericError), EmulatorTrace)
 import Plutus.Trace.Emulator qualified as Emulator
-import Wallet.Emulator (Wallet (..), knownWallet, knownWallets, mockWalletPaymentPubKeyHash)
+import Wallet.Emulator (Wallet (..), knownWallet, knownWallets, mockWalletAddress)
 
 -- | Set up a liquidity pool and call the "add" endpoint
 uniswapTrace :: EmulatorTrace ()
@@ -65,15 +65,15 @@ uniswapTrace = do
 --   the emulated wallets
 setupTokens :: Contract (Maybe (Semigroup.Last Currency.OneShotCurrency)) Currency.CurrencySchema Currency.CurrencyError ()
 setupTokens = do
-    ownPK <- Contract.ownFirstPaymentPubKeyHash
-    cur   <- Currency.mintContract ownPK [(tn, fromIntegral (length wallets) * amount) | tn <- tokenNames]
+    ownAddr <- Contract.ownAddress
+    cur   <- Currency.mintContract ownAddr [(tn, fromIntegral (length wallets) * amount) | tn <- tokenNames]
     let cs = Currency.currencySymbol cur
         v  = mconcat [Value.singleton cs tn amount | tn <- tokenNames]
 
     forM_ wallets $ \w -> do
-        let pkh = mockWalletPaymentPubKeyHash w
-        when (pkh /= ownPK) $ do
-            mkTxConstraints @Void mempty (mustPayToPubKey pkh v)
+        let addr = mockWalletAddress w
+        when (addr /= ownAddr) $ do
+            mkTxConstraints @Void mempty (mustPayToAddress (Ledger.toPlutusAddress addr) v)
               >>= adjustUnbalancedTx >>= submitTxConfirmed
 
     tell $ Just $ Semigroup.Last cur

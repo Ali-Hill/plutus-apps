@@ -22,9 +22,9 @@ import Cardano.Api (BlockInMode (..), CardanoMode, ChainPoint (..), ChainTip (..
 import Cardano.BM.Data.Trace (Trace)
 import Cardano.BM.Data.Tracer (ToObject (..))
 import Cardano.BM.Trace (logDebug, logWarning)
+import Cardano.Node.Emulator.TimeSlot (SlotConfig, currentSlot)
 import Control.Retry (fibonacciBackoff, recovering, skipAsyncExceptions)
 import Control.Tracer (nullTracer)
-import Ledger.TimeSlot (SlotConfig, currentSlot)
 import Ouroboros.Network.IOManager
 import Ouroboros.Network.Protocol.ChainSync.Client qualified as ChainSync
 
@@ -113,7 +113,8 @@ runChainSync socketPath trace slotConfig networkId resumePoints onChainSyncEvent
           LocalChainSyncClient $
             chainSyncClient trace slotConfig resumePoints chainSyncEventHandler,
         localTxSubmissionClient = Nothing,
-        localStateQueryClient = Nothing }
+        localStateQueryClient = Nothing,
+        localTxMonitoringClient = Nothing }
 
 -- | The client updates the application state when the protocol state changes.
 chainSyncClient

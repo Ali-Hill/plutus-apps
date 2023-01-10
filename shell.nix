@@ -5,14 +5,13 @@
 , packages ? import ./. { inherit system enableHaskellProfiling sources sourcesOverride; }
 }:
 let
-  inherit (packages) pkgs plutus-apps plutus-playground pab-nami-demo docs webCommon;
+  inherit (packages) pkgs plutus-apps docs webCommon;
   inherit (pkgs) stdenv lib utillinux python3 nixpkgs-fmt glibcLocales;
-  inherit (plutus-apps) haskell stylish-haskell sphinxcontrib-haddock sphinx-markdown-tables sphinxemoji nix-pre-commit-hooks cabal-fmt;
+  inherit (plutus-apps) haskell stylish-haskell sphinxcontrib-haddock sphinx-markdown-tables sphinxemoji scriv nix-pre-commit-hooks cabal-fmt;
 
-  # Feed cardano-wallet, cardano-cli & cardano-node to our shell.
-  # This is stable as it doesn't mix dependencies with this code-base;
-  # the fetched binaries are the "standard" builds that people test.
-  # This should be fast as it mostly fetches Hydra caches without building much.
+  # Feed cardano-wallet, cardano-cli & cardano-node to our shell. This is stable as it doesn't mix
+  # dependencies with this code-base; the fetched binaries are the "standard" builds that people
+  # test. This should be fast as it mostly fetches Hydra caches without building much.
   cardano-wallet = (import sources.flake-compat {
     inherit pkgs;
     src = builtins.fetchTree
@@ -20,21 +19,22 @@ let
         type = "github";
         owner = "input-output-hk";
         repo = "cardano-wallet";
-        rev = "f6d4db733c4e47ee11683c343b440552f59beff7";
-        narHash = "sha256-3oeHsrAhDSSKBSzpGIAqmOcFmBdAJ5FR02UXPLb/Yz0=";
+        rev = "18a931648550246695c790578d4a55ee2f10463e";
+        narHash = "sha256-3Rnj/g3KLzOW5YSieqsUa9IF1Td22Eskk5KuVsOFgEQ=";
       };
   }).defaultNix;
   cardano-node = import
     (pkgs.fetchgit {
       url = "https://github.com/input-output-hk/cardano-node";
       # A standard release compatible with the cardano-wallet commit above is always preferred.
-      rev = "2b1d18c6c7b7142d9eebfec34da48840ed4409b6";
-      sha256 = "102pj525ysvj27h9nb8gidxm1cmwp8vpdyfnpwm1ywz3zkpk2mjp";
+      rev = "1.35.4";
+      sha256 = "1j01m2cp2vdcl26zx9xmipr551v3b2rz9kfn9ik8byfwj1z7652r";
     })
     { };
 
-  # For Sphinx, and ad-hoc usage
-  sphinxTools = python3.withPackages (ps: [
+  # For Sphinx, scriv, and ad-hoc usage
+  pythonTools = python3.withPackages (ps: [
+    scriv
     sphinxcontrib-haddock.sphinxcontrib-domaintools
     sphinx-markdown-tables
     sphinxemoji
@@ -129,11 +129,9 @@ let
     haskell-language-server-wrapper
     hie-bios
     hlint
-    pab-nami-demo.start-backend
-    plutus-playground.start-backend
     psa
     purescript-language-server
-    purs
+    purs-0_14_3
     purs-tidy
     spago
     spago2nix
@@ -143,7 +141,7 @@ let
 
 in
 haskell.project.shellFor {
-  nativeBuildInputs = nixpkgsInputs ++ localInputs ++ [ sphinxTools ];
+  nativeBuildInputs = nixpkgsInputs ++ localInputs ++ [ pythonTools ];
   # We don't currently use this, and it's a pain to materialize, and otherwise
   # costs a fair bit of eval time.
   withHoogle = false;
@@ -160,7 +158,14 @@ haskell.project.shellFor {
     ${utillinux}/bin/taskset -pc 0-1000 $$
   ''
   + ''
+    export GITHUB_SHA=$(git rev-parse HEAD)
     export WEB_COMMON_SRC=${webCommon.cleanSrc}
+
+    # This is probably set by haskell.nix's shellFor, but it interferes 
+    # with the pythonTools in nativeBuildInputs above.
+    # This workaround will become obsolete soon once this respository 
+    # is migrated to Standard.
+    export PYTHONPATH=
   '';
 
   # This is no longer set automatically as of more recent `haskell.nix` revisions,

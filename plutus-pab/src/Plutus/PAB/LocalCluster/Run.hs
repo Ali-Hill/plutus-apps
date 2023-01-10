@@ -23,6 +23,8 @@ import Cardano.CLI (LogOutput (LogToFile, LogToStdStreams), Port, ekgEnabled, ge
 import Cardano.ChainIndex.Types qualified as PAB.CI
 import Cardano.Launcher.Node (nodeSocketFile)
 import Cardano.Mnemonic (SomeMnemonic (SomeMnemonic))
+import Cardano.Node.Emulator.TimeSlot (SlotConfig (SlotConfig))
+import Cardano.Node.Emulator.TimeSlot qualified as TimeSlot
 import Cardano.Node.Types (NodeMode (AlonzoNode),
                            PABServerConfig (pscKeptBlocks, pscNetworkId, pscNodeMode, pscSlotConfig, pscSocketPath))
 import Cardano.Startup (installSignalHandlers, setDefaultFilePermissions, withUtf8Encoding)
@@ -33,7 +35,8 @@ import Cardano.Wallet.Api.Types (ApiMnemonicT (ApiMnemonicT), ApiT (ApiT), ApiWa
                                  postData)
 import Cardano.Wallet.Api.Types qualified as Wallet.Types
 import Cardano.Wallet.Logging (stdoutTextTracer, trMessageText)
-import Cardano.Wallet.Primitive.AddressDerivation (NetworkDiscriminant (Mainnet), Passphrase (Passphrase))
+import Cardano.Wallet.Primitive.AddressDerivation (NetworkDiscriminant (Mainnet))
+import Cardano.Wallet.Primitive.Passphrase.Types (Passphrase (Passphrase))
 import Cardano.Wallet.Primitive.SyncProgress (SyncTolerance (SyncTolerance))
 import Cardano.Wallet.Primitive.Types (GenesisParameters (GenesisParameters),
                                        NetworkParameters (NetworkParameters, slottingParameters),
@@ -47,8 +50,8 @@ import Cardano.Wallet.Shelley.BlockchainSource (BlockchainSource (NodeSource))
 import Cardano.Wallet.Shelley.Launch (withSystemTempDir)
 import Cardano.Wallet.Shelley.Launch.Cluster (ClusterLog, Credential (KeyCredential), RunningNode (RunningNode),
                                               localClusterConfigFromEnv, moveInstantaneousRewardsTo, oneMillionAda,
-                                              sendFaucetAssetsTo, sendFaucetFundsTo, testMinSeverityFromEnv,
-                                              tokenMetadataServerFromEnv, walletMinSeverityFromEnv, withCluster)
+                                              sendFaucetAssetsTo, testMinSeverityFromEnv, tokenMetadataServerFromEnv,
+                                              walletMinSeverityFromEnv, withCluster)
 import Cardano.Wallet.Types (WalletUrl (WalletUrl))
 import Cardano.Wallet.Types qualified as Wallet.Config
 import Control.Arrow (first)
@@ -56,6 +59,7 @@ import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (async)
 import Control.Lens (contramap, set, (&), (.~), (^.))
 import Control.Monad (void, when)
+import Control.Monad.Freer.Extras.Beam.Sqlite (DbConfig (dbConfigFile))
 import Control.Tracer (traceWith)
 import Data.Aeson (FromJSON, ToJSON)
 import Data.Default (Default (def))
@@ -67,22 +71,20 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Class (ToText (toText))
 import Data.Time.Clock (nominalDiffTimeToSeconds)
-import Ledger.TimeSlot (SlotConfig (SlotConfig))
-import Ledger.TimeSlot qualified as TimeSlot
 import Network.HTTP.Client (defaultManagerSettings, newManager)
+import Ouroboros.Network.Client.Wallet (tunedForMainnetPipeliningStrategy)
 import Plutus.ChainIndex.App qualified as ChainIndex
 import Plutus.ChainIndex.Config qualified as CI
 import Plutus.ChainIndex.Logging qualified as ChainIndex.Logging
 import Plutus.ChainIndex.Types (Point (..))
-import Plutus.PAB.App (StorageBackend (BeamSqliteBackend))
+import Plutus.PAB.App (StorageBackend (BeamBackend))
 import Plutus.PAB.Effects.Contract.Builtin (BuiltinHandler, HasDefinitions)
 import Plutus.PAB.Run qualified as PAB.Run
 import Plutus.PAB.Run.Command (ConfigCommand (Migrate, PABWebserver))
 import Plutus.PAB.Run.CommandParser (AppOpts (AppOpts, cmd, configPath, logConfigPath, minLogLevel, resumeFrom, rollbackHistory, runEkgServer, storageBackend))
 import Plutus.PAB.Run.CommandParser qualified as PAB.Command
 import Plutus.PAB.Types (ChainQueryConfig (ChainIndexConfig),
-                         Config (chainQueryConfig, dbConfig, nodeServerConfig, walletServerConfig),
-                         DbConfig (dbConfigFile))
+                         Config (chainQueryConfig, dbConfig, nodeServerConfig, walletServerConfig), DbConfig (SqliteDB))
 import Plutus.PAB.Types qualified as PAB.Config
 import Prettyprinter (Pretty)
 import Servant qualified
@@ -147,25 +149,24 @@ runWith userContractHandler = withLocalClusterSetup $ \dir lo@LogOutputs{loClust
     withLoggingNamed "cluster" loCluster $ \(_, (_, trCluster)) -> do
         let tr' = contramap MsgCluster $ trMessageText trCluster
         clusterCfg <- localClusterConfigFromEnv
-        withCluster tr' dir clusterCfg
-            (setupFaucet dir (trMessageText trCluster))
+        let initialFunds = shelleyIntegrationTestFunds
+        withCluster tr' dir clusterCfg initialFunds
             (whenReady dir (trMessageText trCluster) lo)
   where
-    setupFaucet dir trCluster (RunningNode socketPath _ _) = do
+    setupFaucet dir trCluster (RunningNode socketPath _ _ _) = do
         traceWith trCluster MsgSettingUpFaucet
         let trCluster' = contramap MsgCluster trCluster
         let encodeAddresses = map (first (T.unpack . encodeAddress @'Mainnet))
         let accts = KeyCredential <$> concatMap genRewardAccounts mirMnemonics
         let rewards = (, Coin $ fromIntegral oneMillionAda) <$> accts
 
-        sendFaucetFundsTo trCluster' socketPath dir $
-            encodeAddresses shelleyIntegrationTestFunds
         sendFaucetAssetsTo trCluster' socketPath dir 20 $ encodeAddresses $
             maryIntegrationTestAssets (Coin 1_000_000_000)
         moveInstantaneousRewardsTo trCluster' socketPath dir rewards
 
-    whenReady dir trCluster LogOutputs{loWallet} rn@(RunningNode socketPath block0 (gp, vData)) = do
+    whenReady dir trCluster LogOutputs{loWallet} rn@(RunningNode socketPath block0 (gp, vData) poolCertificates) = do
         withLoggingNamed "cardano-wallet" loWallet $ \(sb, (cfg, tr)) -> do
+            setupFaucet dir trCluster rn
             let walletHost = "127.0.0.1"
                 walletPort = 46493
 
@@ -186,11 +187,12 @@ runWith userContractHandler = withLocalClusterSetup $ \dir lo@LogOutputs{loClust
                 <$> getEKGURL
 
             void $ serveWallet
-                (NodeSource socketPath vData)
+                (NodeSource socketPath vData (SyncTolerance 10))
                 gp
+                tunedForMainnetPipeliningStrategy
                 (SomeNetworkDiscriminant $ Proxy @'Mainnet)
+                poolCertificates
                 tracers
-                (SyncTolerance 10)
                 (Just db)
                 Nothing
                 (fromString walletHost)
@@ -224,7 +226,7 @@ setupPABServices userContractHandler walletHost walletPort dir rn = void $ async
 {-| Launch the chain index in a separate thread.
 -}
 launchChainIndex :: FilePath -> RunningNode -> IO ChainIndexPort
-launchChainIndex dir (RunningNode socketPath _block0 (_gp, _vData)) = do
+launchChainIndex dir (RunningNode socketPath _block0 (_gp, _vData) _) = do
     config <- ChainIndex.Logging.defaultConfig
     let dbPath = dir </> "chain-index.db"
         chainIndexConfig = CI.defaultConfig
@@ -258,10 +260,19 @@ launchPAB userContractHandler
     passPhrase
     dir
     walletUrl
-    (RunningNode socketPath _block0 (networkParameters, _))
+    (RunningNode socketPath _block0 (networkParameters, _) _)
     (ChainIndexPort chainIndexPort) = do
 
-    let opts = AppOpts{minLogLevel = Nothing, logConfigPath = Nothing, configPath = Nothing, rollbackHistory = Nothing, resumeFrom = PointAtGenesis, runEkgServer = False, storageBackend = BeamSqliteBackend, cmd = PABWebserver, PAB.Command.passphrase = Just passPhrase}
+    let opts = AppOpts { minLogLevel = Nothing
+                       , logConfigPath = Nothing
+                       , configPath = Nothing
+                       , rollbackHistory = Nothing
+                       , resumeFrom = PointAtGenesis
+                       , runEkgServer = False
+                       , storageBackend = BeamBackend
+                       , cmd = PABWebserver
+                       , PAB.Command.passphrase = Just passPhrase
+                       }
         networkID = NetworkIdWrapper CAPI.Mainnet
         -- TODO: Remove when PAB queries local node for slot config
         slotConfig = slotConfigOfNetworkParameters networkParameters
@@ -279,7 +290,7 @@ launchPAB userContractHandler
                     , pscSlotConfig = slotConfig
                     , pscKeptBlocks = securityParam
                     }
-                , dbConfig = def{dbConfigFile = T.pack (dir </> "plutus-pab.db")}
+                , dbConfig = SqliteDB def{ dbConfigFile = T.pack (dir </> "plutus-pab.db") }
                 , chainQueryConfig = ChainIndexConfig def{PAB.CI.ciBaseUrl = PAB.CI.ChainIndexUrl $ BaseUrl Http "localhost" chainIndexPort ""}
                 , walletServerConfig = set (Wallet.Config.walletSettingsL . Wallet.Config.baseUrlL) (WalletUrl walletUrl) def
                 }

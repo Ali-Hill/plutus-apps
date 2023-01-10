@@ -6,11 +6,13 @@
 , gitignore-nix
 , z3
 , libsodium-vrf
+, libsecp256k1
 , compiler-nix-name
 , enableHaskellProfiling
   # Whether to set the `defer-plugin-errors` flag on those packages that need
   # it. If set to true, we will also build the haddocks for those packages.
 , deferPluginErrors
+, CHaP
 }:
 let
   project = haskell-nix.cabalProject' ({ pkgs, config, ... }: {
@@ -25,6 +27,9 @@ let
         name = "plutus-apps";
       };
     sha256map = import ./sha256map.nix;
+    inputMap = {
+      "https://input-output-hk.github.io/cardano-haskell-packages" = CHaP;
+    };
     # Configuration settings needed for cabal configure to work when cross compiling
     # for windows. We can't use `modules` for these as `modules` are only applied
     # after cabal has been configured.
@@ -47,8 +52,12 @@ let
         ({ pkgs, ... }: lib.mkIf (pkgs.stdenv.hostPlatform != pkgs.stdenv.buildPlatform) {
           packages = {
             # Things that need plutus-tx-plugin
-            pab-blockfrost.package.buildable = false;
+            freer-extras.package.buildable = false;
+            cardano-node-emulator.package.buildable = false;
+            cardano-streaming.package.buildable = false;
             marconi.package.buildable = false;
+            pab-blockfrost.package.buildable = false;
+            marconi-mamba.package.buildable = false;
             playground-common.package.buildable = false;
             plutus-benchmark.package.buildable = false;
             plutus-chain-index.package.buildable = false;
@@ -60,14 +69,11 @@ let
             plutus-ledger-constraints.package.buildable = false;
             plutus-pab.package.buildable = false;
             plutus-pab-executables.package.buildable = false;
-            plutus-playground-server.package.buildable = false; # Would also require libpq
             plutus-script-utils.package.buildable = false;
-            plutus-streaming.package.buildable = false;
             plutus-tx-constraints.package.buildable = false;
             plutus-tx-plugin.package.buildable = false;
             plutus-use-cases.package.buildable = false;
             plutus-example.package.buildable = false;
-            web-ghc.package.buildable = false;
             # These need R
             plutus-core.components.benchmarks.cost-model-test.buildable = lib.mkForce false;
             plutus-core.components.benchmarks.update-cost-model.buildable = lib.mkForce false;
@@ -104,6 +110,12 @@ let
             };
           }
         )
+        (lib.mkIf pkgs.stdenv.hostPlatform.isDarwin {
+          packages = {
+            plutus-pab-executables.components.tests.plutus-pab-test-full-long-running.buildable = lib.mkForce false;
+            playground-common.doHaddock = false; # Segfault 11
+          };
+        })
         ({ pkgs, config, ... }: {
           packages = {
             marconi.doHaddock = deferPluginErrors;
@@ -125,6 +137,9 @@ let
               export CARDANO_NODE=${config.hsPkgs.cardano-node.components.exes.cardano-node}/bin/cardano-node${pkgs.stdenv.hostPlatform.extensions.executable}
               export CARDANO_NODE_SRC=${src}
             ";
+
+            marconi-mamba.doHaddock = deferPluginErrors;
+            marconi-mamba.flags.defer-plugin-errors = deferPluginErrors;
 
             plutus-contract.doHaddock = deferPluginErrors;
             plutus-contract.flags.defer-plugin-errors = deferPluginErrors;
@@ -156,16 +171,15 @@ let
             # Relies on cabal-doctest, just turn it off in the Nix build
             prettyprinter-configurable.components.tests.prettyprinter-configurable-doctest.buildable = lib.mkForce false;
 
-            plutus-pab-executables.components.tests.plutus-pab-test-full-long-running = {
-              platforms = lib.platforms.linux;
-            };
-
             # Broken due to warnings, unclear why the setting that fixes this for the build doesn't work here.
             iohk-monitoring.doHaddock = false;
+            cardano-wallet.doHaddock = false;
 
             # Werror everything. This is a pain, see https://github.com/input-output-hk/haskell.nix/issues/519
-            pab-blockfrost.ghcOptions = [ "-Werror" ];
+            cardano-streaming.ghcOptions = [ "-Werror" ];
             marconi.ghcOptions = [ "-Werror" ];
+            pab-blockfrost.ghcOptions = [ "-Werror" ];
+            marconi-mamba.ghcOptions = [ "-Werror" ];
             playground-common.ghcOptions = [ "-Werror" ];
             plutus-chain-index.ghcOptions = [ "-Werror" ];
             plutus-chain-index-core.ghcOptions = [ "-Werror" ];
@@ -174,7 +188,6 @@ let
             plutus-example.ghcOptions = [ "-Werror" ];
             plutus-ledger.ghcOptions = [ "-Werror" ];
             plutus-ledger-constraints.ghcOptions = [ "-Werror" ];
-            plutus-playground-server.ghcOptions = [ "-Werror" ];
             plutus-pab.ghcOptions = [ "-Werror" ];
             plutus-pab-executables.ghcOptions = [ "-Werror" ];
             plutus-script-utils.ghcOptions = [ "-Werror" ];
@@ -188,7 +201,7 @@ let
 
             # See https://github.com/input-output-hk/iohk-nix/pull/488
             cardano-crypto-praos.components.library.pkgconfig = lib.mkForce [ [ libsodium-vrf ] ];
-            cardano-crypto-class.components.library.pkgconfig = lib.mkForce [ [ libsodium-vrf ] ];
+            cardano-crypto-class.components.library.pkgconfig = lib.mkForce [ [ libsodium-vrf libsecp256k1 ] ];
           };
         })
       ] ++ lib.optional enableHaskellProfiling {

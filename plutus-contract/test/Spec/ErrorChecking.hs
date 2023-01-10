@@ -1,8 +1,9 @@
 {-# LANGUAGE DataKinds          #-}
-{-# LANGUAGE DeriveDataTypeable #-}
+{-# LANGUAGE DeriveGeneric      #-}
 {-# LANGUAGE FlexibleContexts   #-}
 {-# LANGUAGE FlexibleInstances  #-}
 {-# LANGUAGE GADTs              #-}
+{-# LANGUAGE PatternSynonyms    #-}
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TemplateHaskell    #-}
 {-# LANGUAGE TypeApplications   #-}
@@ -14,15 +15,13 @@ module Spec.ErrorChecking where
 import Control.Lens hiding (elements)
 import Control.Monad
 import Control.Monad.Freer.Extras.Log
-import Data.Data
 import Data.Row
 import Test.Tasty
 
+import Cardano.Node.Emulator.Params (pNetworkId)
 import Ledger.Ada qualified as Ada
-import Ledger.Address
-import Ledger.Constraints
-import Ledger.Scripts
-import Ledger.Tx
+import Ledger.Constraints (collectFromTheScript, mustIncludeDatumInTx, mustPayToOtherScriptWithDatumInTx)
+import Ledger.Tx (getCardanoTxId)
 import Ledger.Typed.Scripts qualified as Scripts hiding (validatorHash)
 import Plutus.Contract as Contract
 import Plutus.Contract.Test hiding (not)
@@ -30,7 +29,7 @@ import Plutus.Contract.Test.ContractModel
 import Plutus.Script.Utils.V1.Scripts (validatorHash)
 import Plutus.Script.Utils.V1.Typed.Scripts.Validators hiding (validatorHash)
 import Plutus.Trace.Emulator as Trace
-import Plutus.V1.Ledger.Contexts (ScriptContext (..))
+import Plutus.V1.Ledger.Api (Datum (Datum), ScriptContext)
 import PlutusTx qualified
 import PlutusTx.IsData.Class
 import PlutusTx.Prelude hiding ((<$))
@@ -53,28 +52,35 @@ tests = testGroup "error checking"
   , testCase "Check defaultWhitelist is ok" $ assertBool "whitelistOk defaultWhitelist" $ whitelistOk defaultWhitelist
   ]
 
+checkDefault :: Action DummyModel -> Property
+checkDefault a =
+  forAllDL (action a) $
+    checkErrorWhitelistWithOptions checkOptions
+                                   defaultCoverageOptions
+                                   defaultWhitelist
+
 -- | Normal failures should be allowed
 prop_FailFalse :: Property
-prop_FailFalse = checkErrorWhitelistWithOptions checkOptions defaultCoverageOptions defaultWhitelist (actionsFromList [FailFalse])
+prop_FailFalse = checkDefault FailFalse
 
 -- | Head Nil failure should not be allowed
 prop_FailHeadNil :: Property
-prop_FailHeadNil = checkErrorWhitelistWithOptions checkOptions defaultCoverageOptions defaultWhitelist (actionsFromList [FailHeadNil])
+prop_FailHeadNil = checkDefault FailHeadNil
 
 -- | Division by zero failure should not be allowed
 prop_DivZero :: Property
-prop_DivZero = checkErrorWhitelistWithOptions checkOptions defaultCoverageOptions defaultWhitelist (actionsFromList [DivZero])
+prop_DivZero = checkDefault DivZero
 
 -- | Successful validation should be allowed
 prop_Success :: Property
-prop_Success = checkErrorWhitelistWithOptions checkOptions defaultCoverageOptions defaultWhitelist (actionsFromList [Success])
+prop_Success = checkDefault Success
 
 checkOptions :: CheckOptions
 checkOptions = set minLogLevel Critical defaultCheckOptionsContractModel
 
 -- | This QuickCheck model only provides an interface to the validators used in this
 -- test that are convenient for testing them in isolation.
-data DummyModel = DummyModel deriving (Haskell.Show, Data)
+data DummyModel = DummyModel deriving (Haskell.Show, Generic)
 
 deriving instance Haskell.Eq (ContractInstanceKey DummyModel w schema err param)
 deriving instance Haskell.Show (ContractInstanceKey DummyModel w schema err param)
@@ -87,7 +93,7 @@ instance ContractModel DummyModel where
                          | FailHeadNil
                          | DivZero
                          | Success
-                         deriving (Haskell.Eq, Haskell.Show, Data)
+                         deriving (Haskell.Eq, Haskell.Show, Generic)
 
   perform handle _ _ cmd = void $ case cmd of
     FailFalse -> do
@@ -111,7 +117,9 @@ instance ContractModel DummyModel where
 
   instanceContract _ (WalletKey _) _ = contract
 
-  nextState _ = wait 2
+  -- Collateral is taken
+  nextState FailFalse = withdraw w1 (Ada.lovelaceValueOf 10000000) >> wait 2
+  nextState _         = wait 2
 
   arbitraryAction _ = elements [FailFalse, FailHeadNil, DivZero, Success]
 
@@ -131,9 +139,12 @@ contract :: Contract () Schema ContractError ()
 contract = selectList [failFalseC, failHeadNilC, divZeroC, successC]
   where
     run validator = void $ do
-      let addr = scriptAddress (validatorScript validator)
+      params <- getParams
+      let addr = Scripts.validatorCardanoAddress (pNetworkId params) validator
           hash = validatorHash (validatorScript validator)
-          tx = mustPayToOtherScript hash (Datum $ toBuiltinData ()) (Ada.adaValueOf 10)
+          datum = Datum $ toBuiltinData ()
+          tx = mustPayToOtherScriptWithDatumInTx hash datum (Ada.adaValueOf 10)
+            <> mustIncludeDatumInTx datum
       r <- submitTx tx
       awaitTxConfirmed (getCardanoTxId r)
       utxos <- utxosAt addr

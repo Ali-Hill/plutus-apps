@@ -44,7 +44,7 @@ module Plutus.Contracts.Tutorial.Escrow(
     , covIdx
     ) where
 
-import Control.Lens (makeClassyPrisms, review, view)
+import Control.Lens (_1, has, makeClassyPrisms, only, review, view)
 import Control.Monad (void)
 import Control.Monad.Error.Lens (throwing)
 import Data.Aeson (FromJSON, ToJSON)
@@ -58,10 +58,10 @@ import Ledger.Tx qualified as Tx
 import Ledger.Typed.Scripts (TypedValidator)
 import Ledger.Typed.Scripts qualified as Scripts
 import Ledger.Value (Value, geq, lt)
-import Plutus.Script.Utils.Scripts qualified as Ledger
 import Plutus.V1.Ledger.Api (Datum (Datum), DatumHash)
 import Plutus.V1.Ledger.Contexts (ScriptContext (..), TxInfo (..))
 
+import Cardano.Node.Emulator.Params qualified as Params
 import Plutus.Contract
 import PlutusTx qualified
 import PlutusTx.Code
@@ -131,7 +131,7 @@ payToPaymentPubKeyTarget :: PaymentPubKeyHash -> Value -> EscrowTarget d
 payToPaymentPubKeyTarget = PaymentPubKeyTarget
 
 -- | Definition of an escrow contract, consisting of a deadline and a list of targets
-data EscrowParams d =
+newtype EscrowParams d =
     EscrowParams
         { escrowTargets  :: [EscrowTarget d]
         -- ^ Where the money should go. For each target, the contract checks that
@@ -238,8 +238,8 @@ pay ::
     -> Contract w s e TxId
 pay inst _escrow vl = do
     pk <- ownFirstPaymentPubKeyHash
-    let tx = Constraints.mustPayToTheScript pk vl
-    utx <- mkTxConstraints (Constraints.plutusV1TypedValidatorLookups inst) tx >>= adjustUnbalancedTx
+    let tx = Constraints.mustPayToTheScriptWithDatumInTx pk vl
+    utx <- mkTxConstraints (Constraints.typedValidatorLookups inst) tx >>= adjustUnbalancedTx
     getCardanoTxId <$> submitUnbalancedTx utx
 
 newtype RedeemSuccess = RedeemSuccess TxId
@@ -267,15 +267,16 @@ redeem ::
     -> EscrowParams Datum
     -> Contract w s e RedeemSuccess
 redeem inst escrow = mapError (review _EscrowError) $ do
-    let addr = Scripts.validatorAddress inst
+    networkId <- Params.pNetworkId <$> getParams
+    let addr = Scripts.validatorCardanoAddress networkId inst
     unspentOutputs <- utxosAt addr
     let
         tx = Constraints.collectFromTheScript unspentOutputs Redeem
                 <> foldMap mkTx (escrowTargets escrow)
-    if foldMap (view Tx.ciTxOutValue) unspentOutputs `lt` targetTotal escrow
+    if foldMap (view Tx.decoratedTxOutValue) unspentOutputs `lt` targetTotal escrow
        then throwing _RedeemFailed NotEnoughFundsAtAddress
        else do
-         utx <- mkTxConstraints ( Constraints.plutusV1TypedValidatorLookups inst
+         utx <- mkTxConstraints ( Constraints.typedValidatorLookups inst
                                <> Constraints.unspentOutputs unspentOutputs
                                 ) tx >>= adjustUnbalancedTx
          RedeemSuccess . getCardanoTxId <$> submitUnbalancedTx utx
@@ -300,13 +301,15 @@ refund ::
     -> EscrowParams Datum
     -> Contract w s EscrowError RefundSuccess
 refund inst _escrow = do
+    networkId <- Params.pNetworkId <$> getParams
     pk <- ownFirstPaymentPubKeyHash
-    unspentOutputs <- utxosAt (Scripts.validatorAddress inst)
-    let flt _ ciTxOut = fst (Tx._ciTxOutScriptDatum ciTxOut) == Ledger.datumHash (Datum (PlutusTx.toBuiltinData pk))
+    unspentOutputs <- utxosAt (Scripts.validatorCardanoAddress networkId inst)
+    let pkh = Ledger.datumHash $ Datum $ PlutusTx.toBuiltinData pk
+        flt _ ciTxOut = has (Tx.decoratedTxOutScriptDatum . _1 . only pkh) ciTxOut
         tx' = Constraints.collectFromTheScriptFilter flt unspentOutputs Refund
     if Constraints.modifiesUtxoSet tx'
     then do
-        utx <- mkTxConstraints ( Constraints.plutusV1TypedValidatorLookups inst
+        utx <- mkTxConstraints ( Constraints.typedValidatorLookups inst
                               <> Constraints.unspentOutputs unspentOutputs
                                ) tx' >>= adjustUnbalancedTx
         RefundSuccess . getCardanoTxId <$> submitUnbalancedTx utx

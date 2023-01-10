@@ -1,5 +1,6 @@
 {-# LANGUAGE DataKinds           #-}
 {-# LANGUAGE DeriveDataTypeable  #-}
+{-# LANGUAGE DeriveGeneric       #-}
 {-# LANGUAGE FlexibleInstances   #-}
 {-# LANGUAGE GADTs               #-}
 {-# LANGUAGE NamedFieldPuns      #-}
@@ -36,12 +37,12 @@ import Test.Tasty.Golden (goldenVsString)
 import Test.Tasty.HUnit qualified as HUnit
 import Test.Tasty.QuickCheck hiding ((.&&.))
 
+import Cardano.Node.Emulator.TimeSlot qualified as TimeSlot
 import Ledger (Value)
 import Ledger qualified
 import Ledger.Ada qualified as Ada
 import Ledger.Slot (Slot (..))
 import Ledger.Time (POSIXTime)
-import Ledger.TimeSlot qualified as TimeSlot
 import Plutus.Contract hiding (currentSlot, runError)
 import Plutus.Contract.Test
 import Plutus.Contract.Test.ContractModel
@@ -88,6 +89,18 @@ tests = testGroup "crowdfunding"
     , checkPredicate "make contributions and collect"
         (walletFundsChange w1 (Ada.adaValueOf 22.5))
         successfulCampaign
+
+    , checkPredicate "cannot make contribution after campaign dealine"
+        (walletFundsChange w1 PlutusTx.zero
+        .&&. assertFailedTransaction (\_ err ->
+            case err of
+                Ledger.CardanoLedgerValidationError msg ->
+                    "OutsideValidityIntervalUTxO" `Text.isInfixOf` msg
+                _ -> False
+            ))
+        $ do
+            void $ Trace.waitUntilSlot $ Slot 20
+            makeContribution w1 (Ada.adaValueOf 10)
 
     , checkPredicate "cannot collect money too late"
         (walletFundsChange w1 PlutusTx.zero
@@ -158,8 +171,14 @@ tests = testGroup "crowdfunding"
         "test/Spec/contractError.txt"
         (pure $ renderWalletLog (void $ Trace.activateContractWallet w1 con))
 
-    , testProperty "QuickCheck ContractModel" $ withMaxSuccess 10 prop_Crowdfunding
+    , testProperty "QuickCheck ContractModel" prop_Crowdfunding
 
+    , testProperty "start-at-slot-20" $ withMaxSuccess 1 $
+        let fixedTestCase = do
+              action $ CContribute w6 (Ada.lovelaceValueOf 20000000)
+              waitUntilDL (Slot 20)
+              action CStart
+        in forAllDL fixedTestCase prop_Crowdfunding
     ]
 
     where
@@ -193,7 +212,7 @@ deriving instance Show (ContractInstanceKey CrowdfundingModel w schema err param
 instance ContractModel CrowdfundingModel where
   data Action CrowdfundingModel = CContribute Wallet Value
                                 | CStart
-                                deriving (Eq, Show, Data)
+                                deriving (Eq, Show, Generic)
 
   data ContractInstanceKey CrowdfundingModel w schema err params where
     ContributorKey :: Wallet -> ContractInstanceKey CrowdfundingModel () CrowdfundingSchema ContractError ()
@@ -216,24 +235,41 @@ instance ContractModel CrowdfundingModel where
   instanceContract _ ContributorKey{} _ = crowdfunding params
 
   perform h _ s a = case a of
-    CContribute w v -> Trace.callEndpoint @"contribute" (h $ ContributorKey w) Contribution{contribValue=v}
-    CStart          -> Trace.callEndpoint @"schedule collection" (h $ OwnerKey $ s ^. contractState . ownerWallet) ()
+    CContribute w v -> do
+      Trace.callEndpoint @"contribute" (h $ ContributorKey w) Contribution{contribValue=v}
+      delay 1
+    CStart          -> do
+      Trace.callEndpoint @"schedule collection" (h $ OwnerKey $ s ^. contractState . ownerWallet) ()
+      delay 1
 
   nextState a = case a of
     CContribute w v -> do
       withdraw w v
-      contributions $~ Map.insert w v
+      contributions %= Map.insert w v
+      wait 1
     CStart -> do
-      ownerOnline .= True
+      slot' <- viewModelState currentSlot
+      end <- viewContractState endSlot
+      wait 1
+      -- Collecting happens immediately if the campaign deadline has passed
+      if slot' < end
+        then do
+          ownerOnline .= True
+        else do
+          cMap <- viewContractState contributions
+          owner <- viewContractState ownerWallet
+          deposit owner (fold cMap)
+          contributions .= Map.empty
+          ownerContractDone .= True
 
   nextReactiveState slot' = do
     -- If the owner is online and its after the
     -- contribution deadline deadline
     -- they collect all the money
     end <- viewContractState endSlot
-    online  <- viewContractState ownerOnline
-    when (slot' >= end && online) $ do
-      owner   <- viewContractState ownerWallet
+    online <- viewContractState ownerOnline
+    when (slot' > end && online) $ do
+      owner <- viewContractState ownerWallet
       cMap <- viewContractState contributions
       deposit owner (fold cMap)
       contributions .= Map.empty
@@ -242,7 +278,7 @@ instance ContractModel CrowdfundingModel where
     -- If its after the end of the collection time range
     -- the remaining funds are collected by the contracts
     collectDeadline <- viewContractState collectDeadlineSlot
-    when (slot' >= collectDeadline) $ do
+    when (slot' > collectDeadline) $ do
       cMap <- viewContractState contributions
       mapM_ (uncurry deposit) (Map.toList cMap)
       contributions .= Map.empty
@@ -254,7 +290,7 @@ instance ContractModel CrowdfundingModel where
     CContribute w v -> w `notElem` Map.keys (s ^. contractState . contributions)
                     && w /= (s ^. contractState . ownerWallet)
                     && s ^. currentSlot < s ^. contractState . endSlot
-                    && Ada.fromValue v >= Ledger.minAdaTxOut
+                    && Ada.fromValue v >= Ledger.minAdaTxOutEstimated
     CStart          -> Prelude.not (s ^. contractState . ownerOnline || s ^. contractState . ownerContractDone)
 
   -- To generate a random test case we need to know how to generate a random
@@ -285,9 +321,6 @@ instance ContractModel CrowdfundingModel where
 contributorWallets :: [Wallet]
 contributorWallets = [w2, w3, w4, w5, w6, w7, w8, w9, w10]
 
-prop_Crowdfunding :: Actions CrowdfundingModel -> Property
-prop_Crowdfunding = propRunActions_
-
 check_propCrowdfundingWithCoverage :: IO ()
 check_propCrowdfundingWithCoverage = do
   cr <- quickCheckWithCoverage stdArgs (set coverageIndex covIdx defaultCoverageOptions) $ \covopts ->
@@ -295,3 +328,9 @@ check_propCrowdfundingWithCoverage = do
       propRunActionsWithOptions @CrowdfundingModel defaultCheckOptionsContractModel covopts
         (const (pure True))
   writeCoverageReport "Crowdfunding" cr
+
+prop_Crowdfunding actions = propRunActionsWithOptions
+    (defaultCheckOptionsContractModel & increaseTransactionLimits)
+    defaultCoverageOptions
+    (\ _ -> pure True)
+    actions

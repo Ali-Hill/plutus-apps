@@ -7,10 +7,13 @@
 
 module Main(main) where
 
+import Cardano.Node.Emulator.Generators qualified as Gen
+import Cardano.Node.Emulator.Params (Params (pNetworkId))
 import Control.Lens (toListOf, view)
 import Control.Monad (forM_, guard, replicateM, void)
+import Control.Monad.Except (runExcept)
 import Control.Monad.IO.Class (MonadIO (liftIO))
-import Control.Monad.Reader (ask)
+import Control.Monad.Reader (ask, runReaderT)
 import Data.ByteString qualified as BS
 import Data.Default (def)
 import Data.Map qualified as Map
@@ -21,40 +24,64 @@ import Hedgehog qualified
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
 import Language.Haskell.TH.Syntax
-import Ledger qualified
+import Ledger qualified (DatumFromQuery (DatumInBody), DecoratedTxOut (ScriptDecoratedTxOut), inputs, paymentPubKeyHash,
+                         scriptTxInputs, toPlutusAddress, toTxOut, txInputRef, unitDatum, unitRedeemer)
 import Ledger.Ada qualified as Ada
-import Ledger.Address (StakePubKeyHash (StakePubKeyHash), addressStakingCredential)
-import Ledger.Constraints as Constraints
+import Ledger.Address (StakePubKeyHash (StakePubKeyHash), addressStakingCredential, stakeValidatorHashCredential,
+                       xprvToPaymentPubKeyHash, xprvToStakingCredential)
+import Ledger.Constraints (MkTxError, mustSpendPubKeyOutput, mustSpendScriptOutput, mustSpendScriptOutputWithReference)
+import Ledger.Constraints qualified as Constraints
+import Ledger.Constraints.OffChain (prepareConstraints)
 import Ledger.Constraints.OffChain qualified as OC
-import Ledger.Constraints.OnChain.V1 as Constraints
+import Ledger.Constraints.OnChain.V2 qualified as ConstraintsV2
 import Ledger.Credential (Credential (PubKeyCredential, ScriptCredential), StakingCredential (StakingHash))
 import Ledger.Crypto (PubKeyHash (PubKeyHash))
-import Ledger.Generators qualified as Gen
-import Ledger.Params ()
-import Ledger.Tx (Tx (txOutputs), TxOut (TxOut, txOutAddress))
-import Ledger.Typed.Scripts qualified as Scripts
+import Ledger.Index qualified as Ledger
+import Ledger.Scripts (WitCtx (WitCtxStake), examplePlutusScriptAlwaysSucceedsHash)
+import Ledger.Test (asRedeemer)
+import Ledger.Tx (Tx (txCollateralInputs, txOutputs), TxOut (TxOut), txOutAddress)
 import Ledger.Value (CurrencySymbol, Value (Value))
 import Ledger.Value qualified as Value
-import Plutus.Script.Utils.Scripts qualified as Ledger
-import Plutus.Script.Utils.V1.Generators qualified as Gen
-import Plutus.Script.Utils.V1.Scripts qualified as Ledger
-import Plutus.V1.Ledger.Api qualified as Ledger
-import Plutus.V1.Ledger.Scripts qualified as Ledger
+import Plutus.Script.Utils.Typed qualified as Scripts
+import Plutus.Script.Utils.V2.Generators qualified as Gen
+import Plutus.Script.Utils.V2.Scripts qualified as Ledger
+import Plutus.Script.Utils.V2.Typed.Scripts qualified as Scripts
+import Plutus.V2.Ledger.Api qualified as Ledger
 import PlutusTx qualified
 import PlutusTx.AssocMap qualified as AMap
 import PlutusTx.Builtins.Internal (BuiltinByteString (..))
 import PlutusTx.Prelude qualified as Pl
 import Test.Tasty (TestTree, defaultMain, testGroup)
-import Test.Tasty.Hedgehog (testProperty)
+import Test.Tasty.Hedgehog (testPropertyNamed)
 
 main :: IO ()
 main = defaultMain tests
 
 tests :: TestTree
 tests = testGroup "all tests"
-    [ testProperty "missing value spent" missingValueSpentProp
-    , testProperty "mustPayToPubKeyAddress should create output addresses with stake pub key hash" mustPayToPubKeyAddressStakePubKeyNotNothingProp
-    , testProperty "mustPayToOtherScriptAddress should create output addresses with stake validator hash" mustPayToOtherScriptAddressStakeValidatorHashNotNothingProp
+    [ testPropertyNamed "missing value spent"
+        "missingValueSpentProp" missingValueSpentProp
+    , testPropertyNamed "mustPayToPubKeyAddress should create output addresses with stake pub key hash"
+        "mustPayToPubKeyAddressStakePubKeyNotNothingProp"
+        mustPayToPubKeyAddressStakePubKeyNotNothingProp
+    , testPropertyNamed "mustPayToOtherScriptAddressWithDatumHash should create output addresses with stake validator hash"
+         "mustPayToOtherScriptAddressStakeValidatorHashNotNothingProp"
+         mustPayToOtherScriptAddressStakeValidatorHashNotNothingProp
+    , testPropertyNamed "mustUseOutputAsCollateral should add a collateral input"
+        "mustUseOutputAsCollateralProp" mustUseOutputAsCollateralProp
+    , testPropertyNamed "prepareConstraints keep only one duplicated mustSpendPubKeyOutput constraints"
+        "mustSpendPubKeyOutputDuplicate" mustSpendPubKeyOutputDuplicate
+    , testPropertyNamed "prepareConstraints keep only one duplicated mustSpendScriptOutput constraints"
+        "mustSpendScriptOutputDuplicate" mustSpendScriptOutputDuplicate
+    , testPropertyNamed "prepareConstraints keep the constraitnt with a reference script on duplicate"
+        "mustSpendScriptOutputKeepTheOneWithAReferenceScript"
+        mustSpendScriptOutputKeepTheOneWithAReferenceScript
+    , testPropertyNamed "prepareConstraints fails if the same utxo is spent with different redeemers"
+        "mustSpendScriptOutputFailsWithDifferentRedeemers"
+        mustSpendScriptOutputFailsWithDifferentRedeemers
+    , testPropertyNamed "prepareConstraints fails if the same utxo is spent with a different referenceScript"
+        "mustSpendScriptOutputFailsWithDifferentReferenceScript"
+        mustSpendScriptOutputFailsWithDifferentReferenceScript
     ]
 
 -- | Reduce one of the elements in a 'Value' by one.
@@ -106,57 +133,100 @@ missingValueSpentProp = property $ do
 -- | The 'mustPayToPubKeyAddress' should be able to set the stake public key hash to some value.
 mustPayToPubKeyAddressStakePubKeyNotNothingProp :: Property
 mustPayToPubKeyAddressStakePubKeyNotNothingProp = property $ do
-    pkh <- forAll $ Ledger.paymentPubKeyHash <$> Gen.element Gen.knownPaymentPublicKeys
-    let skh = StakePubKeyHash $ PubKeyHash "00000000000000000000000000000000000000000000000000000000"
-        txE = mkTx @Void mempty (Constraints.mustPayToPubKeyAddress pkh skh (Ada.toValue Ledger.minAdaTxOut))
+    [x,y] <- Hedgehog.forAllWith (const "A known key") $ take 2 <$> Gen.shuffle Gen.knownXPrvs
+    let pkh = xprvToPaymentPubKeyHash x
+        sc = xprvToStakingCredential y
+        txE = Constraints.mkTxWithParams @Void def mempty (Constraints.mustPayToPubKeyAddress pkh sc (Ada.toValue Ledger.minAdaTxOutEstimated))
     case txE of
-      Left _ ->
+      Left err -> do
+          Hedgehog.annotateShow err
           Hedgehog.failure
       Right utx -> do
           let outputs = txOutputs (view OC.tx utx)
-          let stakingCreds = mapMaybe stakePaymentPubKeyHash outputs
+          let stakingCreds = mapMaybe (addressStakingCredential . Ledger.toPlutusAddress . txOutAddress) outputs
           Hedgehog.assert $ not $ null stakingCreds
-          forM_ stakingCreds ((===) skh)
-  where
-      stakePaymentPubKeyHash :: TxOut -> Maybe StakePubKeyHash
-      stakePaymentPubKeyHash TxOut { txOutAddress } = do
-          stakeCred <- addressStakingCredential txOutAddress
-          case stakeCred of
-            StakingHash (PubKeyCredential pkh) -> Just $ StakePubKeyHash pkh
-            _                                  -> Nothing
+          forM_ stakingCreds ((===) sc)
 
--- | The 'mustPayToOtherScriptAddress' should be able to set the stake validator hash to some value.
+-- | The 'mustPayToOtherScriptAddressWithDatumHash' should be able to set the stake validator hash to some value.
 mustPayToOtherScriptAddressStakeValidatorHashNotNothingProp :: Property
 mustPayToOtherScriptAddressStakeValidatorHashNotNothingProp = property $ do
     pkh <- forAll $ Ledger.paymentPubKeyHash <$> Gen.element Gen.knownPaymentPublicKeys
-    let svh = Ledger.StakeValidatorHash "00000000000000000000000000000000000000000000000000000000"
-        txE = mkTx @Void mempty (Constraints.mustPayToOtherScriptAddress alwaysSucceedValidatorHash svh Ledger.unitDatum (Ada.toValue Ledger.minAdaTxOut))
+    let sc = stakeValidatorHashCredential $ Ledger.StakeValidatorHash $ examplePlutusScriptAlwaysSucceedsHash WitCtxStake
+        txE = Constraints.mkTxWithParams @Void def mempty (Constraints.mustPayToOtherScriptAddressWithDatumHash alwaysSucceedValidatorHash sc Ledger.unitDatum (Ada.toValue Ledger.minAdaTxOutEstimated))
     case txE of
-      Left _ ->
+      Left err -> do
+          Hedgehog.annotateShow err
           Hedgehog.failure
       Right utx -> do
           let outputs = txOutputs (view OC.tx utx)
-          let stakingCreds = mapMaybe stakeValidatorHash outputs
+          let stakingCreds = mapMaybe (addressStakingCredential . Ledger.toPlutusAddress . txOutAddress) outputs
           Hedgehog.assert $ not $ null stakingCreds
-          forM_ stakingCreds ((===) svh)
-  where
-      stakeValidatorHash :: TxOut -> Maybe Ledger.StakeValidatorHash
-      stakeValidatorHash TxOut { txOutAddress } = do
-          stakeCred <- addressStakingCredential txOutAddress
-          case stakeCred of
-            StakingHash (ScriptCredential (Ledger.ValidatorHash svh)) -> Just $ Ledger.StakeValidatorHash svh
-            _                                                         -> Nothing
+          forM_ stakingCreds ((===) sc)
 
-txOut0 :: Ledger.ChainIndexTxOut
+mustUseOutputAsCollateralProp :: Property
+mustUseOutputAsCollateralProp = property $ do
+    pkh <- forAll $ Ledger.paymentPubKeyHash <$> Gen.element Gen.knownPaymentPublicKeys
+    let txOutRef = Ledger.TxOutRef (Ledger.TxId "123") 0
+        txE = Constraints.mkTxWithParams @Void def mempty (Constraints.mustUseOutputAsCollateral txOutRef)
+    case txE of
+        Left e -> do
+            Hedgehog.annotateShow e
+            Hedgehog.failure
+        Right utx -> do
+            let coll = txCollateralInputs (view OC.tx utx)
+            Hedgehog.assert $ length coll == 1
+            Hedgehog.assert $ Ledger.txInputRef (head coll) == txOutRef
+
+mustSpendScriptOutputDuplicate :: Property
+mustSpendScriptOutputDuplicate = property $ do
+    let con = mustSpendScriptOutputWithReference @Void @Void (txOutRef 1) (asRedeemer ()) (txOutRef 0)
+    let dup = con <> con
+    Hedgehog.assert $ prepFromTxConstraints dup == prepFromTxConstraints con
+
+mustSpendPubKeyOutputDuplicate :: Property
+mustSpendPubKeyOutputDuplicate = property $ do
+    let con = mustSpendPubKeyOutput @Void @Void (txOutRef 1)
+    let dup = con <> con
+    Hedgehog.assert $ prepFromTxConstraints dup == prepFromTxConstraints con
+
+mustSpendScriptOutputKeepTheOneWithAReferenceScript :: Property
+mustSpendScriptOutputKeepTheOneWithAReferenceScript = property $ do
+    let con = mustSpendScriptOutputWithReference @Void @Void (txOutRef 1) (asRedeemer ()) (txOutRef 0)
+    let dup = mustSpendScriptOutput @Void @Void (txOutRef 1) (asRedeemer ()) <> con
+    Hedgehog.assert $ prepFromTxConstraints dup == prepFromTxConstraints con
+
+mustSpendScriptOutputFailsWithDifferentRedeemers :: Property
+mustSpendScriptOutputFailsWithDifferentRedeemers = property $ do
+    let con  = mustSpendScriptOutputWithReference @Void @Void (txOutRef 1) (asRedeemer ()) (txOutRef 0)
+    let con2 = mustSpendScriptOutputWithReference @Void @Void (txOutRef 1) (asRedeemer (5 :: Integer)) (txOutRef 0)
+    Hedgehog.assert $ case prepFromTxConstraints (con <> con2) of
+        Left (OC.AmbiguousRedeemer _ _) -> True
+        _                               -> False
+
+mustSpendScriptOutputFailsWithDifferentReferenceScript :: Property
+mustSpendScriptOutputFailsWithDifferentReferenceScript = property $ do
+    let con  = mustSpendScriptOutputWithReference @Void @Void (txOutRef 1) (asRedeemer ()) (txOutRef 0)
+    let con2 = mustSpendScriptOutputWithReference @Void @Void (txOutRef 1) (asRedeemer ()) (txOutRef 1)
+    Hedgehog.assert $ case prepFromTxConstraints (con <> con2) of
+        Left (OC.AmbiguousReferenceScript _ _) -> True
+        _                                      -> False
+
+prepFromTxConstraints
+    :: Constraints.TxConstraints Void Void
+    -> Either MkTxError [Constraints.TxConstraint]
+prepFromTxConstraints txCons = runExcept $
+        prepareConstraints @Void (Constraints.txOwnOutputs txCons) (Constraints.txConstraints txCons)
+        `runReaderT` mempty
+
+txOut0 :: Ledger.DecoratedTxOut
 txOut0 =
-    Ledger.ScriptChainIndexTxOut
-        (Ledger.Address (ScriptCredential alwaysSucceedValidatorHash) Nothing)
+    Ledger.ScriptDecoratedTxOut
+        alwaysSucceedValidatorHash
+        Nothing
         mempty
-        (Ledger.datumHash Ledger.unitDatum, Just Ledger.unitDatum)
-        (alwaysSucceedValidatorHash, Nothing)
-
-txOutRef0 :: Ledger.TxOutRef
-txOutRef0 = Ledger.TxOutRef (Ledger.TxId "") 0
+        (Ledger.datumHash Ledger.unitDatum, Ledger.DatumInBody Ledger.unitDatum)
+        Nothing
+        Nothing
 
 data UnitTest
 instance Scripts.ValidatorTypes UnitTest
@@ -173,7 +243,7 @@ alwaysSucceedValidatorHash = Scripts.validatorHash alwaysSucceedValidator
 
 validator1 :: Scripts.TypedValidator UnitTest
 validator1 = Scripts.mkTypedValidator
-    ($$(PlutusTx.compile [|| \vh _ _ -> checkScriptContext @() @() (constraints1 vh) ||])
+    ($$(PlutusTx.compile [|| \vh _ _ -> ConstraintsV2.checkScriptContext @() @() (constraints1 vh) ||])
         `PlutusTx.applyCode` PlutusTx.liftCode alwaysSucceedValidatorHash)
     $$(PlutusTx.compile [|| wrap ||])
     where
@@ -182,32 +252,34 @@ validator1 = Scripts.mkTypedValidator
 validatorHash1 :: Ledger.ValidatorHash
 validatorHash1 = Scripts.validatorHash validator1
 
-txOut1 :: Ledger.ChainIndexTxOut
+txOut1 :: Ledger.DecoratedTxOut
 txOut1 =
-    Ledger.ScriptChainIndexTxOut
-        (Ledger.Address (ScriptCredential validatorHash1) Nothing)
+    Ledger.ScriptDecoratedTxOut
+        validatorHash1
+        Nothing
         mempty
-        (Ledger.datumHash Ledger.unitDatum, Just Ledger.unitDatum)
-        (validatorHash1, Nothing)
+        (Ledger.datumHash Ledger.unitDatum, Ledger.DatumInBody Ledger.unitDatum)
+        Nothing
+        Nothing
 
-txOutRef1 :: Ledger.TxOutRef
-txOutRef1 = Ledger.TxOutRef (Ledger.TxId "") 1
+txOutRef :: Integer -> Ledger.TxOutRef
+txOutRef = Ledger.TxOutRef (Ledger.TxId "")
 
-utxo1 :: Map.Map Ledger.TxOutRef Ledger.ChainIndexTxOut
-utxo1 = Map.fromList [(txOutRef0, txOut0), (txOutRef1, txOut1)]
+utxo1 :: Map.Map Ledger.TxOutRef Ledger.DecoratedTxOut
+utxo1 = Map.fromList [(txOutRef 0, txOut0), (txOutRef 1, txOut1)]
 
 {-# INLINABLE constraints1 #-}
-constraints1 :: Ledger.ValidatorHash -> TxConstraints () ()
+constraints1 :: Ledger.ValidatorHash -> Constraints.TxConstraints () ()
 constraints1 vh =
     Constraints.mustSpendScriptOutputWithMatchingDatumAndValue
         vh
         (Pl.== Ledger.unitDatum)
         (Pl.const True)
         Ledger.unitRedeemer
-    <> Constraints.mustSpendScriptOutput txOutRef1 Ledger.unitRedeemer
+    <> Constraints.mustSpendScriptOutput (txOutRef 1) Ledger.unitRedeemer
 
-lookups1 :: ScriptLookups UnitTest
+lookups1 :: Constraints.ScriptLookups UnitTest
 lookups1
     = Constraints.unspentOutputs utxo1
-    <> Constraints.plutusV1OtherScript (Scripts.validatorScript alwaysSucceedValidator)
-    <> Constraints.plutusV1OtherScript (Scripts.validatorScript validator1)
+    <> Constraints.otherScript (Scripts.vValidatorScript alwaysSucceedValidator)
+    <> Constraints.otherScript (Scripts.vValidatorScript validator1)

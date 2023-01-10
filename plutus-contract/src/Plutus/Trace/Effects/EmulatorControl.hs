@@ -20,11 +20,15 @@ module Plutus.Trace.Effects.EmulatorControl(
     , freezeContractInstance
     , thawContractInstance
     , chainState
+    , getParams
     , discardWallets
     , handleEmulatorControl
     , getSlotConfig
     ) where
 
+import Cardano.Node.Emulator.Chain (ChainState)
+import Cardano.Node.Emulator.Params
+import Cardano.Node.Emulator.TimeSlot (SlotConfig)
 import Control.Lens (over, view)
 import Control.Monad (void)
 import Control.Monad.Freer (Eff, Member, type (~>))
@@ -33,12 +37,10 @@ import Control.Monad.Freer.Error (Error)
 import Control.Monad.Freer.State (State, gets, modify)
 import Control.Monad.Freer.TH (makeEffect)
 import Data.Map qualified as Map
-import Ledger.TimeSlot (SlotConfig)
 import Plutus.Trace.Emulator.ContractInstance (EmulatorRuntimeError, getThread)
 import Plutus.Trace.Emulator.Types (EmulatorMessage (Freeze), EmulatorThreads)
 import Plutus.Trace.Scheduler (EmSystemCall, MessageCall (Message), Priority (Normal), ThreadCall (Thaw), mkSysCall)
 import Wallet.Emulator qualified as EM
-import Wallet.Emulator.Chain (ChainState)
 import Wallet.Emulator.MultiAgent (EmulatorState, MultiAgentControlEffect, walletControlAction, walletState)
 import Wallet.Emulator.Wallet (SigningProcess, Wallet, WalletState)
 import Wallet.Emulator.Wallet qualified as W
@@ -68,34 +70,36 @@ data EmulatorControl r where
     FreezeContractInstance :: ContractInstanceId -> EmulatorControl ()
     ThawContractInstance :: ContractInstanceId -> EmulatorControl ()
     ChainState :: EmulatorControl ChainState
+    GetParams :: EmulatorControl Params
     GetSlotConfig :: EmulatorControl SlotConfig
     DiscardWallets :: (Wallet -> Bool) -> EmulatorControl ()  -- ^ Discard wallets matching the predicate.
 
 -- | Interpret the 'EmulatorControl' effect in the 'MultiAgentEffect' and
 --   scheduler system calls.
 handleEmulatorControl ::
-    forall effs effs2.
+    forall effs effs2 a.
     ( Member (State EmulatorThreads) effs
     , Member (State EmulatorState) effs
     , Member (Error EmulatorRuntimeError) effs
     , Member MultiAgentControlEffect effs
-    , Member (Yield (EmSystemCall effs2 EmulatorMessage) (Maybe EmulatorMessage)) effs
+    , Member (Yield (EmSystemCall effs2 EmulatorMessage a) (Maybe EmulatorMessage)) effs
     )
-    => SlotConfig
+    => Params
     -> EmulatorControl
     ~> Eff effs
-handleEmulatorControl slotCfg = \case
+handleEmulatorControl params@Params{pSlotConfig=slotCfg} = \case
     SetSigningProcess wllt sp -> walletControlAction wllt $ W.setSigningProcess sp
     AgentState wllt -> gets @EmulatorState (view (walletState wllt))
     FreezeContractInstance i -> do
         threadId <- getThread i
         -- see note [Freeze and Thaw]
-        void $ mkSysCall @effs2 @EmulatorMessage Normal (Left $ Message threadId Freeze)
+        void $ mkSysCall @effs2 @EmulatorMessage @_ @a Normal (Left $ Message threadId Freeze)
     ThawContractInstance i -> do
         threadId <- getThread i
         -- see note [Freeze and Thaw]
-        void $ mkSysCall @effs2 @EmulatorMessage Normal (Right $ Thaw threadId)
+        void $ mkSysCall @effs2 @EmulatorMessage @_ @a Normal (Right $ Thaw threadId)
     ChainState -> gets (view EM.chainState)
+    GetParams -> return params
     GetSlotConfig -> return slotCfg
     DiscardWallets discard -> modify @EmulatorState $ over EM.walletStates (Map.filterWithKey (\ k _ -> not $ discard k))
 

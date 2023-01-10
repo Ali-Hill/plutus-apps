@@ -1,15 +1,19 @@
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE GADTs            #-}
-{-# LANGUAGE LambdaCase       #-}
-{-# LANGUAGE RankNTypes       #-}
-{-# LANGUAGE TupleSections    #-}
-{-# LANGUAGE TypeApplications #-}
-{-# LANGUAGE TypeOperators    #-}
+{-# LANGUAGE FlexibleContexts  #-}
+{-# LANGUAGE GADTs             #-}
+{-# LANGUAGE LambdaCase        #-}
+{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE RankNTypes        #-}
+{-# LANGUAGE TupleSections     #-}
+{-# LANGUAGE TypeApplications  #-}
+{-# LANGUAGE TypeOperators     #-}
 
 module Cardano.Wallet.RemoteClientSpec
     ( tests
     ) where
 
+import Cardano.Node.Emulator.Generators qualified as Gen
+import Cardano.Node.Emulator.Params (Params (..), pParamsFromProtocolParams, pProtocolParams)
+import Cardano.Node.Emulator.TimeSlot (SlotConfig)
 import Cardano.Wallet.RemoteClient (handleWalletClient)
 import Control.Concurrent.STM qualified as STM
 import Control.Monad.Freer (Eff, interpret, runM, type (~>))
@@ -21,16 +25,14 @@ import Data.List qualified as List
 import Gen.Cardano.Api.Typed qualified as Gen
 import Hedgehog (Property, (===))
 import Hedgehog qualified
-import Ledger (Params (..), Slot)
+import Ledger (Slot)
 import Ledger.Constraints.OffChain (emptyUnbalancedTx)
-import Ledger.Generators qualified as Gen
-import Ledger.TimeSlot (SlotConfig)
 import Plutus.Contract (WalletAPIError)
 import Plutus.PAB.Core.ContractInstance.STM (InstancesState, emptyInstanceState, emptyInstancesState, insertInstance,
                                              instanceState, yieldedExportTxs)
 import Test.QuickCheck.Arbitrary (Arbitrary, arbitrary)
 import Test.Tasty (TestTree, testGroup)
-import Test.Tasty.Hedgehog (testProperty)
+import Test.Tasty.Hedgehog (testPropertyNamed)
 import Wallet.Effects (NodeClientEffect (GetClientParams, GetClientSlot, PublishTx), WalletEffect (YieldUnbalancedTx))
 import Wallet.Emulator.Error (WalletAPIError (OtherError))
 import Wallet.Types (ContractInstanceId, randomID)
@@ -38,8 +40,8 @@ import Wallet.Types (ContractInstanceId, randomID)
 tests :: TestTree
 tests = testGroup "Cardano.Wallet.RemoteClient"
     [ testGroup "yieldUnbalancedTx"
-        [ testProperty "should put partial tx in contract instance state" yieldToInstanceState
-        , testProperty "should throw error when no contract instance id is provided" yieldNoCid
+        [ testPropertyNamed "should put partial tx in contract instance state" "yieldToInstanceState" yieldToInstanceState
+        , testPropertyNamed "should throw error when no contract instance id is provided" "yieldNoCid"yieldNoCid
         ]
     ]
 
@@ -49,36 +51,33 @@ yieldToInstanceState :: Property
 yieldToInstanceState = Hedgehog.property $ do
     pp <- Hedgehog.forAll Gen.genProtocolParameters
     sc <- Hedgehog.forAll Gen.genSlotConfig
-    let params = def { pProtocolParams = pp, pSlotConfig = sc }
+    let params = def { emulatorPParams = pParamsFromProtocolParams pp, pSlotConfig = sc }
     sl <- Hedgehog.forAll Gen.genSlot
     cid <- liftIO randomID
 
     let utx = emptyUnbalancedTx
     result <- liftIO $ do
-        iss <- STM.atomically $ do
-            iss <- emptyInstancesState
-            is <- emptyInstanceState
-            insertInstance cid is iss
-            pure iss
-
-        yieldedRes <- runRemoteWalletEffects params sl iss (Just cid) (YieldUnbalancedTx utx)
-        pure $ fmap (,iss) yieldedRes
+      iss <- emptyInstancesState
+      is <- STM.atomically $ emptyInstanceState
+      insertInstance cid is iss
+      yieldedRes <- runRemoteWalletEffects params sl iss (Just cid) (YieldUnbalancedTx utx)
+      pure $ fmap (,iss) yieldedRes
 
     case result of
       Left _ -> Hedgehog.assert False
       Right ((), iss) -> do
-          txs <- liftIO $ STM.atomically $ instanceState cid iss >>= yieldedExportTxs
-          List.length txs === 1
+        result <- liftIO $ instanceState cid iss >>= traverse (STM.atomically . yieldedExportTxs)
+        maybe (Hedgehog.assert False) (\txs -> List.length txs === 1) result
 
 -- | An error should be thrown when no contract instance id is provided.
 yieldNoCid :: Property
 yieldNoCid = Hedgehog.property $ do
     pp <- Hedgehog.forAll Gen.genProtocolParameters
     sc <- Hedgehog.forAll Gen.genSlotConfig
-    let params = def { pProtocolParams = pp, pSlotConfig = sc }
+    let params = def { emulatorPParams = pParamsFromProtocolParams pp, pSlotConfig = sc }
     sl <- Hedgehog.forAll Gen.genSlot
     result <- liftIO $ do
-        iss <- STM.atomically emptyInstancesState
+        iss <- emptyInstancesState
         runRemoteWalletEffects params sl iss Nothing (YieldUnbalancedTx emptyUnbalancedTx)
     case result of
       Left (OtherError _) -> Hedgehog.assert True

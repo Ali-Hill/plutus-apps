@@ -3,7 +3,7 @@
 , packages ? import ./. { inherit system enableHaskellProfiling; }
 }:
 let
-  inherit (packages) pkgs plutus-apps plutus-playground pab-nami-demo plutus-chain-index pab-cli docs webCommon;
+  inherit (packages) pkgs plutus-apps plutus-chain-index pab-cli docs webCommon;
   inherit (pkgs) lib utillinux python3 nixpkgs-fmt;
   inherit (plutus-apps) haskell;
 
@@ -11,19 +11,23 @@ let
   # This is stable as it doesn't mix dependencies with this code-base;
   # the fetched binaries are the "standard" builds that people test.
   # This should be fast as it mostly fetches Hydra caches without building much.
-  cardano-wallet = import
-    (pkgs.fetchgit {
-      url = "https://github.com/input-output-hk/cardano-wallet";
-      rev = "f6d4db733c4e47ee11683c343b440552f59beff7";
-      sha256 = "0gb3zyv3q5v5sd8r29s02yc0brwq5a01is9c0n528391n2r8g1yy";
-    })
-    { };
+  cardano-wallet = (import sources.flake-compat {
+    inherit pkgs;
+    src = builtins.fetchTree
+      {
+        type = "github";
+        owner = "input-output-hk";
+        repo = "cardano-wallet";
+        rev = "18a931648550246695c790578d4a55ee2f10463e";
+        narHash = "sha256-3Rnj/g3KLzOW5YSieqsUa9IF1Td22Eskk5KuVsOFgEQ=";
+      };
+  }).defaultNix;
   cardano-node = import
     (pkgs.fetchgit {
       url = "https://github.com/input-output-hk/cardano-node";
       # A standard release compatible with the cardano-wallet commit above is always preferred.
-      rev = "70372da0b4b1a6ca797f4699c91a271700580f6c";
-      sha256 = "102pj525ysvj27h9nb8gidxm1cmwp8vpdyfnpwm1ywz3zkpk2mjp";
+      rev = "1.35.3";
+      sha256 = "020fwimsm24yblr1fmnwx240wj8r3x715p89cpjgnnd8axwf32p0";
     })
     { };
 

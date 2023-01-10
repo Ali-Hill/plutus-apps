@@ -12,40 +12,35 @@ import Cardano.Api (AsType (AsPaymentKey, AsStakeKey), AssetId (AdaAssetId, Asse
 import Cardano.Api.Shelley (StakeCredential (StakeCredentialByKey), TxBody (ShelleyTxBody))
 import Gen.Cardano.Api.Typed (genAssetName, genScriptHash, genValueDefault)
 import Gen.Cardano.Api.Typed qualified as Gen
-import Ledger.Generators (genAssetClass, genMintingPolicyHash, genTokenName, genValue)
+import Ledger (toPlutusAddress)
 import Ledger.Test (someValidator)
-import Ledger.Tx (RedeemerPtr (RedeemerPtr), ScriptTag (Mint), Tx (txMint, txMintScripts, txRedeemers))
-import Ledger.Tx.CardanoAPI (fromCardanoAddressInEra, fromCardanoAssetId, fromCardanoAssetName, fromCardanoPolicyId,
-                             fromCardanoValue, makeTransactionBody, toCardanoAddressInEra, toCardanoAssetId,
-                             toCardanoAssetName, toCardanoPolicyId, toCardanoTxBodyContent, toCardanoValue)
+import Ledger.Tx (Language (PlutusV1), Tx (txMint), Versioned (Versioned), addMintingPolicy)
+import Ledger.Tx.CardanoAPI (fromCardanoAssetId, fromCardanoAssetName, fromCardanoPolicyId, fromCardanoValue,
+                             makeTransactionBody, toCardanoAddressInEra, toCardanoAssetId, toCardanoAssetName,
+                             toCardanoPolicyId, toCardanoTxBodyContent, toCardanoValue)
 import Ledger.Value qualified as Value
-import Plutus.Script.Utils.V1.Scripts (mintingPolicyHash, validatorHash)
+import Plutus.Script.Utils.V1.Scripts qualified as PV1
 import Plutus.Script.Utils.V1.Typed.Scripts.MonetaryPolicies qualified as MPS
 import Plutus.V1.Ledger.Scripts (unitRedeemer)
 
 import Data.Default (def)
-import Data.Map qualified as Map
-import Data.Set qualified as Set
+import Data.Function ((&))
 import Data.String (fromString)
-import Hedgehog (Gen, Property, evalEither, forAll, property, tripping, (===))
+import Hedgehog (Gen, Property, forAll, property, tripping, (===))
 import Hedgehog qualified
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
 import Test.Tasty (TestTree, testGroup)
-import Test.Tasty.Hedgehog (testProperty)
+import Test.Tasty.Hedgehog (testPropertyNamed)
 
 tests :: TestTree
 tests = testGroup "Ledger.CardanoAPI"
-    [ testProperty "Cardano Address -> Plutus Address roundtrip" addressRoundTripSpec
-    , testProperty "Tx conversion retains minting policy scripts" convertMintingTx
-    , testProperty "MintingPolicyHash <- Cardano PolicyId roundtrip" cardanoPolicyIdRoundTrip
-    , testProperty "MintingPolicyHash -> Cardano PolicyId roundtrip" mintingPolicyHashRoundTrip
-    , testProperty "TokenName <- Cardano AssetName roundtrip" cardanoAssetNameRoundTrip
-    , testProperty "TokenName -> Cardano AssetName roundtrip" tokenNameRoundTrip
-    , testProperty "AssetClass <- Cardano AssetId roundtrip" cardanoAssetIdRoundTrip
-    , testProperty "AssetClass -> Cardano AssetId roundtrip" assetClassRoundTrip
-    , testProperty "Plutus Value <- Cardano Value roundtrip" cardanoValueRoundTrip
-    , testProperty "Plutus Value -> Cardano Value roundtrip" plutusValueRoundTrip
+    [ testPropertyNamed "Cardano Address -> Plutus Address roundtrip" "addressRoundTripSpec" addressRoundTripSpec
+    , testPropertyNamed "Tx conversion retains minting policy scripts" "txConversionRetainsMPS" convertMintingTx
+    , testPropertyNamed "MintingPolicyHash <- Cardano PolicyId roundtrip" "cardanoPolicyIdRoundTrip" cardanoPolicyIdRoundTrip
+    , testPropertyNamed "TokenName <- Cardano AssetName roundtrip" "cardanoAssetNameRoundTrip" cardanoAssetNameRoundTrip
+    , testPropertyNamed "AssetClass <- Cardano AssetId roundtrip" "cardanoAssetIdRoundTrip" cardanoAssetIdRoundTrip
+    , testPropertyNamed "Plutus Value <- Cardano Value roundtrip" "cardanoValueRoundTrip" cardanoValueRoundTrip
     ]
 
 -- Copied from Gen.Cardano.Api.Typed, because it's not exported.
@@ -71,44 +66,20 @@ cardanoPolicyIdRoundTrip = property $ do
     policyId <- forAll genPolicyId
     tripping policyId fromCardanoPolicyId toCardanoPolicyId
 
-mintingPolicyHashRoundTrip :: Property
-mintingPolicyHashRoundTrip = property $ do
-    policyHash <- forAll genMintingPolicyHash
-    policyId   <- evalEither $ toCardanoPolicyId policyHash
-    policyHash === fromCardanoPolicyId policyId
-
 cardanoAssetNameRoundTrip :: Property
 cardanoAssetNameRoundTrip = property $ do
     assetName <- forAll genAssetName
     tripping assetName fromCardanoAssetName toCardanoAssetName
-
-tokenNameRoundTrip :: Property
-tokenNameRoundTrip = property $ do
-    tokenName <- forAll genTokenName
-    assetName <- evalEither $ toCardanoAssetName tokenName
-    tokenName === fromCardanoAssetName assetName
 
 cardanoAssetIdRoundTrip :: Property
 cardanoAssetIdRoundTrip = property $ do
     assetId <- forAll genAssetId
     tripping assetId fromCardanoAssetId toCardanoAssetId
 
-assetClassRoundTrip :: Property
-assetClassRoundTrip = property $ do
-    assetClass <- forAll genAssetClass
-    assetId    <- evalEither $ toCardanoAssetId assetClass
-    assetClass === fromCardanoAssetId assetId
-
 cardanoValueRoundTrip :: Property
 cardanoValueRoundTrip = property $ do
     value <- forAll genValueDefault
     tripping value fromCardanoValue toCardanoValue
-
-plutusValueRoundTrip :: Property
-plutusValueRoundTrip = property $ do
-    plutusValue  <- forAll genValue
-    cardanoValue <- evalEither $ toCardanoValue plutusValue
-    plutusValue === fromCardanoValue cardanoValue
 
 -- | From a cardano address, we should be able to convert it to a plutus address,
 -- back to the same initial cardano address.
@@ -118,12 +89,10 @@ addressRoundTripSpec = property $ do
     shelleyAddr <- shelleyAddressInEra
                <$> forAll (makeShelleyAddress networkId <$> genPaymentCredential
                                                         <*> genStakeAddressReference)
-    case fromCardanoAddressInEra shelleyAddr of
-        Left _ -> Hedgehog.assert False
-        Right plutusAddr ->
-            case toCardanoAddressInEra networkId plutusAddr of
-                Left _      -> Hedgehog.assert False
-                Right cAddr -> cAddr === shelleyAddr
+    let plutusAddr = toPlutusAddress shelleyAddr
+    case toCardanoAddressInEra networkId plutusAddr of
+        Left _      -> Hedgehog.assert False
+        Right cAddr -> cAddr === shelleyAddr
 
 -- Copied from Gen.Cardano.Api.Typed, because it's not exported.
 genPaymentCredential :: Gen PaymentCredential
@@ -159,15 +128,13 @@ genNetworkMagic = NetworkMagic <$> Gen.word32 Range.constantBounded
 
 convertMintingTx :: Property
 convertMintingTx = property $ do
-  let vHash = validatorHash someValidator
+  let vHash = PV1.validatorHash someValidator
       mps  = MPS.mkForwardingMintingPolicy vHash
-      vL n = Value.singleton (Value.mpsSymbol $ mintingPolicyHash mps) "L" n
-      tx   = mempty
-        { txMint = vL 1
-        , txMintScripts = Set.singleton mps
-        , txRedeemers = Map.singleton (RedeemerPtr Mint 0) unitRedeemer
-        }
-      ectx = toCardanoTxBodyContent def [] tx >>= makeTransactionBody mempty
+      mpsHash = PV1.mintingPolicyHash mps
+      vL n = Value.singleton (Value.mpsSymbol mpsHash) "L" n
+      tx   = mempty { txMint = vL 1 }
+          & addMintingPolicy (Versioned mps PlutusV1) (unitRedeemer, Nothing)
+      ectx = toCardanoTxBodyContent (Testnet $ NetworkMagic 1) def [] tx >>= makeTransactionBody Nothing mempty
   case ectx of
     -- Check that the converted tx contains exactly one script
     Right (ShelleyTxBody _ _ [_script] _ _ _) -> do

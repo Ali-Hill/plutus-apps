@@ -32,9 +32,10 @@ import Data.Aeson (FromJSON, ToJSON)
 import Data.Map qualified as Map
 import Prelude (Semigroup (..))
 
+import Cardano.Node.Emulator.Params (pNetworkId, testnet)
 import GHC.Generics (Generic)
-import Ledger (Address, POSIXTime, POSIXTimeRange, PaymentPubKeyHash (unPaymentPubKeyHash))
-import Ledger.Constraints (TxConstraints, mustBeSignedBy, mustPayToTheScript, mustValidateIn)
+import Ledger (CardanoAddress, POSIXTime, POSIXTimeRange, PaymentPubKeyHash (unPaymentPubKeyHash))
+import Ledger.Constraints (TxConstraints, mustBeSignedBy, mustPayToTheScriptWithDatumInTx, mustValidateIn)
 import Ledger.Constraints qualified as Constraints
 import Ledger.Interval qualified as Interval
 import Ledger.Tx qualified as Tx
@@ -153,8 +154,8 @@ typedValidator = Scripts.mkTypedValidatorParam @Vesting
     where
         wrap = Scripts.mkUntypedValidator
 
-contractAddress :: VestingParams -> Address
-contractAddress = Scripts.validatorAddress . typedValidator
+contractAddress :: VestingParams -> CardanoAddress
+contractAddress = Scripts.validatorCardanoAddress testnet . typedValidator
 
 data VestingError =
     VContractError ContractError
@@ -178,7 +179,7 @@ vestingContract vesting = selectList [vest, retrieve]
             Dead  -> pure ()
 
 payIntoContract :: Value -> TxConstraints () ()
-payIntoContract = mustPayToTheScript ()
+payIntoContract = mustPayToTheScriptWithDatumInTx ()
 
 vestFundsC
     :: ( AsVestingError e
@@ -187,20 +188,11 @@ vestFundsC
     -> Contract w s e ()
 vestFundsC vesting = mapError (review _VestingError) $ do
     let tx = payIntoContract (totalAmount vesting)
-    mkTxConstraints (Constraints.plutusV1TypedValidatorLookups $ typedValidator vesting) tx
+    mkTxConstraints (Constraints.typedValidatorLookups $ typedValidator vesting) tx
       >>= adjustUnbalancedTx >>= void . submitUnbalancedTx
 
 data Liveness = Alive | Dead
 
-{- Note [slots and POSIX time]
- - A slot has a given duration. As a consequence, 'currentTime' does not return exactly the current time but,
- - by convention, the last POSIX time of the current slot.
- - A consequence to this design choice is that when we use this time to build the 'mustValidateIn constraints',
- - we get a range that start at the slot after the current one.
- - To be sure that the validity range is valid when the transaction will be validated by the pool, we must therefore
- - wait the next slot before sumitting it (which is done using 'waitNSlots 1').
- -
- -}
 retrieveFundsC
     :: ( AsVestingError e
        )
@@ -208,12 +200,13 @@ retrieveFundsC
     -> Value
     -> Contract w s e Liveness
 retrieveFundsC vesting payment = mapError (review _VestingError) $ do
+    networkId <- pNetworkId <$> getParams
     let inst = typedValidator vesting
-        addr = Scripts.validatorAddress inst
-    now <- currentTime
+        addr = Scripts.validatorCardanoAddress networkId inst
+    now <- fst <$> currentNodeClientTimeRange
     unspentOutputs <- utxosAt addr
     let
-        currentlyLocked = foldMap (view Tx.ciTxOutValue) (Map.elems unspentOutputs)
+        currentlyLocked = foldMap (view Tx.decoratedTxOutValue) (Map.elems unspentOutputs)
         remainingValue = currentlyLocked - payment
         mustRemainLocked = totalAmount vesting - availableAt vesting now
         maxPayment = currentlyLocked - mustRemainLocked
@@ -233,8 +226,7 @@ retrieveFundsC vesting payment = mapError (review _VestingError) $ do
                 -- we don't need to add a pubkey output for 'vestingOwner' here
                 -- because this will be done by the wallet when it balances the
                 -- transaction.
-    void $ waitNSlots 1 -- see [slots and POSIX time]
-    mkTxConstraints (Constraints.plutusV1TypedValidatorLookups inst
+    mkTxConstraints (Constraints.typedValidatorLookups inst
                   <> Constraints.unspentOutputs unspentOutputs) tx
       >>= adjustUnbalancedTx >>= void . submitUnbalancedTx
     return liveness

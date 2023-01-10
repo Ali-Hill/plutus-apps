@@ -1,4 +1,3 @@
-{-# LANGUAGE DeriveAnyClass     #-}
 {-# LANGUAGE DerivingStrategies #-}
 {-# OPTIONS_GHC -fno-warn-name-shadowing #-}
 module Plutus.Contract.Test.Coverage
@@ -18,9 +17,9 @@ import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text qualified as Text
 
+import Cardano.Node.Emulator.Chain
 import Plutus.Trace.Emulator.Types
 import PlutusTx.Coverage
-import Wallet.Emulator.Chain
 import Wallet.Emulator.MultiAgent (EmulatorEvent, EmulatorEvent' (..), EmulatorTimeEvent (..), eteEvent)
 import Wallet.Types
 
@@ -41,15 +40,13 @@ getInvokedEndpoints es =
 getCoverageData :: [EmulatorEvent] -> CoverageData
 getCoverageData es =
   let extractLog e = case e of
-        ChainEvent (TxnValidate _ _)             -> []
-        -- TODO: collect executed scripts during validation
-        ChainEvent (TxnValidationFail _ _ _ _ _) -> []
-        _                                        -> []
+        ChainEvent (TxnValidate _ _ logs)             -> logs
+        ChainEvent (TxnValidationFail _ _ _ _ _ logs) -> logs
+        _                                             -> []
 
   in fold $ do
     event <- es
-    log <- extractLog $ event ^. eteEvent
-    logEvent <- log
+    logEvent <- extractLog $ event ^. eteEvent
     let msg = Text.unpack logEvent
     return $ coverageDataFromLogMsg msg
 
@@ -64,4 +61,3 @@ readCoverageRef (CoverageRef ioref) = readIORef ioref
 -- | Write a coverage report to name.html for the given index.
 writeCoverageReport :: String -> CoverageReport -> IO ()
 writeCoverageReport = ReportCoverage.writeCoverageReport
-

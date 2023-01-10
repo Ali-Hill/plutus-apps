@@ -23,6 +23,7 @@ module Plutus.Contracts.MultiSig
     , validate
     ) where
 
+import Cardano.Node.Emulator.Params (pNetworkId)
 import Control.Monad (void)
 import Data.Aeson (FromJSON, ToJSON)
 import GHC.Generics (Generic)
@@ -77,8 +78,8 @@ typedValidator = Scripts.mkTypedValidatorParam @MultiSig
 lock :: AsContractError e => Promise () MultiSigSchema e ()
 lock = endpoint @"lock" $ \(ms, vl) -> do
     let inst = typedValidator ms
-    let tx = Constraints.mustPayToTheScript () vl
-        lookups = Constraints.plutusV1TypedValidatorLookups inst
+    let tx = Constraints.mustPayToTheScriptWithDatumInTx () vl
+        lookups = Constraints.typedValidatorLookups inst
     mkTxConstraints lookups tx
         >>= adjustUnbalancedTx >>= void . submitUnbalancedTx
 
@@ -86,11 +87,12 @@ lock = endpoint @"lock" $ \(ms, vl) -> do
 --   of signatures.
 unlock :: AsContractError e => Promise () MultiSigSchema e ()
 unlock = endpoint @"unlock" $ \(ms, pks) -> do
+    networkId <- pNetworkId <$> getParams
     let inst = typedValidator ms
-    utx <- utxosAt (Scripts.validatorAddress inst)
+    utx <- utxosAt (Scripts.validatorCardanoAddress networkId inst)
     let tx = Constraints.collectFromTheScript utx ()
                 <> foldMap Constraints.mustBeSignedBy pks
-        lookups = Constraints.plutusV1TypedValidatorLookups inst
+        lookups = Constraints.typedValidatorLookups inst
                 <> Constraints.unspentOutputs utx
     mkTxConstraints lookups tx
         >>= adjustUnbalancedTx >>= void . submitUnbalancedTx

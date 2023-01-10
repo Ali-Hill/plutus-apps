@@ -1,5 +1,5 @@
 {-# LANGUAGE DataKinds          #-}
-{-# LANGUAGE DeriveDataTypeable #-}
+{-# LANGUAGE DeriveGeneric      #-}
 {-# LANGUAGE FlexibleInstances  #-}
 {-# LANGUAGE GADTs              #-}
 {-# LANGUAGE StandaloneDeriving #-}
@@ -17,12 +17,11 @@ module Spec.Tutorial.Escrow1(prop_Escrow, EscrowModel) where
 
 import Control.Lens hiding (both, elements)
 import Control.Monad (void)
-import Data.Data
 import Data.Foldable
 import Data.Map (Map)
 import Data.Map qualified as Map
 
-import Ledger (minAdaTxOut)
+import Ledger (minAdaTxOutEstimated)
 import Ledger.Ada qualified as Ada
 import Ledger.Value
 import Plutus.Contract
@@ -37,7 +36,7 @@ import Test.QuickCheck
 
 data EscrowModel = EscrowModel { _contributions :: Map Wallet Value
                                , _targets       :: Map Wallet Value
-                               } deriving (Eq, Show, Data)
+                               } deriving (Eq, Show, Generic)
 
 makeLenses ''EscrowModel
 
@@ -47,7 +46,7 @@ deriving instance Show (ContractInstanceKey EscrowModel w s e params)
 instance ContractModel EscrowModel where
   data Action EscrowModel = Pay Wallet Integer
                           | Redeem Wallet
-    deriving (Eq, Show, Data)
+    deriving (Eq, Show, Generic)
 
   data ContractInstanceKey EscrowModel w s e params where
     WalletKey :: Wallet -> ContractInstanceKey EscrowModel () EscrowSchema EscrowError ()
@@ -85,7 +84,7 @@ instance ContractModel EscrowModel where
 
   precondition s a = case a of
     Redeem _ -> (s ^. contractState . contributions . to fold) `geq` (s ^. contractState . targets . to fold)
-    Pay _ v  -> Ada.adaValueOf (fromInteger v) `geq` Ada.toValue minAdaTxOut
+    Pay _ v  -> Ada.adaValueOf (fromInteger v) `geq` Ada.toValue minAdaTxOutEstimated
 
   perform h _ _ a = case a of
     Pay w v        -> do

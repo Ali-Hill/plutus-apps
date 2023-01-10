@@ -34,7 +34,7 @@ contract in `plutus-use-cases`).
       -- Step 1
       let inst = typedValidator pk
           address = Scripts.validatorAddress inst
-          tx = Constraints.mustPayToTheScript () vl
+          tx = Constraints.mustPayToTheScriptWithDatumHash () vl
       ledgerTx <- mkTxConstraints (Constraints.typedValidatorLookups inst) tx
                  >>= submitUnbalancedTx . Constraints.adjustUnbalancedTx
 
@@ -44,7 +44,7 @@ contract in `plutus-use-cases`).
       -- Step 3
       let refs = Map.keys
                  $ Map.filter ((==) address . txOutAddress)
-                 $ getCardanoTxUnspentOutputsTx ledgerTx
+                 $ getCardanoTxProducedOutputs ledgerTx
       case refs of
           []                   -> throwing _ScriptOutputMissing pk
           [outRef] -> do

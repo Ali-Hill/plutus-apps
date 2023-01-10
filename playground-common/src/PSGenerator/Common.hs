@@ -7,20 +7,31 @@
 module PSGenerator.Common where
 
 import Auth (AuthRole, AuthStatus)
+import Cardano.Api.Shelley (Lovelace, NetworkId)
+import Cardano.Node.Emulator.Params (Params)
+import Cardano.Node.Emulator.TimeSlot (SlotConfig, SlotConversionError)
+import Cardano.Slotting.Slot (EpochNo)
 import Control.Applicative (empty, (<|>))
+import Control.Lens (ix, (&), (.~), (^.))
 import Control.Monad.Freer.Extras.Beam (BeamError, BeamLog)
 import Control.Monad.Freer.Extras.Pagination (Page, PageQuery, PageSize)
 import Control.Monad.Reader (MonadReader)
 import Gist (Gist, GistFile, GistId, NewGist, NewGistFile, Owner)
-import Language.PureScript.Bridge (BridgePart, Language (Haskell), PSType, SumType, TypeInfo (TypeInfo), argonaut,
-                                   equal, equal1, functor, genericShow, mkSumType, order, psTypeParameters, typeModule,
-                                   typeName, (^==))
+import Language.PureScript.Bridge (BridgePart, DataConstructor (DataConstructor, _sigConstructor, _sigValues),
+                                   DataConstructorArgs (Nullary, Record),
+                                   Instance (Eq, Generic, GenericShow, Json, Ord), Language (Haskell), PSType,
+                                   RecordEntry (RecordEntry), SumType (SumType),
+                                   TypeInfo (TypeInfo, _typeModule, _typeName, _typePackage, _typeParameters), argonaut,
+                                   equal, equal1, functor, genericShow, mkSumType, order, psTypeParameters, sumTypeInfo,
+                                   typeModule, typeName, (^==))
 import Language.PureScript.Bridge.Builder (BridgeData)
 import Language.PureScript.Bridge.PSTypes (psInt, psNumber, psString)
+import Language.PureScript.Bridge.SumType (sigConstructor, sigValues, sumTypeConstructors)
 import Language.PureScript.Bridge.TypeParameters (A)
-import Ledger (Address, BlockId, CardanoTx, ChainIndexTxOut, OnChainTx, PaymentPubKey, PaymentPubKeyHash, PubKey,
-               PubKeyHash, RedeemerPtr, ScriptTag, Signature, StakePubKey, StakePubKeyHash, Tx, TxId, TxIn, TxInType,
-               TxOut, TxOutRef, TxOutTx, UtxoIndex, ValidationPhase)
+import Ledger (Address, BlockId, CardanoTx, Certificate, DatumFromQuery, DecoratedTxOut, OnChainTx, PaymentPubKey,
+               PaymentPubKeyHash, PubKey, PubKeyHash, RedeemerPtr, ScriptTag, Signature, StakePubKey, StakePubKeyHash,
+               Tx, TxId, TxIn, TxInType, TxInput, TxInputType, TxOut, TxOutRef, TxOutTx, UtxoIndex, ValidationPhase,
+               Withdrawal)
 import Ledger.Ada (Ada)
 import Ledger.Constraints.OffChain (MkTxError, UnbalancedTx)
 import Ledger.Credential (Credential, StakingCredential)
@@ -29,14 +40,16 @@ import Ledger.Index (ExCPU, ExMemory, ValidationError)
 import Ledger.Interval (Extended, Interval, LowerBound, UpperBound)
 import Ledger.Scripts (ScriptError)
 import Ledger.Slot (Slot)
-import Ledger.TimeSlot (SlotConfig, SlotConversionError)
+import Ledger.Tx qualified as Tx (Language, Versioned)
 import Ledger.Tx.CardanoAPI (FromCardanoError, ToCardanoError)
 import Ledger.Value (AssetClass, CurrencySymbol, TokenName, Value)
+import Ouroboros.Network.Magic (NetworkMagic)
 import Playground.Types (ContractCall, FunctionSchema, KnownCurrency)
 import Plutus.ChainIndex.Api (IsUtxoResponse, QueryResponse, TxosResponse, UtxosResponse)
 import Plutus.ChainIndex.ChainIndexError (ChainIndexError)
 import Plutus.ChainIndex.ChainIndexLog (ChainIndexLog)
-import Plutus.ChainIndex.Tx (ChainIndexTx, ChainIndexTxOutputs)
+import Plutus.ChainIndex.Tx (ChainIndexTx, ChainIndexTxOutputs, ReferenceScript)
+import Plutus.ChainIndex.Tx qualified as ChainIndex
 import Plutus.ChainIndex.Types (BlockNumber, Depth, Point, RollbackState, Tip, TxOutState, TxValidity)
 import Plutus.ChainIndex.UtxoState (InsertUtxoFailed, InsertUtxoPosition, RollbackFailed)
 import Plutus.Contract.Checkpoint (CheckpointError)
@@ -47,9 +60,10 @@ import Plutus.Contract.Resumable (IterationID, Request, RequestID, Response)
 import Plutus.Script.Utils.V1.Typed.Scripts (ConnectionError, WrongOutTypeError)
 import Plutus.Trace.Emulator.Types (ContractInstanceLog, ContractInstanceMsg, ContractInstanceTag, EmulatorRuntimeError,
                                     UserThreadMsg)
-import Plutus.Trace.Scheduler (Priority, SchedulerLog, StopReason, ThreadEvent, ThreadId)
+import Plutus.Trace.Scheduler (Priority, SchedulerLog, ThreadEvent, ThreadId)
 import Plutus.Trace.Tag (Tag)
-import Plutus.V1.Ledger.Api (DatumHash, MintingPolicy, StakeValidator, Validator)
+import Plutus.V1.Ledger.Api (DatumHash, MintingPolicy, StakeValidator, TxOut, Validator)
+import Plutus.V2.Ledger.Tx qualified as PV2
 import Schema (FormArgumentF, FormSchema)
 import Wallet.API (WalletAPIError)
 import Wallet.Emulator.Types qualified as EM
@@ -114,6 +128,12 @@ integerBridge = do
     typeName ^== "Integer"
     pure psBigInteger
 
+word32Bridge :: BridgePart
+word32Bridge = do
+    typeName ^== "Word32"
+    typeModule ^== "GHC.Word"
+    pure psInt
+
 word64Bridge :: BridgePart
 word64Bridge = do
     typeName ^== "Word64"
@@ -162,22 +182,41 @@ exBudgetBridge = do
     typeModule ^== "PlutusCore.Evaluation.Machine.ExBudget"
     pure psJson
 
+identityBridge :: BridgePart
+identityBridge = do
+    typeName ^== "Identity"
+    typeModule ^== "Data.Functor.Identity"
+    pure psJson
+
+
 someCardanoApiTxBridge :: BridgePart
 someCardanoApiTxBridge = do
     typeName ^== "SomeCardanoApiTx"
-    typeModule ^== "Ledger.Tx.CardanoAPI"
+    typeModule ^== "Ledger.Tx.CardanoAPI.Internal"
     pure psJson
 
 cardanoBuildTxBridge :: BridgePart
 cardanoBuildTxBridge = do
     typeName ^== "CardanoBuildTx"
-    typeModule ^== "Ledger.Tx.CardanoAPI"
+    typeModule ^== "Ledger.Tx.CardanoAPI.Internal"
     pure psJson
 
 alonzoEraBridge :: BridgePart
 alonzoEraBridge = do
     typeName ^== "AlonzoEra"
     typeModule ^== "Cardano.Ledger.Alonzo"
+    pure psString
+
+babbageEraBridge :: BridgePart
+babbageEraBridge = do
+    typeName ^== "BabbageEra"
+    typeModule ^== "Cardano.Ledger.Babbage"
+    pure psString
+
+babbagePParamsEraBridge :: BridgePart
+babbagePParamsEraBridge = do
+    typeName ^== "PParams'"
+    typeModule ^== "Cardano.Ledger.Babbage.PParams"
     pure psString
 
 standardCryptoBridge :: BridgePart
@@ -216,11 +255,18 @@ exportTxBridge = do
     typeModule ^== "Plutus.Contract.Wallet"
     pure psJson
 
+protocolParametersBridge :: BridgePart
+protocolParametersBridge = do
+    typeName ^== "ProtocolParameters"
+    typeModule ^== "Cardano.Api.ProtocolParameters"
+    pure psJson
+
 miscBridge :: BridgePart
 miscBridge =
         bultinByteStringBridge
     <|> byteStringBridge
     <|> integerBridge
+    <|> word32Bridge
     <|> word64Bridge
     <|> scientificBridge
     <|> digestBridge
@@ -230,12 +276,16 @@ miscBridge =
     <|> someCardanoApiTxBridge
     <|> cardanoBuildTxBridge
     <|> alonzoEraBridge
+    <|> babbageEraBridge
+    <|> babbagePParamsEraBridge
     <|> standardCryptoBridge
     <|> applyTxErrorBridge
     <|> basicFailureBridge
     <|> scriptFailureBridge
     <|> utxosPredicateFailureBridge
     <|> exportTxBridge
+    <|> protocolParametersBridge
+    <|> identityBridge
 
 ------------------------------------------------------------
 
@@ -352,23 +402,78 @@ headerBridge = do
 servantBridge :: BridgePart
 servantBridge = headersBridge <|> headerBridge
 
+-- TODO: implement a proper SumType, this is a stub to make purescript compile
+scriptAnyLangType :: SumType 'Haskell
+scriptAnyLangType = SumType (
+      TypeInfo {
+        _typePackage = "crdn-p-1.33.0-c62ffc00"
+      , _typeModule = "Cardano.Api.Script"
+      , _typeName = "ScriptInAnyLang"
+      , _typeParameters = []
+    }
+  ) [
+      DataConstructor {_sigConstructor = "SimpleScriptLanguageV1", _sigValues = Nullary}
+    , DataConstructor {_sigConstructor = "SimpleScriptLanguageV2", _sigValues = Nullary}
+    , DataConstructor {_sigConstructor = "PlutusScriptLanguageV1", _sigValues = Nullary}
+    , DataConstructor {_sigConstructor = "PlutusScriptLanguageV2", _sigValues = Nullary}
+  ] [Eq,GenericShow,Json,Ord,Generic]
+
+plutusTxOut :: SumType 'Haskell
+plutusTxOut = equal . genericShow . argonaut $ mkSumType @Plutus.V1.Ledger.Api.TxOut
+
+-- TODO: implement a proper SumType, this is a stub to make purescript compile
+cardanoTxOut :: SumType 'Haskell
+cardanoTxOut = plutusTxOut
+   & sumTypeInfo .~
+      TypeInfo {
+        _typePackage = "crdn-p-1.33.0-c62ffc00"
+      , _typeModule = "Cardano.Api.TxBody"
+      , _typeName = "CardanoTxOut"
+      , _typeParameters = []
+    }
+
+txOut :: SumType 'Haskell
+txOut =
+     equal . genericShow . argonaut $ mkSumType @Ledger.TxOut
+       & sumTypeConstructors . ix 0 . sigConstructor .~ "TxOut"
+       & sumTypeConstructors . ix 0 . sigValues .~
+           Record (pure (RecordEntry "getTxOut" (cardanoTxOut ^. sumTypeInfo)))
+
+
 ------------------------------------------------------------
 ledgerTypes :: [SumType 'Haskell]
 ledgerTypes =
-    [ equal . genericShow . argonaut $ mkSumType @Slot
+    [ order . genericShow . argonaut $ mkSumType @Tx.Language
+    , order . genericShow . argonaut $ mkSumType @(Tx.Versioned A)
+    , equal . genericShow . argonaut $ mkSumType @Slot
     , equal . genericShow . argonaut $ mkSumType @Ada
+    , equal . genericShow . argonaut $ mkSumType @Params
+    , equal . genericShow . argonaut $ mkSumType @NetworkId
+    , equal . genericShow . argonaut $ mkSumType @NetworkMagic
+    , equal . genericShow . argonaut $ mkSumType @Lovelace
+    , equal . genericShow . argonaut $ mkSumType @EpochNo
     , equal . genericShow . argonaut $ mkSumType @SlotConfig
     , equal . genericShow . argonaut $ mkSumType @SlotConversionError
+    , equal . genericShow . argonaut $ mkSumType @Certificate
     , equal . genericShow . argonaut $ mkSumType @Tx
+    , plutusTxOut
     , equal . genericShow . argonaut $ mkSumType @CardanoTx
     , order . genericShow . argonaut $ mkSumType @TxId
     , order . equal . genericShow . argonaut $ mkSumType @TxIn
-    , equal . genericShow . argonaut $ mkSumType @TxOut
+    , txOut
     , equal . genericShow . argonaut $ mkSumType @TxOutTx
     , order . genericShow . argonaut $ mkSumType @TxOutRef
     , equal . genericShow . argonaut $ mkSumType @OnChainTx
     , equal . genericShow . argonaut $ mkSumType @UtxoIndex
     , equal . genericShow . argonaut $ mkSumType @Value
+    , equal . genericShow . argonaut $ mkSumType @Withdrawal
+    , equal . genericShow . argonaut $ mkSumType @DatumFromQuery
+    -- v2
+    , equal . genericShow . argonaut $ mkSumType @PV2.OutputDatum
+    , equal . genericShow . argonaut $ mkSumType @ReferenceScript
+    , scriptAnyLangType
+    , cardanoTxOut
+    -- v2-end
     , functor . equal . genericShow . argonaut $ mkSumType @(Extended A)
     , functor . equal . genericShow . argonaut $ mkSumType @(Interval A)
     , functor . equal . genericShow . argonaut $ mkSumType @(LowerBound A)
@@ -382,6 +487,8 @@ ledgerTypes =
     , genericShow . order . argonaut $ mkSumType @Signature
     , genericShow . order . argonaut $ mkSumType @TokenName
     , genericShow . order . argonaut $ mkSumType @TxInType
+    , order . equal . genericShow . argonaut $ mkSumType @TxInputType
+    , order . equal . genericShow . argonaut $ mkSumType @TxInput
     , genericShow . order . argonaut $ mkSumType @Validator
     , equal . genericShow . argonaut $ mkSumType @ScriptError
     , equal . genericShow . argonaut $ mkSumType @ValidationError
@@ -416,13 +523,12 @@ ledgerTypes =
     , equal . genericShow . argonaut $ mkSumType @ContractInstanceMsg
     , equal . genericShow . argonaut $ mkSumType @ContractInstanceTag
     , equal . genericShow . argonaut $ mkSumType @EmulatorRuntimeError
-    , equal . genericShow . argonaut $ mkSumType @ThreadEvent
+    , order . equal . genericShow . argonaut $ mkSumType @ThreadEvent
     , equal . genericShow . argonaut $ mkSumType @ThreadId
     , equal . genericShow . argonaut $ mkSumType @(Request A)
     , equal . genericShow . argonaut $ mkSumType @(Response A)
     , order . genericShow . argonaut $ mkSumType @RequestID
     , order . equal . genericShow . argonaut $ mkSumType @Priority
-    , order . equal . genericShow . argonaut $ mkSumType @StopReason
     , order . genericShow . argonaut $ mkSumType @IterationID
     , equal . genericShow . argonaut $ mkSumType @ExCPU
     , equal . genericShow . argonaut $ mkSumType @ExMemory
@@ -435,8 +541,9 @@ ledgerTypes =
     , equal . genericShow . argonaut $ mkSumType @TxosResponse
     , equal . genericShow . argonaut $ mkSumType @UtxosResponse
     , equal . genericShow . argonaut $ mkSumType @ChainIndexTx
+    , equal . genericShow . argonaut $ mkSumType @ChainIndex.ChainIndexTxOut
     , equal . genericShow . argonaut $ mkSumType @ChainIndexTxOutputs
-    , equal . genericShow . argonaut $ mkSumType @ChainIndexTxOut
+    , equal . genericShow . argonaut $ mkSumType @DecoratedTxOut
     , equal . genericShow . argonaut $ mkSumType @ChainIndexLog
     , equal . genericShow . argonaut $ mkSumType @ChainIndexError
     , equal . genericShow . argonaut $ mkSumType @BeamError

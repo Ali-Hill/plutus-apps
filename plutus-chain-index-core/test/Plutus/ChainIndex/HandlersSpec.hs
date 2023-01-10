@@ -8,7 +8,7 @@
 module Plutus.ChainIndex.HandlersSpec (tests) where
 
 import Control.Concurrent.STM (newTVarIO)
-import Control.Lens (view)
+import Control.Lens (to, view)
 import Control.Monad (forM)
 import Control.Monad.Freer (Eff)
 import Control.Monad.Freer.Extras.Beam (BeamEffect)
@@ -24,39 +24,40 @@ import Database.Beam.Sqlite.Migrate qualified as Sqlite
 import Database.SQLite.Simple qualified as Sqlite
 import Generators qualified as Gen
 import Hedgehog (MonadTest, Property, assert, failure, forAll, property, (===))
-import Ledger (outValue)
-import Plutus.ChainIndex (ChainSyncBlock (Block), Page (pageItems), PageQuery (PageQuery),
-                          RunRequirements (RunRequirements), TxProcessOption (TxProcessOption, tpoStoreTx),
-                          appendBlocks, citxOutputs, citxTxId, runChainIndexEffects, txFromTxId, unspentTxOutFromRef,
-                          utxoSetMembership, utxoSetWithCurrency)
+import Ledger.Ada qualified as Ada
+import Plutus.ChainIndex (ChainIndexTxOut (citoValue), ChainSyncBlock (Block), Page (pageItems), PageQuery (PageQuery),
+                          RunRequirements (RunRequirements), Tip (Tip, TipAtGenesis),
+                          TxProcessOption (TxProcessOption, tpoStoreTx), appendBlocks, citxTxId, runChainIndexEffects,
+                          tipSlot, txFromTxId, txOuts, unspentTxOutFromRef, utxoSetMembership, utxoSetWithCurrency)
 import Plutus.ChainIndex.Api (UtxosResponse (UtxosResponse), isUtxo)
 import Plutus.ChainIndex.DbSchema (checkedSqliteDb)
-import Plutus.ChainIndex.Effects (ChainIndexControlEffect, ChainIndexQueryEffect)
-import Plutus.ChainIndex.Tx (_ValidTx)
-import Plutus.V1.Ledger.Ada qualified as Ada
+import Plutus.ChainIndex.Effects (ChainIndexControlEffect, ChainIndexQueryEffect, getTip)
 import Plutus.V1.Ledger.Value (AssetClass (AssetClass), flattenValue)
 import Test.Tasty (TestTree, testGroup)
-import Test.Tasty.Hedgehog (testProperty)
+import Test.Tasty.Hedgehog (testPropertyNamed)
 import Util (utxoSetFromBlockAddrs)
 
 tests :: TestTree
 tests = do
   testGroup "chain-index handlers"
     [ testGroup "txFromTxId"
-      [ testProperty "get tx from tx id" txFromTxIdSpec
+      [ testPropertyNamed "get tx from tx id" "txFromTxIdSpec" txFromTxIdSpec
+      ]
+    , testGroup "noTxSlot"
+      [ testPropertyNamed "Adding empty slot updates the tip" "noTxSlot" noTxSlot
       ]
     , testGroup "utxoSetAtAddress"
-      [ testProperty "each txOutRef should be unspent" eachTxOutRefAtAddressShouldBeUnspentSpec
+      [ testPropertyNamed "each txOutRef should be unspent" "eachTxOutRefAtAddressShouldBeUnspentSpec" eachTxOutRefAtAddressShouldBeUnspentSpec
       ]
     , testGroup "unspentTxOutFromRef"
-      [ testProperty "get unspent tx out from ref" eachTxOutRefAtAddressShouldHaveTxOutSpec
+      [ testPropertyNamed "get unspent tx out from ref" "eachTxOutRefAtAddressShouldHaveTxOutSpec" eachTxOutRefAtAddressShouldHaveTxOutSpec
       ]
     , testGroup "utxoSetWithCurrency"
-      [ testProperty "each txOutRef should be unspent" eachTxOutRefWithCurrencyShouldBeUnspentSpec
-      , testProperty "should restrict to non-ADA currencies" cantRequestForTxOutRefsWithAdaSpec
+      [ testPropertyNamed "each txOutRef should be unspent" "eachTxOutRefWithCurrencyShouldBeUnspentSpec" eachTxOutRefWithCurrencyShouldBeUnspentSpec
+      , testPropertyNamed "should restrict to non-ADA currencies" "cantRequestForTxOutRefsWithAdaSpec" cantRequestForTxOutRefsWithAdaSpec
       ]
     , testGroup "BlockProcessOption"
-      [ testProperty "do not store txs" doNotStoreTxs
+      [ testPropertyNamed "do not store txs" "doNotStoreTxs" doNotStoreTxs
       ]
     ]
 
@@ -75,6 +76,21 @@ txFromTxIdSpec = property $ do
   case txs of
     (Just tx, Nothing) -> fstTx === tx
     _                  -> Hedgehog.assert False
+
+-- | Test that when a new slot is appended without any blocks, the tip is still updated to the new slot.
+noTxSlot :: Property
+noTxSlot = property $ do
+  (tip, block) <- forAll $ Gen.evalTxGenState Gen.genNonEmptyBlock
+  case tip of
+    TipAtGenesis -> pure ()
+    (Tip _ blockId blockNo) -> do
+      let newSlot = succ $ tipSlot tip
+      slot' <- runChainIndexTest $ do
+          appendBlocks [Block tip (map (, def) block)]
+          appendBlocks [Block (Tip newSlot blockId blockNo) []]
+          tipSlot <$> getTip
+
+      newSlot === slot'
 
 -- | After generating and appending a block in the chain index, verify that
 -- querying the chain index with each of the addresses in the block returns
@@ -116,7 +132,7 @@ eachTxOutRefWithCurrencyShouldBeUnspentSpec = property $ do
         fmap (\(c, t, _) -> AssetClass (c, t))
              $ filter (\(c, t, _) -> not $ Ada.adaSymbol == c && Ada.adaToken == t)
              $ flattenValue
-             $ view (traverse . citxOutputs . _ValidTx . traverse . outValue) block
+             $ view (traverse . to txOuts . traverse . to citoValue) block
 
   utxoGroups <- runChainIndexTest $ do
       -- Append the generated block in the chain index
@@ -168,12 +184,17 @@ runChainIndexTest
       , MonadIO m)
   => Eff '[ ChainIndexQueryEffect
           , ChainIndexControlEffect
-          , BeamEffect
+          , BeamEffect Sqlite.Sqlite
           ] a
   -> m a
 runChainIndexTest action = do
   result <- liftIO $ do
-    pool <- Pool.createPool (Sqlite.open ":memory:") Sqlite.close 1 1_000_000 1
+    pool <- Pool.newPool Pool.PoolConfig
+      { Pool.createResource = Sqlite.open ":memory:"
+      , Pool.freeResource = Sqlite.close
+      , Pool.poolCacheTTL = 1_000_000
+      , Pool.poolMaxResources = 1
+      }
     Pool.withResource pool $ \conn ->
       Sqlite.runBeamSqlite conn $ autoMigrate Sqlite.migrationBackend checkedSqliteDb
     stateTVar <- newTVarIO mempty

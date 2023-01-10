@@ -14,18 +14,17 @@ module Wallet.Rollup
     , getAnnotatedTransactions
     ) where
 
+import Cardano.Api qualified as C
+import Cardano.Node.Emulator.Chain (ChainEvent (..))
 import Control.Lens (assign, ifoldr, over, set, use, view, (&), (^.))
 import Control.Lens.Combinators (itraverse)
 import Control.Monad.State (StateT, evalStateT, runState)
 import Data.List (groupBy)
 import Data.Map (Map)
 import Data.Map qualified as Map
-import Data.Set qualified as Set
-import Ledger (Block, Blockchain, OnChainTx (..), TxIn (TxIn), TxOut (TxOut), ValidationPhase (..), Value,
-               consumableInputs, eitherTx, outValue, txInRef, txOutRefId, txOutRefIdx, txOutValue)
+import Ledger (Block, Blockchain, OnChainTx (..), TxIn (TxIn), TxOut, ValidationPhase (..), Value, consumableInputs,
+               onChainTxIsValid, outputsProduced, txInRef, txOutRefId, txOutRefIdx, txOutValue, unOnChain)
 import Ledger.Tx qualified as Tx
-import PlutusTx.Monoid (inv)
-import Wallet.Emulator.Chain (ChainEvent (..))
 import Wallet.Rollup.Types
 
 ------------------------------------------------------------
@@ -48,9 +47,9 @@ annotateTransaction sequenceId tx = do
                   in case Map.lookup key cPreviousOutputs of
                          Just txOut -> pure $ DereferencedInput txIn txOut
                          Nothing    -> pure $ InputNotFound key)
-            (Set.toList $ consumableInputs tx)
-    let txId = eitherTx Tx.getCardanoTxId Tx.getCardanoTxId tx
-        txOuts = eitherTx (const []) Tx.getCardanoTxOutputs tx
+            (consumableInputs tx)
+    let txId = Tx.getCardanoTxId $ unOnChain tx
+        txOuts = Map.elems $ outputsProduced tx
         newOutputs =
             ifoldr
                 (\outputIndex ->
@@ -65,26 +64,30 @@ annotateTransaction sequenceId tx = do
             foldr
                 sumAccounts
                 cRollingBalances
-                ((over outValue inv . refersTo <$> filter isFound dereferencedInputs) <>
+                ((over Tx.outValue' negateValue . refersTo <$> filter isFound dereferencedInputs) <>
                  txOuts)
+          where
+            negateValue :: C.TxOutValue era -> C.TxOutValue era
+            negateValue  (C.TxOutAdaOnly wit l) = C.TxOutAdaOnly wit (negate l)
+            negateValue  (C.TxOutValue wit v)   = C.TxOutValue wit (C.negateValue v)
         sumAccounts ::
                TxOut -> Map BeneficialOwner Value -> Map BeneficialOwner Value
-        sumAccounts txOut@TxOut {txOutValue} =
+        sumAccounts txOut =
             Map.alter sumBalances (toBeneficialOwner txOut)
           where
             sumBalances :: Maybe Value -> Maybe Value
-            sumBalances Nothing         = Just txOutValue
-            sumBalances (Just oldValue) = Just (oldValue <> txOutValue)
+            sumBalances Nothing         = Just (txOutValue txOut)
+            sumBalances (Just oldValue) = Just (oldValue <> txOutValue txOut)
     assign previousOutputs newOutputs
     assign rollingBalances newBalances
     pure $
         AnnotatedTx
             { sequenceId
             , txId
-            , tx = eitherTx id id tx
+            , tx = unOnChain tx
             , dereferencedInputs
             , balances = newBalances
-            , valid = eitherTx (const False) (const True) tx
+            , valid = onChainTxIsValid tx
             }
 
 annotateChainSlot :: Monad m => Int -> Block -> StateT Rollup m [AnnotatedTx]
@@ -111,10 +114,10 @@ getAnnotatedTransactions = groupBy (equating (slotIndex . sequenceId)) . reverse
 
 handleChainEvent :: RollupState -> ChainEvent -> RollupState
 handleChainEvent s = \case
-    SlotAdd _                         -> s & over currentSequenceId (set txIndexL 0 . over slotIndexL succ)
-    TxnValidate _ tx                  -> addTx s (Valid tx)
-    TxnValidationFail Phase2 _ tx _ _ -> addTx s (Invalid tx)
-    _                                 -> s
+    SlotAdd _                           -> s & over currentSequenceId (set txIndexL 0 . over slotIndexL succ)
+    TxnValidate _ tx _                  -> addTx s (Valid tx)
+    TxnValidationFail Phase2 _ tx _ _ _ -> addTx s (Invalid tx)
+    _                                   -> s
 
 addTx :: RollupState -> OnChainTx -> RollupState
 addTx s tx =

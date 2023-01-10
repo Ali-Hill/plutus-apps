@@ -17,6 +17,7 @@ module Plutus.ChainIndex.Effects(
     , utxoSetMembership
     , utxoSetAtAddress
     , unspentTxOutSetAtAddress
+    , datumsAtAddress
     , utxoSetWithCurrency
     , txoSetAtAddress
     , txsFromTxIds
@@ -34,7 +35,7 @@ import Control.Monad.Freer.Extras.Pagination (PageQuery)
 import Control.Monad.Freer.TH (makeEffect)
 import Ledger (AssetClass, TxId)
 import Ledger.Credential (Credential)
-import Ledger.Tx (ChainIndexTxOut, TxOutRef)
+import Ledger.Tx (DecoratedTxOut, TxOutRef, Versioned)
 import Plutus.ChainIndex.Api (IsUtxoResponse, QueryResponse, TxosResponse, UtxosResponse)
 import Plutus.ChainIndex.Tx (ChainIndexTx)
 import Plutus.ChainIndex.Types (ChainSyncBlock, Diagnostics, Point, Tip)
@@ -47,22 +48,22 @@ data ChainIndexQueryEffect r where
     DatumFromHash :: DatumHash -> ChainIndexQueryEffect (Maybe Datum)
 
     -- | Get the validator from a validator hash (if available)
-    ValidatorFromHash :: ValidatorHash -> ChainIndexQueryEffect (Maybe Validator)
+    ValidatorFromHash :: ValidatorHash -> ChainIndexQueryEffect (Maybe (Versioned Validator))
 
     -- | Get the monetary policy from an MPS hash (if available)
-    MintingPolicyFromHash :: MintingPolicyHash -> ChainIndexQueryEffect (Maybe MintingPolicy)
+    MintingPolicyFromHash :: MintingPolicyHash -> ChainIndexQueryEffect (Maybe (Versioned MintingPolicy))
 
     -- | Get the redeemer from a redeemer hash (if available)
     RedeemerFromHash :: RedeemerHash -> ChainIndexQueryEffect (Maybe Redeemer)
 
     -- | Get the stake validator from a stake validator hash (if available)
-    StakeValidatorFromHash :: StakeValidatorHash -> ChainIndexQueryEffect (Maybe StakeValidator)
+    StakeValidatorFromHash :: StakeValidatorHash -> ChainIndexQueryEffect (Maybe (Versioned StakeValidator))
 
     -- | Get the TxOut from a TxOutRef (if available)
-    UnspentTxOutFromRef :: TxOutRef -> ChainIndexQueryEffect (Maybe ChainIndexTxOut)
+    UnspentTxOutFromRef :: TxOutRef -> ChainIndexQueryEffect (Maybe DecoratedTxOut)
 
     -- | Get the TxOut from a TxOutRef (if available)
-    TxOutFromRef :: TxOutRef -> ChainIndexQueryEffect (Maybe ChainIndexTxOut)
+    TxOutFromRef :: TxOutRef -> ChainIndexQueryEffect (Maybe DecoratedTxOut)
 
     -- | Get the transaction for a tx ID
     TxFromTxId :: TxId -> ChainIndexQueryEffect (Maybe ChainIndexTx)
@@ -75,7 +76,10 @@ data ChainIndexQueryEffect r where
 
     -- | Get the unspent txouts located at an address
     -- This is to avoid multiple queries from chain-index when using utxosAt
-    UnspentTxOutSetAtAddress :: PageQuery TxOutRef -> Credential -> ChainIndexQueryEffect (QueryResponse [(TxOutRef, ChainIndexTxOut)])
+    UnspentTxOutSetAtAddress :: PageQuery TxOutRef -> Credential -> ChainIndexQueryEffect (QueryResponse [(TxOutRef, DecoratedTxOut)])
+
+    -- | get the datums located at addresses with the given credential.
+    DatumsAtAddress :: PageQuery TxOutRef -> Credential -> ChainIndexQueryEffect (QueryResponse [Datum])
 
     -- | Unspent outputs containing a specific currency ('AssetClass').
     --

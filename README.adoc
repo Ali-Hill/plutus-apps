@@ -4,6 +4,8 @@
 :toc: left
 :reproducible:
 
+image:https://img.shields.io/badge/policy-Cardano%20Engineering%20Handbook-informational[link=https://input-output-hk.github.io/cardano-engineering-handbook]
+
 The Plutus Application Framework, part of the Plutus Platform, is a framework for developing distributed applications using the Cardano blockchain.
 For more information about the projects, see the <<user-documentation>>.
 
@@ -12,7 +14,6 @@ This repository contains:
 * Plutus Platform
 ** Libraries which implement the Plutus Application Framework, a framework for writing applications that work with Cardano.
 ** A selection of end-to-end usecases written with the Plutus Application Framework
-** The Plutus Playground, a web-based playground for learning and writing basic Plutus Applications.
 
 [IMPORTANT]
 ====
@@ -50,45 +51,11 @@ The generated Haskell API documentation (haddocks) are here:
 
 - https://hydra.iohk.io/job/Cardano/plutus/linux.docs.plutus-report/latest/download-by-type/doc-pdf/plutus[Plutus Technical Report] (draft)
 
-== Versioning and releases
+== Branching, Versioning and Releases
 
-https://pvp.haskell.org/[PVP] reminder:
-
-* _Two_ major-version components, A.B
-** In this doc: “first-major-version”, “second-major-version”
-* _One_ minor-version component C
-* Any number of (meaningless but higher) patch-version components
-
-=== Versioning
-
-The core `plutus-apps` packages are versioned as follows:
-
-* Package versioning follows the https://pvp.haskell.org/[PVP] on a best-effort basis (i.e. we will generally try to but we won't guarantee it).
-** The first-major-version component indicates the "era" which for our purposes means which major version of the *Cardano node* the tools are compatible with.
-*** Alonzo era: `v0.x.x`
-*** Babbage era: `v1.x.x`
-** The second-major-version component is used for releases which are major versions according to the PVP, but which are still compatible with the current "era".
-** The minor-version and below are used as normal.
-* Packages which are used downstream should all have the same version.
-* Other packages which are not used downstream (e.g. `plutus-playground-server`, `plutus-playground-client`, `quickcheck-dynamic`, etc.) can remain unversioned.
-
-In principle we could just have a single major version, but using two makes it easier to avoid mistakes and clearly expresses the state of the repository.
-
-=== Branching and tagging
-
-The following tagging rules are followed:
-
-* Version `X` is tagged as `vX`
-
-There are two protected branches in `plutus-apps`:
-
-* `main` branch
-** Most development should be done in this branch
-** Should always target a stable version of `cardano-node` which is compatible with the current Cardano mainnet.
-** The version of transitive dependencies (`plutus`, `cardano-ledger`, `ouroboros-network`, etc.) should be pinned to the ones from `cardano-node` (or better, `cardano-wallet`)
-** Changes will be backported form `main` to `next-node`
-* `next-node` branch: should always target the next node release.
-** This branch will eventually be merged in `main` after the Cardano mainnet HF and deleted. Once the next HF is planned, it will be recreated and it will contain an upgraded `cardano-node` version.
+There are two protected development branches in `plutus-apps`: `main` and `next-node`.
+We adopt the PVP versioning scheme.
+Check out link:doc/BRANCHING-AND-RELEASE.adoc[Branching Policy and Release Process] to learn more.
 
 === Dependency update
 
@@ -123,10 +90,6 @@ Packages which depend on `plutus-apps` packages should use version ranges to con
 * Downstream packages should pin at least the first-major-version of `plutus-apps` packages.
 ** Upgrading to a new second-major-version should always be safe for working on the current mainnet, with at most code breakage (following the PVP). Users may of course want to pin this version as well to avoid such breakage.
 * Downstream packages pulling in `plutus-apps` packages via `source-repository-package` stanzas should always take tagged commits.
-
-=== Releases
-
-Currently there is no release process beyond bumping the package versions and making a tag/branch as appropriate.
 
 == Working with the project
 
@@ -203,15 +166,6 @@ Run `cabal build plutus-pab` from the root to build the Plutus PAB library.
 
 See the link:./cabal.project[cabal project file] to see the other packages that you can build with `cabal`.
 
-=== Deployment
-
-The Plutus Playground is automatically deployed upon certain pushes to GitHub
-
-* https://plutus-playground-plutus-apps-staging.plutus.aws.iohkdev.io/[Staging] is deployed from every commit pushed to `main` (this URL subject to change)
-* https://playground.plutus.iohkdev.io/[Production] is deployed from every release tag (matching `vYYYY-MM-DD`)
-
-For more details, including instructions for setting up ad hoc testing deployments, see https://github.com/input-output-hk/plutus-ops[the plutus-ops repo].
-
 [[nix-advice]]
 == Nix
 
@@ -230,8 +184,9 @@ To set up the cache:
 . On non-NixOS, edit `/etc/nix/nix.conf` and add the following lines:
 +
 ----
-substituters        = https://hydra.iohk.io https://iohk.cachix.org https://cache.nixos.org/
-trusted-public-keys = hydra.iohk.io:f/Ea+s+dFdN+3Y/G+FDgSq+a5NEWhJGzdjvKNGv0/EQ= iohk.cachix.org-1:DpRUyj7h7V830dp/i6Nti+NEO2/nhblbov/8MW7Rqoo= cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY=
+substituters = https://cache.iog.io https://cache.nixos.org/
+trusted-public-keys = hydra.iohk.io:f/Ea+s+dFdN+3Y/G+FDgSq+a5NEWhJGzdjvKNGv0/EQ= cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY=
+extra-experimental-features = nix-command flakes
 ----
 +
 [NOTE]
@@ -243,8 +198,8 @@ You must be a https://nixos.org/nix/manual/#ssec-multi-user[trusted user] to do 
 +
 ----
 nix = {
-  binaryCaches          = [ "https://hydra.iohk.io" "https://iohk.cachix.org" ];
-  binaryCachePublicKeys = [ "hydra.iohk.io:f/Ea+s+dFdN+3Y/G+FDgSq+a5NEWhJGzdjvKNGv0/EQ=" "iohk.cachix.org-1:DpRUyj7h7V830dp/i6Nti+NEO2/nhblbov/8MW7Rqoo=" ];
+  binaryCaches          = [ "https://cache.iog.io" ];
+  binaryCachePublicKeys = [ "hydra.iohk.io:f/Ea+s+dFdN+3Y/G+FDgSq+a5NEWhJGzdjvKNGv0/EQ=" ];
 };
 ----
 

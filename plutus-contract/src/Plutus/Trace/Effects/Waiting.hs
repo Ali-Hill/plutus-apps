@@ -19,12 +19,12 @@ module Plutus.Trace.Effects.Waiting(
     , handleWaiting
     ) where
 
+import Cardano.Node.Emulator.TimeSlot qualified as TimeSlot
 import Control.Monad.Freer (Eff, Member, type (~>))
 import Control.Monad.Freer.Coroutine (Yield)
 import Control.Monad.Freer.TH (makeEffect)
 import Ledger.Slot (Slot)
 import Ledger.Time (DiffMilliSeconds, POSIXTime, fromMilliSeconds)
-import Ledger.TimeSlot qualified as TimeSlot
 import Numeric.Natural (Natural)
 import Plutus.Trace.Emulator.Types (EmulatorMessage (NewSlot))
 import Plutus.Trace.Scheduler (EmSystemCall, Priority (Sleeping), sleep)
@@ -72,8 +72,8 @@ waitNMilliSeconds n = do
     waitNSlots (fromIntegral $ TimeSlot.posixTimeToEnclosingSlot slotConfig $ fromMilliSeconds n)
 
 handleWaiting ::
-    forall effs effs2.
-    ( Member (Yield (EmSystemCall effs2 EmulatorMessage) (Maybe EmulatorMessage)) effs
+    forall effs effs2 a.
+    ( Member (Yield (EmSystemCall effs2 EmulatorMessage a) (Maybe EmulatorMessage)) effs
     )
     => TimeSlot.SlotConfig
     -> Waiting
@@ -81,4 +81,4 @@ handleWaiting ::
 handleWaiting slotConfig = \case
     GetSlotConfig -> pure slotConfig
     WaitUntilSlot s -> go where
-        go = sleep @effs2 Sleeping >>= \case { Just (NewSlot _ sl) | sl >= s -> pure sl; _ -> go }
+        go = sleep @effs2 @_ @_ @a Sleeping >>= \case { Just (NewSlot _ sl) | sl >= s -> pure sl; _ -> go }

@@ -1,5 +1,5 @@
 {-# LANGUAGE DataKinds                  #-}
-{-# LANGUAGE DeriveDataTypeable         #-}
+{-# LANGUAGE DeriveGeneric              #-}
 {-# LANGUAGE FlexibleContexts           #-}
 {-# LANGUAGE FlexibleInstances          #-}
 {-# LANGUAGE GADTs                      #-}
@@ -19,7 +19,6 @@ module Spec.Prism (tests, prismTrace, prop_Prism, prop_NoLock) where
 
 import Control.Lens
 import Control.Monad
-import Data.Data
 import Data.Map (Map)
 import Data.Map qualified as Map
 import Ledger.Ada qualified as Ada
@@ -98,15 +97,16 @@ prismTrace = do
 -- * QuickCheck model
 
 data STOState = STOReady | STOPending | STODone
-    deriving (Eq, Ord, Show, Data)
+    deriving (Eq, Ord, Show, Generic)
 
 data IssueState = NoIssue | Revoked | Issued
-    deriving (Eq, Ord, Show, Data)
+    deriving (Eq, Ord, Show, Generic)
 
-newtype PrismModel = PrismModel
-    { _walletState :: Map Wallet (IssueState, STOState)
+data PrismModel = PrismModel
+    { _walletState   :: Map Wallet (IssueState, STOState)
+    , _numberOfCalls :: Integer
     }
-    deriving (Show, Data)
+    deriving (Show, Generic)
 
 makeLenses 'PrismModel
 
@@ -136,7 +136,7 @@ deriving instance Show (ContractInstanceKey PrismModel w s e params)
 instance ContractModel PrismModel where
 
     data Action PrismModel = Issue Wallet | Revoke Wallet | Call Wallet
-        deriving (Eq, Show, Data)
+        deriving (Eq, Show, Generic)
 
     data ContractInstanceKey PrismModel w s e params where
         MirrorH  ::           ContractInstanceKey PrismModel () C.MirrorSchema            C.MirrorError ()
@@ -146,7 +146,7 @@ instance ContractModel PrismModel where
                                   genUser Call]
         where genUser f = f <$> QC.elements users
 
-    initialState = PrismModel { _walletState = Map.empty }
+    initialState = PrismModel { _walletState = Map.empty, _numberOfCalls = 0 }
 
     initialInstances = StartContract MirrorH () : ((`StartContract` ()) . UserH <$> users)
 
@@ -157,6 +157,7 @@ instance ContractModel PrismModel where
     instanceContract _ UserH{} _ = C.subscribeSTO
 
     precondition s (Issue w) = (s ^. contractState . isIssued w) /= Issued  -- Multiple Issue (without Revoke) breaks the contract
+    precondition s (Call _)  = s ^. contractState . numberOfCalls < 10 -- We have to limit the number of calls otherwise fails with non-ada collateral error.
     precondition _ _         = True
 
     nextState cmd = do
@@ -175,13 +176,14 @@ instance ContractModel PrismModel where
                 let stoValue = STO.coins stoData numTokens
                 mint stoValue
                 deposit w stoValue
+                numberOfCalls %= (+1)
 
     perform handle _ _ cmd = case cmd of
         Issue w   -> wrap $ delay 1 >> Trace.callEndpoint @"issue"   (handle MirrorH) CredentialOwnerReference{coTokenName=kyc, coOwner=w}
         Revoke w  -> wrap $ Trace.callEndpoint @"revoke"             (handle MirrorH) CredentialOwnerReference{coTokenName=kyc, coOwner=w}
         Call w    -> wrap $ Trace.callEndpoint @"sto"                (handle $ UserH w) stoSubscriber
         where                     -- v Wait a generous amount of blocks between calls
-            wrap m   = () <$ m <* delay waitSlots
+            wrap m   = void $ m <* delay waitSlots
 
     shrinkAction _ _ = []
 
@@ -212,6 +214,5 @@ tests = testGroup "PRISM"
         .&&. walletFundsChange user (Ada.lovelaceValueOf (negate numTokens) <> STO.coins stoData numTokens)
         )
         prismTrace
-    , testProperty "QuickCheck property" $
-        withMaxSuccess 15 prop_Prism
+    , testProperty "QuickCheck property" prop_Prism
     ]

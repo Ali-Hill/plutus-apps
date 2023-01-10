@@ -46,6 +46,8 @@ module Plutus.PAB.Simulator(
     , instanceState
     , observableState
     , waitForState
+    , waitForInstanceState
+    , waitForInstanceStateWithResult
     , activeEndpoints
     , waitForEndpoint
     , waitForTxStatusChange
@@ -71,6 +73,10 @@ module Plutus.PAB.Simulator(
     , waitForValidatedTxCount
     ) where
 
+import Cardano.Node.Emulator.Chain (ChainControlEffect, ChainState)
+import Cardano.Node.Emulator.Chain qualified as Chain
+import Cardano.Node.Emulator.Params (Params (..))
+import Cardano.Node.Emulator.TimeSlot (SlotConfig (SlotConfig, scSlotLength))
 import Cardano.Wallet.Mock.Handlers qualified as MockWallet
 import Control.Concurrent (forkIO)
 import Control.Concurrent.STM (STM, TQueue, TVar)
@@ -98,13 +104,13 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.IO qualified as Text
 import Data.Time.Units (Millisecond)
-import Ledger (Address, Blockchain, CardanoTx, Params (..), PaymentPubKeyHash, TxId,
-               TxOut (TxOut, txOutAddress, txOutValue), eitherTx, getCardanoTxFee, getCardanoTxId)
+import Ledger (Blockchain, CardanoAddress, CardanoTx, PaymentPubKeyHash, TxId, getCardanoTxFee, getCardanoTxId,
+               txOutAddress, txOutValue, unOnChain)
 import Ledger.Ada qualified as Ada
 import Ledger.CardanoWallet (MockWallet)
 import Ledger.CardanoWallet qualified as CW
 import Ledger.Index qualified as UtxoIndex
-import Ledger.TimeSlot (SlotConfig (SlotConfig, scSlotLength))
+import Ledger.Slot (Slot)
 import Ledger.Value (Value, flattenValue)
 import Plutus.ChainIndex.Emulator (ChainIndexControlEffect, ChainIndexEmulatorState, ChainIndexError, ChainIndexLog,
                                    ChainIndexQueryEffect (..), TxOutStatus, TxStatus, getTip)
@@ -122,21 +128,18 @@ import Plutus.PAB.Monitoring.PABLogMsg (PABMultiAgentMsg (EmulatorMsg, UserLog, 
 import Plutus.PAB.Types (PABError (ContractInstanceNotFound, WalletError, WalletNotFound))
 import Plutus.PAB.Webserver.Types (ContractActivationArgs)
 import Plutus.Trace.Emulator.System (appendNewTipBlock)
-import Plutus.V1.Ledger.Slot (Slot)
 import Plutus.V1.Ledger.Tx (TxOutRef)
 import Prettyprinter (Pretty (pretty), defaultLayoutOptions, layoutPretty)
 import Prettyprinter.Render.Text qualified as Render
 import Wallet.API qualified as WAPI
 import Wallet.Effects (NodeClientEffect (GetClientParams, GetClientSlot, PublishTx), WalletEffect)
 import Wallet.Emulator qualified as Emulator
-import Wallet.Emulator.Chain (ChainControlEffect, ChainState)
-import Wallet.Emulator.Chain qualified as Chain
 import Wallet.Emulator.LogMessages (TxBalanceMsg)
 import Wallet.Emulator.MultiAgent (EmulatorEvent' (ChainEvent, ChainIndexEvent), _singleton)
 import Wallet.Emulator.Stream qualified as Emulator
 import Wallet.Emulator.Wallet (Wallet, knownWallet, knownWallets)
 import Wallet.Emulator.Wallet qualified as Wallet
-import Wallet.Types (ContractInstanceId, NotificationError)
+import Wallet.Types (ContractActivityStatus, ContractInstanceId, NotificationError)
 
 -- | The current state of a contract instance
 data SimulatorContractInstanceState t =
@@ -211,7 +214,7 @@ mkSimulatorHandlers params handleContractEffect =
     EffectHandlers
         { initialiseEnvironment =
             (,,)
-                <$> liftIO (STM.atomically   Instances.emptyInstancesState )
+                <$> liftIO (Instances.emptyInstancesState )
                 <*> liftIO (STM.atomically $ Instances.emptyBlockchainEnv Nothing params)
                 <*> liftIO (initialState @t)
         , handleContractStoreEffect =
@@ -238,8 +241,7 @@ mkSimulatorHandlers params handleContractEffect =
                 $ interpret (Core.handleBlockchainEnvReader @t @(SimulatorState t))
                 $ advanceClock @t
             Core.waitUntilSlot 1
-        , onShutdown = do
-            handleDelayEffect $ delayThread (500 :: Millisecond) -- need to wait a little to avoid garbled terminal output in GHCi.
+        , onShutdown = handleDelayEffect $ delayThread (500 :: Millisecond) -- need to wait a little to avoid garbled terminal output in GHCi.
         }
 
 handleLogSimulator ::
@@ -341,7 +343,7 @@ activateContract = Core.activateContract
 callEndpointOnInstance :: forall a t. (JSON.ToJSON a) => ContractInstanceId -> String -> a -> Simulation t (Maybe NotificationError)
 callEndpointOnInstance = Core.callEndpointOnInstance'
 
--- | Wait 1 second, then add a new block.
+-- | Wait 1 slot length, then add a new block.
 makeBlock ::
     forall t effs.
     ( LastMember IO effs
@@ -384,6 +386,16 @@ observableState = Core.observableState
 waitForState :: forall t a. (JSON.Value -> Maybe a) -> ContractInstanceId -> Simulation t a
 waitForState = Core.waitForState
 
+waitForInstanceState ::
+  forall t.
+  (Instances.InstanceState -> STM (Maybe ContractActivityStatus)) ->
+  ContractInstanceId ->
+  Simulation t ContractActivityStatus
+waitForInstanceState = Core.waitForInstanceState
+
+waitForInstanceStateWithResult :: forall t. ContractInstanceId -> Simulation t ContractActivityStatus
+waitForInstanceStateWithResult = Core.waitForInstanceStateWithResult
+
 -- | The list of endpoints that are currently open
 activeEndpoints :: forall t. ContractInstanceId -> Simulation t (STM [OpenEndpoint])
 activeEndpoints = Core.activeEndpoints
@@ -423,7 +435,7 @@ waitNSlots = Core.waitNSlots
 type Simulation t a = Core.PABAction t (SimulatorState t) a
 
 runSimulationWith :: SimulatorEffectHandlers t -> Simulation t a -> IO (Either PABError a)
-runSimulationWith = Core.runPAB def
+runSimulationWith = Core.runPAB def def
 
 -- | Handle a 'LogMsg' effect in terms of a "larger" 'State' effect from which we have a setter.
 logIntoTQueue ::
@@ -463,7 +475,7 @@ handleChainControl eff = do
               currentTip <- getTip
               appendNewTipBlock currentTip txns slot
 
-            void $ liftIO $ STM.atomically $ BlockchainEnv.processMockBlock instancesState blockchainEnv txns slot
+            void $ liftIO (BlockchainEnv.processMockBlock instancesState blockchainEnv txns slot >>= STM.atomically)
 
             pure txns
         Chain.ModifySlot f -> runChainEffects @t @_ params (Chain.modifySlot f)
@@ -584,6 +596,7 @@ handleChainIndexEffect = runChainIndexEffects @t . \case
     UtxoSetMembership ref            -> ChainIndex.utxoSetMembership ref
     UtxoSetAtAddress pq addr         -> ChainIndex.utxoSetAtAddress pq addr
     UnspentTxOutSetAtAddress pq addr -> ChainIndex.unspentTxOutSetAtAddress pq addr
+    DatumsAtAddress pq addr          -> ChainIndex.datumsAtAddress pq addr
     UtxoSetWithCurrency pq ac        -> ChainIndex.utxoSetWithCurrency pq ac
     TxoSetAtAddress pq addr          -> ChainIndex.txoSetAtAddress pq addr
     TxsFromTxIds txids               -> ChainIndex.txsFromTxIds txids
@@ -639,6 +652,9 @@ handleContractStore = \case
         fmap _contractDef <$> liftIO (STM.readTVarIO instancesTVar)
     Contract.PutStartInstance{} -> pure ()
     Contract.PutStopInstance{} -> pure ()
+    Contract.DeleteState i -> do
+        instancesTVar <- view instances <$> (Core.askUserEnv @t @(SimulatorState t))
+        void $ liftIO $ STM.atomically $ STM.modifyTVar instancesTVar (Map.delete i)
 
 render :: forall a. Pretty a => a -> Text
 render = Render.renderStrict . layoutPretty defaultLayoutOptions . pretty
@@ -685,15 +701,15 @@ activeContracts :: forall t. Simulation t (Set ContractInstanceId)
 activeContracts = Core.activeContracts
 
 -- | The total value currently at an address
-valueAtSTM :: forall t. Address -> Simulation t (STM Value)
+valueAtSTM :: forall t. CardanoAddress -> Simulation t (STM Value)
 valueAtSTM address = do
     SimulatorState{_chainState} <- Core.askUserEnv @t @(SimulatorState t)
     pure $ do
         Chain.ChainState{Chain._index=UtxoIndex.UtxoIndex mp} <- STM.readTVar _chainState
-        pure $ foldMap txOutValue $ filter (\TxOut{txOutAddress} -> txOutAddress == address) $ fmap snd $ Map.toList mp
+        pure $ foldMap txOutValue $ filter (\txout -> txOutAddress txout == address) $ fmap snd $ Map.toList mp
 
 -- | The total value currently at an address
-valueAt :: forall t. Address -> Simulation t Value
+valueAt :: forall t. CardanoAddress -> Simulation t Value
 valueAt address = do
     stm <- valueAtSTM address
     liftIO $ STM.atomically stm
@@ -703,7 +719,7 @@ walletFees :: forall t. Wallet -> Simulation t Value
 walletFees wallet = succeededFees <$> walletSubmittedFees <*> blockchain
     where
         succeededFees :: Map TxId Value -> Blockchain -> Value
-        succeededFees submitted = foldMap . foldMap $ fold . (submitted Map.!?) . eitherTx getCardanoTxId getCardanoTxId
+        succeededFees submitted = foldMap . foldMap $ fold . (submitted Map.!?) . getCardanoTxId . unOnChain
         walletSubmittedFees = do
             SimulatorState{_agentStates} <- Core.askUserEnv @t @(SimulatorState t)
             result <- liftIO $ STM.atomically $ do

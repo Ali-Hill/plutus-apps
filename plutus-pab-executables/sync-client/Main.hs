@@ -4,7 +4,7 @@ module Main where
 import Control.Concurrent (threadDelay)
 import Control.Monad (forever)
 import Control.Tracer (nullTracer)
-import Data.Either.Combinators (maybeToRight)
+import Data.Either.Combinators (mapLeft, maybeToRight)
 import Data.List (elemIndex)
 import Data.Proxy (Proxy (Proxy))
 import Data.Text (pack)
@@ -14,10 +14,10 @@ import Text.Read (readEither)
 
 import Cardano.Api (Block (..), BlockHeader (..), BlockInMode (..), ChainPoint (..), HasTypeProxy (..),
                     deserialiseFromRawBytesHex, serialiseToRawBytesHexText)
+import Cardano.Node.Emulator.TimeSlot (SlotConfig (..))
 import Cardano.Protocol.Socket.Client (ChainSyncEvent (..), runChainSync)
 import Cardano.Protocol.Socket.Type (cfgNetworkId)
 import Cardano.Slotting.Slot (SlotNo (..))
-import Ledger.TimeSlot (SlotConfig (..))
 
 -- | We only need to know the location of the socket.
 --   We can get the protocol versions from Cardano.Protocol.Socket.Type
@@ -61,7 +61,7 @@ hashParser = eitherReader $
                         elemIndex ',' chainPoint
     let (hash, slot') = splitAt idx chainPoint
     slot <- readEither (drop 1 slot')
-    hsh  <- maybeToRight ("Failed to parse hash " <> hash) $
+    hsh  <- mapLeft (const $ "Failed to parse hash " <> hash) $
                          deserialiseFromRawBytesHex
                            (proxyToAsType Proxy)
                            (encodeUtf8 $ pack hash)

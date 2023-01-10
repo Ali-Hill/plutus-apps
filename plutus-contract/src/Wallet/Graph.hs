@@ -1,6 +1,5 @@
 {-# LANGUAGE DeriveAnyClass    #-}
 {-# LANGUAGE DeriveGeneric     #-}
-{-# LANGUAGE NamedFieldPuns    #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards   #-}
 {-# OPTIONS_GHC -fno-warn-incomplete-uni-patterns #-}
@@ -30,7 +29,6 @@ import Ledger.Blockchain
 import Ledger.Credential (Credential (..))
 import Ledger.Crypto
 import Ledger.Tx
-import Ledger.TxId
 
 -- | The owner of an unspent transaction output.
 data UtxOwner
@@ -44,9 +42,9 @@ data UtxOwner
 
 -- | Given a set of known public keys, compute the owner of a given transaction output.
 owner :: Set.Set PubKey -> TxOut -> UtxOwner
-owner keys TxOut {txOutAddress=Address{addressCredential}} =
+owner keys tx =
   let hashMap = foldMap (\pk -> Map.singleton (pubKeyHash pk) pk) keys
-  in case addressCredential of
+  in case cardanoAddressCredential (txOutAddress tx) of
     ScriptCredential{}                                       -> ScriptOwner
     PubKeyCredential pkh | Just pk <- Map.lookup pkh hashMap -> PubKeyOwner pk
     _                                                        -> OtherOwner
@@ -109,8 +107,8 @@ txnFlows keys bc = catMaybes (utxoLinks ++ foldMap extract bc')
 
     extract :: (UtxoLocation, OnChainTx) -> [Maybe FlowLink]
     extract (loc, tx) =
-      let targetRef = mkRef $ eitherTx getCardanoTxId getCardanoTxId tx in
-      fmap (flow (Just loc) targetRef . txInRef) (Set.toList $ consumableInputs tx)
+      let targetRef = mkRef $ getCardanoTxId $ unOnChain tx in
+      fmap (flow (Just loc) targetRef . txInRef) (consumableInputs tx)
     -- make a flow for a TxOutRef
 
     flow :: Maybe UtxoLocation -> TxRef -> TxOutRef -> Maybe FlowLink

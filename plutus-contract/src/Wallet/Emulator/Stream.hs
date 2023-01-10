@@ -27,6 +27,7 @@ module Wallet.Emulator.Stream(
     , foldEmulatorStreamM
     ) where
 
+import Cardano.Node.Emulator.Chain (ChainControlEffect, ChainEffect, _SlotAdd)
 import Control.Foldl qualified as L
 import Control.Lens (filtered, makeLenses, preview, view)
 import Control.Monad.Freer (Eff, Member, interpret, reinterpret, run, subsume, type (~>))
@@ -47,23 +48,22 @@ import Ledger.AddressMap qualified as AM
 import Ledger.Blockchain (Block, OnChainTx (Valid))
 import Ledger.CardanoWallet qualified as CW
 import Ledger.Slot (Slot)
-import Ledger.Tx (Tx)
-import Ledger.Validation qualified as Validation
+import Ledger.Tx (CardanoTx (CardanoApiTx), onCardanoTx)
+import Ledger.Tx.CardanoAPI (fromPlutusIndex)
 import Ledger.Value (Value)
 import Plutus.ChainIndex (ChainIndexError)
 import Streaming (Stream)
 import Streaming qualified as S
 import Streaming.Prelude (Of)
 import Streaming.Prelude qualified as S
-import Wallet.API (WalletAPIError)
+import Wallet.API (Params, WalletAPIError)
 import Wallet.Emulator (EmulatorEvent, EmulatorEvent')
 import Wallet.Emulator qualified as EM
-import Wallet.Emulator.Chain (ChainControlEffect, ChainEffect, _SlotAdd)
 import Wallet.Emulator.MultiAgent (EmulatorState, EmulatorTimeEvent (EmulatorTimeEvent), MultiAgentControlEffect,
                                    MultiAgentEffect, chainEvent, eteEvent)
 import Wallet.Emulator.Wallet (Wallet, mockWalletAddress)
 
-import Ledger.Params (Params)
+import Cardano.Node.Emulator.Validation qualified as Validation
 import Plutus.Contract.Trace (InitialDistribution, defaultDist, knownWallets)
 import Plutus.Trace.Emulator.ContractInstance (EmulatorRuntimeError)
 
@@ -110,7 +110,7 @@ foldEmulatorStreamM theFold =
 
 -- | Turn an emulator action into a 'Stream' of emulator log messages, returning
 --   the final state of the emulator.
-runTraceStream :: forall effs.
+runTraceStream :: forall effs a.
     EmulatorConfig
     -> Eff '[ State EmulatorState
             , LogMsg EmulatorEvent'
@@ -119,10 +119,10 @@ runTraceStream :: forall effs.
             , ChainEffect
             , ChainControlEffect
             , Error EmulatorRuntimeError
-            ] ()
-    -> Stream (Of (LogMessage EmulatorEvent)) (Eff effs) (Maybe EmulatorErr, EmulatorState)
+            ] (Maybe a)
+    -> Stream (Of (LogMessage EmulatorEvent)) (Eff effs) (Either EmulatorErr a, EmulatorState)
 runTraceStream conf@EmulatorConfig{_params} =
-    fmap (first (either Just (const Nothing)))
+    fmap (first $ either Left $ maybe (Left ExitWasNeverCalled) Right)
     . S.hoist (pure . run)
     . runStream @(LogMessage EmulatorEvent) @_ @'[]
     . runState (initialState conf)
@@ -144,13 +144,15 @@ data EmulatorConfig =
         , _params            :: Params -- ^ Set the protocol parameters, network ID and slot configuration for the emulator.
         } deriving (Eq, Show)
 
-type InitialChainState = Either InitialDistribution [Tx]
+type InitialChainState = Either InitialDistribution [CardanoTx]
 
 -- | The wallets' initial funds
 initialDist :: EmulatorConfig -> InitialDistribution
 initialDist EmulatorConfig{..} = either id (walletFunds . map (Valid . signTx)) _initialChainState where
-    signTx t = Validation.fromPlutusTxSigned _params cUtxoIndex t CW.knownPaymentKeys
-    cUtxoIndex = either (error . show) id $ Validation.fromPlutusIndex _params mempty
+    signTx = onCardanoTx
+      (\t -> Validation.fromPlutusTxSigned _params cUtxoIndex t CW.knownPaymentKeys)
+      CardanoApiTx
+    cUtxoIndex = either (error . show) id $ fromPlutusIndex mempty
     walletFunds :: Block -> Map Wallet Value
     walletFunds theBlock =
         let values = AM.values $ AM.fromChain [theBlock]
@@ -164,14 +166,16 @@ instance Default EmulatorConfig where
           }
 
 initialState :: EmulatorConfig -> EM.EmulatorState
-initialState EmulatorConfig{..} =
-    either
-        (EM.emulatorStateInitialDist . Map.mapKeys EM.mockWalletPaymentPubKeyHash)
-        (EM.emulatorStatePool . map signTx)
-        _initialChainState
-    where
-        signTx t = Validation.fromPlutusTxSigned _params cUtxoIndex t CW.knownPaymentKeys
-        cUtxoIndex = either (error . show) id $ Validation.fromPlutusIndex _params mempty
+initialState EmulatorConfig{..} = let
+    withInitialWalletValues = either
+          (error . ("Cannot build the initial state: " <>) . show)
+          id
+          . EM.emulatorStateInitialDist _params . Map.mapKeys EM.mockWalletPaymentPubKeyHash
+    signTx = onCardanoTx
+          (\t -> Validation.fromPlutusTxSigned _params cUtxoIndex t CW.knownPaymentKeys)
+          CardanoApiTx
+    cUtxoIndex = either (error . show) id $ fromPlutusIndex mempty
+    in either withInitialWalletValues (EM.emulatorStatePool . map signTx) _initialChainState
 
 
 data EmulatorErr =
@@ -179,6 +183,7 @@ data EmulatorErr =
     | ChainIndexErr ChainIndexError
     | AssertionErr EM.AssertionError
     | InstanceErr EmulatorRuntimeError
+    | ExitWasNeverCalled
     deriving (Show)
 
 handleLogCoroutine :: forall e effs.
@@ -199,7 +204,7 @@ mkTimedLogs = mapMLog f where
     f :: a -> Eff effs (EmulatorTimeEvent a)
     f a =
         EmulatorTimeEvent
-            <$> gets (view $ EM.chainState . EM.currentSlot)
+            <$> gets (view $ EM.chainState . EM.chainCurrentSlot)
             <*> pure a
 
 makeLenses ''EmulatorConfig

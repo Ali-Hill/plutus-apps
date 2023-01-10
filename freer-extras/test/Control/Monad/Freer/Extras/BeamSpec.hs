@@ -18,7 +18,9 @@ import Control.Lens
 import Control.Monad (forM_)
 import Control.Monad.Freer (Eff, Member, interpret, runM)
 import Control.Monad.Freer.Error (Error, runError)
-import Control.Monad.Freer.Extras.Beam (BeamEffect, BeamError, handleBeam, selectPage)
+import Control.Monad.Freer.Extras.Beam (BeamError)
+import Control.Monad.Freer.Extras.Beam.Effects (BeamEffect, handleBeam, selectPage)
+import Control.Monad.Freer.Extras.Beam.Sqlite (runBeam)
 import Control.Monad.Freer.Extras.Pagination (Page (..), PageQuery (..))
 import Control.Monad.Freer.Reader (Reader, runReader)
 import Control.Tracer (nullTracer)
@@ -166,10 +168,11 @@ pageSizeEqualToTotalItemsSizeShouldReturnOnePage = property $ do
     $ \pages -> length pages === 1
 
 selectAllPages
-    :: ( FromBackendRow Sqlite a
-       , HasSqlValueSyntax SqliteValueSyntax a
-       , Member BeamEffect effs
-       )
+    :: forall a effs db.
+    ( FromBackendRow Sqlite a
+    , HasSqlValueSyntax SqliteValueSyntax a
+    , Member (BeamEffect Sqlite) effs
+    )
     => PageQuery a
     -> Q Sqlite db
                 (QNested (QNested QBaseScope))
@@ -185,11 +188,16 @@ selectAllPages pq q = do
 
 runBeamEffectInGenTestDb
     :: Set Int
-    -> Eff '[BeamEffect, Error BeamError, Reader (Pool Sqlite.Connection), IO] a
+    -> Eff '[BeamEffect Sqlite, Error BeamError, Reader (Pool Sqlite.Connection), IO] a
     -> (a -> PropertyT IO ())
     -> PropertyT IO ()
 runBeamEffectInGenTestDb items effect runTest = do
-  pool <- liftIO $ Pool.createPool (Sqlite.open ":memory:") Sqlite.close 1 1_000_000 1
+  pool <- liftIO $ Pool.newPool Pool.PoolConfig
+    { Pool.createResource = Sqlite.open  ":memory:"
+    , Pool.freeResource = Sqlite.close
+    , Pool.poolCacheTTL = 1_000_000
+    , Pool.poolMaxResources = 1
+    }
   result <- liftIO $ do
     Pool.withResource pool $ \conn -> Sqlite.runBeamSqlite conn $ do
       autoMigrate Sqlite.migrationBackend checkedSqliteDb
@@ -202,11 +210,11 @@ runBeamEffectInGenTestDb items effect runTest = do
 
 runBeamEffect
     :: Pool Sqlite.Connection
-    -> Eff '[BeamEffect, Error BeamError, Reader (Pool Sqlite.Connection), IO] a
+    -> Eff '[BeamEffect Sqlite, Error BeamError, Reader (Pool Sqlite.Connection), IO] a
     -> IO (Either BeamError a)
 runBeamEffect pool effect = do
   effect
-    & interpret (handleBeam nullTracer)
+    & interpret (handleBeam runBeam nullTracer)
     & runError
     & runReader pool
     & runM

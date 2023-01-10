@@ -52,7 +52,6 @@ import PlutusTx qualified
 import PlutusTx.Prelude
 
 import Ledger (Address, POSIXTime, PaymentPubKey, PaymentPubKeyHash)
-import Ledger qualified
 import Ledger.Constraints qualified as Constraints
 import Ledger.Constraints.TxConstraints (TxConstraints)
 import Ledger.Interval qualified as Interval
@@ -64,6 +63,7 @@ import Plutus.Contract
 import Plutus.Contract.Oracle (Observation (..), SignedMessage (..))
 import Plutus.Contract.Oracle qualified as Oracle
 import Plutus.Contract.Util (loopM)
+import Plutus.Script.Utils.V1.Address (mkValidatorAddress)
 import Plutus.Script.Utils.V1.Scripts (validatorHash)
 import Plutus.V1.Ledger.Api (Datum (Datum), Validator, ValidatorHash)
 
@@ -317,7 +317,7 @@ typedValidator future ftos =
                 `PlutusTx.applyCode`
                     PlutusTx.liftCode ftos
         validatorParam f g = SM.mkValidator (futureStateMachine f g)
-        wrap = Scripts.mkUntypedValidator @FutureState @FutureAction
+        wrap = Scripts.mkUntypedValidator @Scripts.ScriptContextV1 @FutureState @FutureAction
 
     in Scripts.mkTypedValidator @(SM.StateMachine FutureState FutureAction)
         val
@@ -376,9 +376,12 @@ transition future@Future{ftDeliveryDate, ftPriceOracle} owners State{stateData=s
                 let
                     total = totalMargin accounts
                     FutureAccounts{ftoLongAccount, ftoShortAccount} = owners
-                    payment = case vRole of
-                                Short -> Constraints.mustPayToOtherScript ftoLongAccount unitDatum total
-                                Long  -> Constraints.mustPayToOtherScript ftoShortAccount unitDatum total
+                    payment =
+                        case vRole of
+                          Short -> Constraints.mustPayToOtherScriptWithDatumInTx ftoLongAccount unitDatum total
+                                <> Constraints.mustIncludeDatumInTx unitDatum
+                          Long  -> Constraints.mustPayToOtherScriptWithDatumInTx ftoShortAccount unitDatum total
+                                <> Constraints.mustIncludeDatumInTx unitDatum
                     constraints = payment <> oracleConstraints
                 in Just ( constraints
                         , State
@@ -402,8 +405,9 @@ payoutsTx
 payoutsTx
     Payouts{payoutsShort, payoutsLong}
     FutureAccounts{ftoLongAccount, ftoShortAccount} =
-        Constraints.mustPayToOtherScript ftoLongAccount unitDatum payoutsLong
-        <> Constraints.mustPayToOtherScript ftoShortAccount unitDatum payoutsShort
+        Constraints.mustPayToOtherScriptWithDatumInTx ftoLongAccount unitDatum payoutsLong
+        <> Constraints.mustPayToOtherScriptWithDatumInTx ftoShortAccount unitDatum payoutsShort
+        <> Constraints.mustIncludeDatumInTx unitDatum
 
 {-# INLINABLE payouts #-}
 -- | Compute the payouts for each role given the future data,
@@ -439,7 +443,7 @@ initialState ft =
     Running (Margins{ftsShortMargin=im, ftsLongMargin=im})
 
 futureAddress :: Future -> FutureAccounts -> Address
-futureAddress ft fo = Ledger.scriptAddress (validator ft fo)
+futureAddress ft fo = mkValidatorAddress (validator ft fo)
 
 {-# INLINABLE violatingRole #-}
 -- | The role that violated its margin requirements
@@ -570,11 +574,11 @@ setupTokens
     )
     => Contract w s e FutureAccounts
 setupTokens = mapError (review _FutureError) $ do
-    pk <- ownFirstPaymentPubKeyHash
+    addr <- ownAddress
 
     -- Create the tokens using the currency contract, wrapping any errors in
     -- 'TokenSetupFailed'
-    cur <- mapError TokenSetupFailed $ Currency.mintContract pk [("long", 1), ("short", 1)]
+    cur <- mapError TokenSetupFailed $ Currency.mintContract addr [("long", 1), ("short", 1)]
     let acc = Account . Value.assetClass (Currency.currencySymbol cur)
     pure $ mkAccounts (acc "long") (acc "short")
 

@@ -12,6 +12,7 @@ module Plutus.PAB.Core.ContractInstance.BlockchainEnv(
 import Cardano.Api (BlockInMode (..), ChainPoint (..), chainPointToSlotNo)
 import Cardano.Api qualified as C
 import Cardano.Api.NetworkId.Extra (NetworkIdWrapper (NetworkIdWrapper))
+import Cardano.Node.Emulator.TimeSlot qualified as TimeSlot
 import Cardano.Node.Params qualified as Params
 import Cardano.Node.Types (NodeMode (..),
                            PABServerConfig (PABServerConfig, pscNetworkId, pscNodeMode, pscSlotConfig, pscSocketPath))
@@ -22,36 +23,37 @@ import Control.Concurrent.STM (STM)
 import Control.Concurrent.STM qualified as STM
 import Control.Lens
 import Control.Monad (forM_, void, when)
+import Control.Monad.Freer.Extras.Beam.Postgres qualified as Postgres (DbConfig (dbConfigMarconiFile))
+import Control.Monad.Freer.Extras.Beam.Sqlite qualified as Sqlite (DbConfig (dbConfigFile))
 import Control.Tracer (nullTracer)
 import Data.Foldable (foldl')
 import Data.IORef (newIORef)
 import Data.List (findIndex)
 import Data.Map qualified as Map
-import Data.Maybe (catMaybes, fromMaybe, maybeToList)
+import Data.Maybe (fromMaybe, maybeToList)
 import Data.Monoid (Last (..), Sum (..))
-import Data.Text (unpack)
+import Data.Text (Text, unpack)
 import Ledger (Block, Slot (..), TxId (..))
-import Ledger.TimeSlot qualified as TimeSlot
-import Plutus.ChainIndex (BlockNumber (..), ChainIndexTx (..), ChainIndexTxOutputs (..), Depth (..),
-                          InsertUtxoFailed (..), InsertUtxoSuccess (..), Point (..), ReduceBlockCountResult (..),
-                          RollbackFailed (..), RollbackResult (..), Tip (..), TxConfirmedState (..), TxIdState (..),
-                          TxOutBalance, TxValidity (..), UtxoIndex, UtxoState (..), blockId, citxTxId, fromOnChainTx,
-                          insert, reduceBlockCount, tipAsPoint, utxoState)
+import Plutus.ChainIndex (BlockNumber (..), ChainIndexTx (..), Depth (..), InsertUtxoFailed (..),
+                          InsertUtxoSuccess (..), Point (..), ReduceBlockCountResult (..), RollbackFailed (..),
+                          RollbackResult (..), Tip (..), TxConfirmedState (..), TxIdState (..), TxOutBalance,
+                          TxValidity (..), UtxoIndex, UtxoState (..), blockId, citxTxId, fromOnChainTx, insert,
+                          reduceBlockCount, tipAsPoint, utxoState, validityFromChainIndex)
 import Plutus.ChainIndex.Compatibility (fromCardanoBlockHeader, fromCardanoPoint, toCardanoPoint)
 import Plutus.ChainIndex.TxIdState qualified as TxIdState
 import Plutus.ChainIndex.TxOutBalance qualified as TxOutBalance
 import Plutus.ChainIndex.UtxoState (viewTip)
-import Plutus.Contract.CardanoAPI (fromCardanoTx, withIsCardanoEra)
+import Plutus.Contract.CardanoAPI (fromCardanoTx)
 import Plutus.PAB.Core.ContractInstance.STM (BlockchainEnv (..), InstanceClientEnv (..), InstancesState,
                                              OpenTxOutProducedRequest (..), OpenTxOutSpentRequest (..),
                                              emptyBlockchainEnv)
 import Plutus.PAB.Core.ContractInstance.STM qualified as S
 import Plutus.PAB.Core.Indexer.TxConfirmationStatus (TxInfo (..))
 import Plutus.PAB.Core.Indexer.TxConfirmationStatus qualified as Ix
-import Plutus.PAB.Types (Config (Config), DbConfig (DbConfig, dbConfigFile),
+import Plutus.PAB.Types (Config (Config, dbConfig), DbConfig (..),
                          DevelopmentOptions (DevelopmentOptions, pabResumeFrom, pabRollbackHistory),
-                         WebserverConfig (WebserverConfig, enableMarconi), dbConfig, developmentOptions,
-                         nodeServerConfig, pabWebserverConfig)
+                         WebserverConfig (WebserverConfig, enableMarconi), developmentOptions, nodeServerConfig,
+                         pabWebserverConfig)
 import Plutus.Trace.Emulator.ContractInstance (IndexedBlock (..), indexBlock)
 import RewindableIndex.Index.VSqlite qualified as Ix
 import System.Random
@@ -73,24 +75,23 @@ startNodeClient config instancesState = do
                    DevelopmentOptions { pabRollbackHistory
                                       , pabResumeFrom = resumePoint
                                       }
-               , dbConfig = DbConfig { dbConfigFile = dbFile }
                , pabWebserverConfig =
                    WebserverConfig { enableMarconi = useDiskIndex }
+               , dbConfig = dbConf
                } = config
     params <- Params.fromPABServerConfig $ nodeServerConfig config
     env <- do
       env' <- STM.atomically $ emptyBlockchainEnv pabRollbackHistory params
       if useDiskIndex && nodeStartsInAlonzoMode pscNodeMode
       then do
-        utxoIx <- Ix.open (unpack dbFile) (Ix.Depth 10) >>= newIORef
+        utxoIx <- Ix.open (unpack $ getDBFilePath dbConf) (Ix.Depth 10) >>= newIORef
         pure $ env' { beTxChanges = Right utxoIx }
       else do
         pure env'
     case pscNodeMode of
       MockNode -> do
         void $ MockClient.runChainSync socket slotConfig
-            (\block slot -> handleSyncAction $ processMockBlock instancesState env block slot
-            )
+            (\block slot -> handleSyncAction =<< processMockBlock instancesState env block slot)
       AlonzoNode -> do
         let resumePoints = maybeToList $ toCardanoPoint resumePoint
         void $ Client.runChainSync socket nullTracer slotConfig networkId resumePoints
@@ -103,8 +104,13 @@ startNodeClient config instancesState = do
                 STM.atomically $ STM.writeTVar (beCurrentSlot env) slot
                 processChainSyncEvent instancesState env block >>= handleSyncAction'
             )
+      NoChainSyncEvents -> pure ()
     pure env
     where
+      getDBFilePath :: DbConfig -> Text
+      getDBFilePath (SqliteDB c)   = Sqlite.dbConfigFile c
+      getDBFilePath (PostgresDB c) = Postgres.dbConfigMarconiFile c
+
       nodeStartsInAlonzoMode :: NodeMode -> Bool
       nodeStartsInAlonzoMode AlonzoNode = True
       nodeStartsInAlonzoMode _          = False
@@ -149,7 +155,7 @@ processChainSyncEvent instancesState env@BlockchainEnv{beTxChanges} event = do
   case event of
     Resume _ -> STM.atomically $ Right <$> blockAndSlot env
     RollForward (BlockInMode (C.Block header transactions) era) _ ->
-      withIsCardanoEra era (processBlock instancesState header env transactions era)
+      processBlock instancesState header env transactions era
     RollBackward chainPoint _ -> do
       S.updateTxChangesR beTxChanges $
         \txChanges -> do
@@ -158,8 +164,8 @@ processChainSyncEvent instancesState env@BlockchainEnv{beTxChanges} event = do
              slot   <- chainPointToSlotNo chainPoint
              offset <- findIndex (\(TxInfo _ _ sn) -> sn < slot) events
              Ix.rewind offset txChanges
-
       STM.atomically $ runRollback env chainPoint
+
 
 data SyncActionFailure
   = RollbackFailure RollbackFailed
@@ -198,10 +204,7 @@ runRollback env@BlockchainEnv{beLastSyncedBlockSlot, beTxChanges, beTxOutChanges
 
 -- | Get transaction ID and validity from a transaction.
 txEvent :: ChainIndexTx -> (TxId, TxOutBalance, TxValidity)
-txEvent tx =
-  let validity = case tx of ChainIndexTx { _citxOutputs = ValidTx _ } -> TxValid
-                            ChainIndexTx { _citxOutputs = InvalidTx } -> TxInvalid
-   in (view citxTxId tx, TxOutBalance.fromTx tx, validity)
+txEvent tx = (view citxTxId tx, TxOutBalance.fromTx tx, validityFromChainIndex tx)
 
 -- | Update the blockchain env. with changes from a new block of cardano
 --   transactions in any era
@@ -215,22 +218,26 @@ processBlock :: forall era. C.IsCardanoEra era
 processBlock instancesState header env@BlockchainEnv{beTxChanges} transactions era = do
   let C.BlockHeader (C.SlotNo slot) _ _ = header
       tip = fromCardanoBlockHeader header
-      -- We ignore cardano transactions that we couldn't convert to
-      -- our 'ChainIndexTx'.
-      ciTxs = catMaybes (either (const Nothing) Just . fromCardanoTx era <$> transactions)
+      ciTxs = fromCardanoTx era <$> transactions
 
-  stmResult <- STM.atomically $ do
-    STM.writeTVar (beLastSyncedBlockSlot env) (fromIntegral slot)
+  stmResult <-
     if null transactions
-       then Right <$> blockAndSlot env
-       else do
-          instEnv <- S.instancesClientEnv instancesState
-          updateInstances (indexBlock ciTxs) instEnv
-          updateEmulatorTransactionState tip env (txEvent <$> ciTxs)
+    then do
+      STM.atomically $ do
+        STM.writeTVar (beLastSyncedBlockSlot env) (fromIntegral slot)
+        Right <$> blockAndSlot env
+    else do
+      instEnv <- S.instancesClientEnv instancesState
+      STM.atomically $ do
+        e <- instEnv
+        STM.writeTVar (beLastSyncedBlockSlot env) (fromIntegral slot)
+        updateInstances (indexBlock ciTxs) e
+        updateEmulatorTransactionState tip env (txEvent <$> ciTxs)
 
   S.updateTxChangesR beTxChanges $ Ix.insert (mkEvent tip <$> ciTxs)
 
   pure stmResult
+
 
 mkEvent :: Tip -> ChainIndexTx -> TxInfo
 mkEvent TipAtGenesis  tx =
@@ -322,36 +329,42 @@ processMockBlock
     -> BlockchainEnv
     -> Block
     -> Slot
-    -> STM (Either SyncActionFailure (Slot, BlockNumber))
+    -> IO (STM (Either SyncActionFailure (Slot, BlockNumber)))
 processMockBlock
   instancesState
   env@BlockchainEnv{beCurrentSlot, beLastSyncedBlockSlot, beLastSyncedBlockNo}
   transactions
   slot = do
 
-  -- In the mock node, contrary to the actual node, the last synced block slot
-  -- and the actual slot is the same.
-  lastSyncedBlockSlot <- STM.readTVar beLastSyncedBlockSlot
-  when (slot > lastSyncedBlockSlot) $ do
-    STM.writeTVar beLastSyncedBlockSlot slot
-
-  lastCurrentSlot <- STM.readTVar beCurrentSlot
-  when (slot > lastCurrentSlot ) $ do
-    STM.writeTVar beCurrentSlot slot
-
   if null transactions
-     then do
-       result <- (,) <$> STM.readTVar beLastSyncedBlockSlot <*> STM.readTVar beLastSyncedBlockNo
-       pure $ Right result
-     else do
-      blockNumber <- STM.readTVar beLastSyncedBlockNo
-
+    then pure $ do
+      updateSlot
+      result <- (,) <$> STM.readTVar beLastSyncedBlockSlot <*> STM.readTVar beLastSyncedBlockNo
+      pure $ Right result
+    else do
       instEnv <- S.instancesClientEnv instancesState
-      updateInstances (indexBlock $ fmap fromOnChainTx transactions) instEnv
+      pure $ do
+        updateSlot
+        blockNumber <- STM.readTVar beLastSyncedBlockNo
+        e <- instEnv
+        updateInstances (indexBlock $ fmap fromOnChainTx transactions) e
 
-      let tip = Tip { tipSlot = slot
-                    , tipBlockId = blockId transactions
-                    , tipBlockNo = blockNumber
-                    }
+        let tip = Tip { tipSlot = slot
+                      , tipBlockId = blockId transactions
+                      , tipBlockNo = blockNumber
+                      }
 
-      updateEmulatorTransactionState tip env (txEvent <$> fmap fromOnChainTx transactions)
+        updateEmulatorTransactionState tip env (txEvent <$> fmap fromOnChainTx transactions)
+
+
+  where
+    updateSlot = do
+      -- In the mock node, contrary to the actual node, the last synced block slot
+      -- and the actual slot is the same.
+      lastSyncedBlockSlot <- STM.readTVar beLastSyncedBlockSlot
+      when (slot > lastSyncedBlockSlot) $ do
+        STM.writeTVar beLastSyncedBlockSlot slot
+
+      lastCurrentSlot <- STM.readTVar beCurrentSlot
+      when (slot > lastCurrentSlot ) $ do
+        STM.writeTVar beCurrentSlot slot

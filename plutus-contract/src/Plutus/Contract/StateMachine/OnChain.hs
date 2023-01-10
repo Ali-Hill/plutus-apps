@@ -25,18 +25,20 @@ module Plutus.Contract.StateMachine.OnChain(
     , threadTokenValueOrZero
     ) where
 
+import Cardano.Api.Shelley (NetworkId (..), NetworkMagic (..))
 import Data.Aeson (FromJSON, ToJSON)
 import Data.Void (Void)
 import GHC.Generics (Generic)
-import Ledger.Constraints (ScriptOutputConstraint (ScriptOutputConstraint, ocDatum, ocValue),
-                           TxConstraints (txOwnOutputs))
+import Ledger (CardanoAddress)
+import Ledger.Constraints (TxConstraints (txOwnOutputs), mustPayToTheScriptWithDatumInTx)
 import Ledger.Constraints.OnChain.V1 (checkScriptContext)
-import Ledger.Tx (TxOut (txOutValue))
-import Ledger.Typed.Scripts (DatumType, RedeemerType, TypedValidator, ValidatorType, ValidatorTypes, validatorAddress,
+import Ledger.Typed.Scripts (DatumType, RedeemerType, TypedValidator, ValidatorTypes, validatorCardanoAddress,
                              validatorHash)
 import Ledger.Value (Value, isZero)
-import Plutus.V1.Ledger.Api (Address, ValidatorHash)
+import Plutus.Script.Utils.V1.Typed.Scripts qualified as PV1
+import Plutus.V1.Ledger.Api (ValidatorHash)
 import Plutus.V1.Ledger.Contexts (ScriptContext, TxInInfo (txInInfoResolved), findOwnInput, ownHash)
+import Plutus.V1.Ledger.Tx qualified as PV1
 import PlutusTx qualified
 import PlutusTx.Prelude hiding (check)
 import Prelude qualified as Haskell
@@ -105,14 +107,16 @@ data StateMachineInstance s i = StateMachineInstance {
     typedValidator :: TypedValidator (StateMachine s i)
     }
 
-machineAddress :: StateMachineInstance s i -> Address
-machineAddress = validatorAddress . typedValidator
+-- | TODO StateMachine can be use only on a testnet at the moment, to enable it on another network, we need to
+-- parametrise the networkId
+machineAddress :: StateMachineInstance s i -> CardanoAddress
+machineAddress = validatorCardanoAddress (Testnet $ NetworkMagic 1) . typedValidator
 
 {-# INLINABLE mkValidator #-}
 -- | Turn a state machine into a validator script.
-mkValidator :: forall s i. (PlutusTx.ToData s) => StateMachine s i -> ValidatorType (StateMachine s i)
+mkValidator :: forall s i. (PlutusTx.ToData s) => StateMachine s i -> PV1.ValidatorType (StateMachine s i)
 mkValidator (StateMachine step isFinal check threadToken) currentState input ptx =
-    let vl = maybe (traceError "S0" {-"Can't find validation input"-}) (txOutValue . txInInfoResolved) (findOwnInput ptx)
+    let vl = maybe (traceError "S0" {-"Can't find validation input"-}) (PV1.txOutValue . txInInfoResolved) (findOwnInput ptx)
         checkOk =
             traceIfFalse "S1" {-"State transition invalid - checks failed"-} (check currentState input ptx)
             && traceIfFalse "S2" {-"Thread token not found"-} (TT.checkThreadToken threadToken (ownHash ptx) vl 1)
@@ -127,16 +131,12 @@ mkValidator (StateMachine step isFinal check threadToken) currentState input ptx
                     traceIfFalse "S3" {-"Non-zero value allocated in final state"-} (isZero newValue)
                     && traceIfFalse "S4" {-"State transition invalid - constraints not satisfied by ScriptContext"-} (checkScriptContext newConstraints ptx)
                 | otherwise ->
-                    let txc =
-                            newConstraints
-                                { txOwnOutputs =
-                                    [ ScriptOutputConstraint
-                                        { ocDatum = newData
-                                          -- Check that the thread token value is still there
-                                        , ocValue = newValue <> threadTokenValueInner threadToken (ownHash ptx)
-                                        }
-                                    ]
-                                }
+                    let -- Check that the thread token value is still there
+                        valueWithToken = newValue <> threadTokenValueInner threadToken (ownHash ptx)
+                        -- Type annotation is required to compile validator when profiling is activated.
+                        -- If 'Void' is not explicitly set, the plutus plugin can't handle the free type variable.
+                        constraint = mustPayToTheScriptWithDatumInTx @s @Void newData valueWithToken
+                        txc = newConstraints { txOwnOutputs = txOwnOutputs constraint }
                     in traceIfFalse "S5" {-"State transition invalid - constraints not satisfied by ScriptContext"-} (checkScriptContext @_ @s txc ptx)
             Nothing -> trace "S6" {-"State transition invalid - input is not a valid transition at the current state"-} False
     in checkOk && stateAndOutputsOk
