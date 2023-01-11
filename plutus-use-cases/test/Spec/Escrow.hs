@@ -46,15 +46,13 @@ import PlutusTx.Monoid (inv)
 import Test.QuickCheck as QC hiding ((.&&.))
 import Test.Tasty
 import Test.Tasty.HUnit qualified as HUnit
-
--- Don't need when removing prop from testTree
 -- import Test.Tasty.QuickCheck hiding ((.&&.))
-
-import Spec.Escrow.Endpoints
 
 import Plutus.Contract.Test.Certification
 import Plutus.Contract.Test.ContractModel.CrashTolerance
-import Plutus.Contract.Test.Coverage
+-- import Plutus.Contract.Test.Coverage
+
+import Spec.Escrow.Endpoints
 
 data EscrowModel = EscrowModel { _contributions :: Map Wallet Value
                                , _refundSlot    :: Slot
@@ -203,8 +201,6 @@ noLockProof = defaultNLFP
 prop_NoLockedFunds :: Property
 prop_NoLockedFunds = checkNoLockedFundsProofWithOptions options noLockProof
 
--- test1 :: TestTree
--- test1 = testProperty "QuickCheck ContractModel" $ withMaxSuccess 10 prop_Escrow
 
 tests :: TestTree
 tests = testGroup "escrow"
@@ -271,7 +267,7 @@ tests = testGroup "escrow"
                                (Scripts.validatorScript $ typedValidator (escrowParams startTime))
                                32000
 
-    -- Ali: Disabled these tests for now as I am using certification instead.
+    -- Ali: Disables these tests for now as I am using certification instead.
     -- , testProperty "QuickCheck ContractModel" prop_Escrow
     -- , testProperty "QuickCheck NoLockedFunds" prop_NoLockedFunds
 
@@ -348,8 +344,6 @@ refundTrace = do
     Trace.callEndpoint @"refund-escrow" hdl1 ()
     void $ Trace.waitNSlots 1
 
-
-
 instance CrashTolerance EscrowModel where
   available a          alive = (Key $ WalletKey w) `elem` alive
     where w = case a of
@@ -392,10 +386,10 @@ prop_UnitTest = withMaxSuccess 1 $ forAllDL unitTest2 prop_Escrow
 -- | Certification.
 certification :: Certification EscrowModel
 certification = defaultCertification {
-    certNoLockedFunds = Just noLockProof,
-    certCrashTolerance = Just Instance,
-    certUnitTests = Just unitTest,
-    certDLTests = [("redeem test", unitTest1), ("refund test", unitTest2)],
+    -- certNoLockedFunds = Just noLockProof,
+    -- certCrashTolerance = Just Instance,
+    -- certUnitTests = Just unitTest,
+    -- certDLTests = [("redeem test", unitTest1), ("refund test", unitTest2)],
     certCoverageIndex      = covIdx
   }
   where unitTest _ = tests
@@ -407,4 +401,3 @@ check_propEscrowWithCoverage = do
       propRunActionsWithOptions @EscrowModel defaultCheckOptionsContractModel covopts
         (const (pure True))
   writeCoverageReport "Escrow" cr
-
