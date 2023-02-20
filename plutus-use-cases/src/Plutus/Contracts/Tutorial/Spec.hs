@@ -362,16 +362,6 @@ instance CrashTolerance EscrowModel where
 prop_CrashTolerance :: Actions (WithCrashTolerance EscrowModel) -> Property
 prop_CrashTolerance = propRunActions_
 
-
-unitTest1 :: DL EscrowModel ()
-unitTest1 = do
-              val <- forAllQ $ chooseQ (10, 20)
-              action $ Pay w1 val
-              action $ Pay w2 val
-              action $ Pay w3 val
-              action $ Redeem w4
-
-
 unitTest2 :: DL EscrowModel ()
 unitTest2 = do
               val <- forAllQ $ chooseQ (10, 20)
