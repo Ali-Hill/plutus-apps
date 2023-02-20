@@ -50,7 +50,6 @@ import Data.ByteString.Lazy.Char8 (unpack)
 import Data.IntMap qualified as IntMap
 import Data.Maybe
 import GHC.Generics
-import Plutus.Contract.Test qualified as PC
 import Plutus.Contract.Test.Certification
 import Plutus.Contract.Test.ContractModel
 import Plutus.Contract.Test.ContractModel.CrashTolerance
@@ -199,7 +198,7 @@ runStandardProperty opts covIdx = liftIORep $ quickCheckWithCoverageAndResult
                                 $ \ covopts -> addOnTestEvents opts $
                                                propRunActionsWithOptions
                                                  @m
-                                                 (defaultCheckOptionsContractModel & PC.increaseTransactionLimits)
+                                                 defaultCheckOptionsContractModel
                                                  covopts
                                                  (\ _ -> pure True)
 

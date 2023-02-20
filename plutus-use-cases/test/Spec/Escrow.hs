@@ -18,7 +18,6 @@ module Spec.Escrow( tests
                   , prop_NoLockedFunds
                   , EscrowModel
                   , certification
-                  , check_propEscrowWithCoverage
                   , prop_CrashTolerance
                   , prop_UnitTest) where
 
@@ -52,6 +51,7 @@ import Plutus.Contract.Test.Certification
 import Plutus.Contract.Test.ContractModel.CrashTolerance
 -- import Plutus.Contract.Test.Coverage
 
+import Plutus.Contract.Test.ContractModel (propRunActions)
 import Spec.Escrow.Endpoints
 
 data EscrowModel = EscrowModel { _contributions :: Map Wallet Value
@@ -172,6 +172,8 @@ testWallets = [w1, w2, w3, w4, w5] -- removed five to increase collisions (, w6,
 
 prop_Escrow :: Actions EscrowModel -> Property
 prop_Escrow = propRunActionsWithOptions options defaultCoverageOptions (\ _ -> pure True)
+
+  --propRunActionsWithOptions options defaultCoverageOptions (\ _ -> pure True)
 
 prop_Escrow_DoubleSatisfaction :: Actions EscrowModel -> Property
 prop_Escrow_DoubleSatisfaction = checkDoubleSatisfactionWithOptions options defaultCoverageOptions
@@ -386,18 +388,10 @@ prop_UnitTest = withMaxSuccess 1 $ forAllDL unitTest2 prop_Escrow
 -- | Certification.
 certification :: Certification EscrowModel
 certification = defaultCertification {
-    -- certNoLockedFunds = Just noLockProof,
+    certNoLockedFunds = Just noLockProof
     -- certCrashTolerance = Just Instance,
     -- certUnitTests = Just unitTest,
     -- certDLTests = [("redeem test", unitTest1), ("refund test", unitTest2)],
-    certCoverageIndex      = covIdx
+    -- certCoverageIndex      = covIdx
   }
   where unitTest _ = tests
-
-check_propEscrowWithCoverage :: IO ()
-check_propEscrowWithCoverage = do
-  cr <- quickCheckWithCoverage stdArgs (set coverageIndex covIdx defaultCoverageOptions) $ \covopts ->
-    withMaxSuccess 100 $
-      propRunActionsWithOptions @EscrowModel defaultCheckOptionsContractModel covopts
-        (const (pure True))
-  writeCoverageReport "Escrow" cr

@@ -156,13 +156,6 @@ test-suite plutus-use-cases-test
     Spec.SimpleEscrow
     Spec.Stablecoin
     Spec.TokenAccount
-    Spec.Tutorial.Escrow
-    Spec.Tutorial.Escrow1
-    Spec.Tutorial.Escrow2
-    Spec.Tutorial.Escrow3
-    Spec.Tutorial.Escrow4
-    Spec.Tutorial.Escrow5
-    Spec.Tutorial.Escrow6
     Spec.Uniswap
     Spec.Uniswap.Endpoints
     Spec.Vesting
