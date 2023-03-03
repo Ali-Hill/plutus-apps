@@ -1,7 +1,7 @@
 # NOTE: This flake is only provided as interface to `bitte` and shouldn't be used otherwise
 #
 # Occasionally building flake builds will segfault. The workaround for this is to
-# disable the garbage collector  `GC_DONT_GC=1  nix build .#web-ghc-server
+# disable the garbage collector `GC_DONT_GC=1  nix build .#docs
 #
 # In case you are not sure if you should be using this flake, the answer is: No.
 {
@@ -13,17 +13,13 @@
     # We intentionally import nixpkgs and haskell.nix as non-flakes, to match the
     # flake-free normal build workflow exactly.
     nixpkgs = {
-      type = "github";
-      owner = "NixOS";
-      repo = "nixpkgs";
-      ref = "nixpkgs-unstable";
+      url = "github:NixOS/nixpkgs";
       flake = false;
     };
     haskell-nix = {
       url = "github:input-output-hk/haskell.nix";
       flake = false;
     };
-
     cardano-repo-tool = {
       url = "github:input-output-hk/cardano-repo-tool";
       flake = false;
@@ -81,9 +77,18 @@
       url = "github:input-output-hk/purescript-web-common";
       flake = false;
     };
+    CHaP = {
+      url = "github:input-output-hk/cardano-haskell-packages?ref=repo";
+      flake = false;
+    };
+    tullia = {
+      url = "github:input-output-hk/tullia";
+      # Can't follow since nixpkgs is set to flake=false here
+      # inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
-  outputs = { self, flake-utils, ... }@inputs:
+  outputs = { self, flake-utils, tullia, ... }@inputs:
     (flake-utils.lib.eachSystem [ "x86_64-linux" "x86_64-darwin" ] (system:
       let
         topLevel = import ./. {
@@ -94,15 +99,17 @@
       {
         packages = topLevel.bitte-packages;
         legacyPackages = topLevel;
-        iog.dapp = topLevel.plutus-apps.haskell.project;
-      })) // {
-      iog.dapp = self.legacyPackages.x86_64-linux.plutus-apps.haskell.project;
-    };
+
+        hydraJobs = import ./hydraJobs.nix { inherit system; };
+
+      } //
+
+      tullia.fromSimple system (import ./nix/tullia.nix)
+    ));
 
   nixConfig = {
     extra-substituters = [
       "https://cache.iog.io"
-      "https://hydra.iohk.io"
     ];
     extra-trusted-public-keys = [
       "hydra.iohk.io:f/Ea+s+dFdN+3Y/G+FDgSq+a5NEWhJGzdjvKNGv0/EQ="

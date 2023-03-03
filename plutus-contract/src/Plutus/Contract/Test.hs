@@ -38,6 +38,7 @@ module Plutus.Contract.Test(
     , assertValidatedTransactionCount
     , assertValidatedTransactionCountOfTotal
     , assertFailedTransaction
+    , assertEvaluationError
     , assertHooks
     , assertResponses
     , assertUserLog
@@ -47,11 +48,12 @@ module Plutus.Contract.Test(
     , assertAccumState
     , Shrinking(..)
     , assertResumableResult
-    , tx
-    , anyTx
+    , assertUnbalancedTx
+    , anyUnbalancedTx
     , assertEvents
     , walletFundsChange
     , walletFundsExactChange
+    , walletFundsAssetClassChange
     , walletPaidFees
     , waitingForSlot
     , valueAtAddress
@@ -82,7 +84,7 @@ import Control.Applicative (liftA2)
 import Control.Arrow ((>>>))
 import Control.Foldl (FoldM)
 import Control.Foldl qualified as L
-import Control.Lens (_Left, at, ix, makeLenses, over, preview, (&), (.~), (^.))
+import Control.Lens (_1, _Left, anyOf, at, folded, ix, makeLenses, makePrisms, over, preview, (&), (.~), (^.))
 import Control.Monad (guard, unless)
 import Control.Monad.Freer (Eff, interpretM, runM)
 import Control.Monad.Freer.Error (Error, runError)
@@ -112,6 +114,7 @@ import Test.Tasty.HUnit qualified as HUnit
 import Test.Tasty.Providers (TestTree)
 
 import Ledger.Ada qualified as Ada
+import Ledger.Address (toPlutusAddress)
 import Ledger.Constraints.OffChain (UnbalancedTx)
 import Plutus.Contract.Effects qualified as Requests
 import Plutus.Contract.Request qualified as Request
@@ -122,12 +125,12 @@ import PlutusTx (CompiledCode, FromData (..), getPir)
 import PlutusTx.Prelude qualified as P
 
 import Ledger qualified
-import Ledger.Address (Address)
+import Ledger.Address (CardanoAddress)
 import Ledger.Generators (GeneratorModel, Mockchain (..))
 import Ledger.Generators qualified as Gen
 import Ledger.Index (ValidationError)
 import Ledger.Slot (Slot)
-import Ledger.Value (Value)
+import Ledger.Value (AssetClass, Value, assetClassValueOf)
 import Plutus.V1.Ledger.Scripts qualified as PV1
 
 import Data.IORef
@@ -143,9 +146,13 @@ import Streaming qualified as S
 import Streaming.Prelude qualified as S
 import Wallet.Emulator (EmulatorEvent, EmulatorTimeEvent)
 import Wallet.Emulator.Chain (ChainEvent)
+import Wallet.Emulator.Error (WalletAPIError)
 import Wallet.Emulator.Folds (EmulatorFoldErr (..), Outcome (..), describeError, postMapM)
 import Wallet.Emulator.Folds qualified as Folds
 import Wallet.Emulator.Stream (filterLogLevel, foldEmulatorStreamM, initialChainState, initialDist)
+
+makePrisms ''Ledger.ScriptError
+makePrisms ''WalletAPIError
 
 type TestEffects = '[Reader InitialDistribution, Error EmulatorFoldErr, Writer (Doc Void), Writer CoverageData]
 newtype TracePredicateF a = TracePredicate (forall effs. Members TestEffects effs => FoldM (Eff effs) EmulatorEvent a)
@@ -341,7 +348,7 @@ endpointAvailable contract inst = TracePredicate $
                 tell @(Doc Void) ("missing endpoint:" <+> fromString (symbolVal (Proxy :: Proxy l)))
                 pure False
 
-tx
+assertUnbalancedTx
     :: forall w s e a.
        ( Monoid w
        )
@@ -350,7 +357,7 @@ tx
     -> (UnbalancedTx -> Bool)
     -> String
     -> TracePredicate
-tx contract inst flt nm = TracePredicate $
+assertUnbalancedTx contract inst flt nm = TracePredicate $
     flip postMapM (Folds.instanceTransactions contract inst) $ \unbalancedTxns -> do
         if any flt unbalancedTxns
         then pure True
@@ -383,12 +390,12 @@ assertEvents contract inst pr nm = TracePredicate $
         pure result
 
 -- | Check that the funds at an address meet some condition.
-valueAtAddress :: Address -> (Value -> Bool) -> TracePredicate
+valueAtAddress :: CardanoAddress -> (Value -> Bool) -> TracePredicate
 valueAtAddress address check = TracePredicate $
     flip postMapM (L.generalize $ Folds.valueAtAddress address) $ \vl -> do
         let result = check vl
         unless result $ do
-            tell @(Doc Void) ("Funds at address" <+> pretty address <+> "were" <+> pretty vl)
+            tell @(Doc Void) ("Funds at address" <+> pretty (toPlutusAddress address) <+> "were" <+> pretty vl)
         pure result
 
 
@@ -403,14 +410,14 @@ getTxOutDatum tx' txOut = Ledger.txOutDatumHash txOut >>= go
     where
         go datumHash = Map.lookup datumHash (Ledger.getCardanoTxData tx') >>= (Ledger.getDatum >>> fromBuiltinData @d)
 
-dataAtAddress :: forall d . FromData d => Address -> ([d] -> Bool) -> TracePredicate
+dataAtAddress :: forall d . FromData d => CardanoAddress -> ([d] -> Bool) -> TracePredicate
 dataAtAddress address check = TracePredicate $
     flip postMapM (L.generalize $ Folds.utxoAtAddress address) $ \utxo -> do
       let
         datums = mapMaybe (uncurry $ getTxOutDatum @d) $ toList utxo
         result = check datums
       unless result $ do
-          tell @(Doc Void) ("Data at address" <+> pretty address <+> "was"
+          tell @(Doc Void) ("Data at address" <+> pretty (toPlutusAddress address) <+> "was"
               <+> foldMap (foldMap pretty . Ledger.getCardanoTxData . fst) utxo)
       pure result
 
@@ -432,14 +439,14 @@ waitingForSlot contract inst sl = TracePredicate $
                 pure False
             _ -> pure True
 
-anyTx
+anyUnbalancedTx
     :: forall w s e a.
        ( Monoid w
        )
     => Contract w s e a
     -> ContractInstanceTag
     -> TracePredicate
-anyTx contract inst = tx contract inst (const True) "anyTx"
+anyUnbalancedTx contract inst = assertUnbalancedTx contract inst (const True) "anyUnbalancedTx"
 
 assertHooks
     :: forall w s e a.
@@ -588,35 +595,48 @@ walletFundsExactChange :: Wallet -> Value -> TracePredicate
 walletFundsExactChange = walletFundsChangeImpl True
 
 walletFundsChangeImpl :: Bool -> Wallet -> Value -> TracePredicate
-walletFundsChangeImpl exact w dlt' = TracePredicate $
-    flip postMapM (L.generalize $ (,,) <$> Folds.walletFunds w <*> Folds.walletFees w <*> Folds.walletsAdjustedTxEvents) $ \(finalValue', fees, allWalletsTxOutCosts) -> do
-        dist <- ask @InitialDistribution
-        let initialValue = fold (dist ^. at w)
-            finalValue = finalValue' P.+ if exact then mempty else fees
+walletFundsChangeImpl exact w dlt' =
+    walletFundsCheck w $ \initialValue finalValue' fees allWalletsTxOutCosts ->
+        let finalValue = finalValue' P.+ if exact then mempty else fees
             dlt = calculateDelta dlt' (Ada.fromValue initialValue) (Ada.fromValue finalValue) allWalletsTxOutCosts
             result = initialValue P.+ dlt == finalValue
-        unless result $ do
-            tell @(Doc Void) $ vsep $
-                [ "Expected funds of" <+> pretty w <+> "to change by"
-                , " " <+> viaShow dlt] ++
-                (guard exact >> ["  (excluding" <+> viaShow (Ada.getLovelace (Ada.fromValue fees)) <+> "lovelace in fees)" ]) ++
-                if initialValue == finalValue
-                then ["but they did not change"]
-                else ["but they changed by", " " <+> viaShow (finalValue P.- initialValue),
-                      "a discrepancy of",    " " <+> viaShow (finalValue P.- initialValue P.- dlt)]
-        pure result
+        in if result then Nothing else Just $
+            [ "Expected funds of" <+> pretty w <+> "to change by"
+            , " " <+> viaShow dlt] ++
+            (guard exact >> ["  (excluding" <+> viaShow (Ada.getLovelace (Ada.fromValue fees)) <+> "lovelace in fees)" ]) ++
+            if initialValue == finalValue
+            then ["but they did not change"]
+            else ["but they changed by", " " <+> viaShow (finalValue P.- initialValue),
+                    "a discrepancy of",    " " <+> viaShow (finalValue P.- initialValue P.- dlt)]
 
 walletPaidFees :: Wallet -> Value -> TracePredicate
-walletPaidFees w val = TracePredicate $
-    flip postMapM (L.generalize $ Folds.walletFees w) $ \fees -> do
-        let result = fees == val
-        unless result $ do
-            tell @(Doc Void) $ vsep
-                [ "Expected" <+> pretty w <+> "to pay"
-                , " " <+> viaShow val
-                , "lovelace in fees, but they paid"
-                , " " <+> viaShow fees ]
-        pure result
+walletPaidFees w val = walletFundsCheck w $ \_ _ fees _ -> do
+    if fees == val then Nothing else Just
+        [ "Expected" <+> pretty w <+> "to pay"
+        , " " <+> viaShow val
+        , "lovelace in fees, but they paid"
+        , " " <+> viaShow fees ]
+
+walletFundsAssetClassChange :: Wallet -> AssetClass -> Integer -> TracePredicate
+walletFundsAssetClassChange w ac dlt =
+    walletFundsCheck w $ \initialValue finalValue _ _ ->
+        let realDlt = (finalValue P.- initialValue) `assetClassValueOf` ac
+        in if realDlt == dlt then Nothing else Just $
+            [ "Expected amount of" <+> pretty ac <+> "in" <+> pretty w <+> "to change by"
+            , " " <+> pretty dlt <+> " but they changed by"
+            , " " <+> pretty realDlt ]
+
+walletFundsCheck :: Wallet -> (Value -> Value -> Value -> [Ada.Ada] -> Maybe [Doc Void]) -> TracePredicate
+walletFundsCheck w check = TracePredicate $
+    flip postMapM (L.generalize $ (,,) <$> Folds.walletFunds w <*> Folds.walletFees w <*> Folds.walletsAdjustedTxEvents) $ \(finalValue, fees, allWalletsTxOutCosts) -> do
+        dist <- ask @InitialDistribution
+        let initialValue = fold (dist ^. at w)
+            result = check initialValue finalValue fees allWalletsTxOutCosts
+        case result of
+            Nothing -> pure True
+            Just docLines -> do
+                tell $ vsep docLines
+                pure False
 
 -- | An assertion about the blockchain
 assertBlockchain :: ([Ledger.Block] -> Bool) -> TracePredicate
@@ -651,6 +671,14 @@ assertFailedTransaction predicate = TracePredicate $
             tell @(Doc Void) $ "No transactions failed to validate."
             pure False
         xs -> pure (all (\(_, t, e, _, _) -> onCardanoTx (\t' -> predicate t' e) (const True) t) xs)
+
+-- | Assert that at least one transaction failed to validate with an EvaluationError
+-- containing the given text.
+assertEvaluationError :: Text.Text -> TracePredicate
+assertEvaluationError errCode =
+  assertFailedTransaction
+    (const $ anyOf (Ledger._ScriptFailure . _EvaluationError . _1 . folded) (== errCode))
+
 
 -- | Assert that no transaction failed to validate.
 assertNoFailedTransactions :: TracePredicate

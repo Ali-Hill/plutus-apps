@@ -62,7 +62,7 @@ import Plutus.Trace.Emulator as Trace
 import PlutusTx.Coverage
 
 gameParam :: G.GameParam
-gameParam = G.GameParam (mockWalletPaymentPubKeyHash w1) (TimeSlot.scSlotZeroTime def)
+gameParam = G.GameParam (Ledger.toPlutusAddress $ mockWalletAddress w1) (TimeSlot.scSlotZeroTime def)
 
 options :: CheckOptions
 options = defaultCheckOptionsContractModel & (increaseTransactionLimits . increaseTransactionLimits)
@@ -119,6 +119,7 @@ instance ContractModel GameModel where
         Guess w old new val -> do
             Trace.callEndpoint @"guess" (handle $ WalletKey w)
                 GuessArgs { guessArgsGameParam = gameParam
+                          , guessTokenTarget = Ledger.toPlutusAddress $ mockWalletAddress w
                           , guessArgsOldSecret = old
                           , guessArgsNewSecret = secretArg new
                           , guessArgsValueTakenOut = Ada.lovelaceValueOf val
@@ -165,21 +166,21 @@ instance ContractModel GameModel where
             genGuessAmount = frequency $ [(1, pure val)] ++
                                          [(1, pure $ minOut)               | 2*minOut <= val] ++
                                          [(8, choose (minOut, val-minOut)) | minOut <= val-minOut]
-            minOut = Ada.getLovelace Ledger.minAdaTxOut
+            minOut = Ada.getLovelace Ledger.minAdaTxOutEstimated
             tok = s ^. contractState . hasToken
             val = s ^. contractState . gameValue
             genLockAction :: Gen (Action GameModel)
             genLockAction = do
               w <- genWallet
-              pure (Lock w) <*> genGuess <*> choose (Ada.getLovelace Ledger.minAdaTxOut, Ada.getLovelace (Ada.adaOf 100))
+              pure (Lock w) <*> genGuess <*> choose (Ada.getLovelace Ledger.minAdaTxOutEstimated, Ada.getLovelace (Ada.adaOf 100))
 
     -- The 'precondition' says when a particular command is allowed.
     precondition s cmd = case cmd of
             -- In order to lock funds, we need to satifsy the constraint where
             -- each tx out must have at least N Ada.
-            Lock _ _ v    -> v >= Ada.getLovelace Ledger.minAdaTxOut
+            Lock _ _ v    -> v >= Ada.getLovelace Ledger.minAdaTxOutEstimated
                           && isNothing tok
-            Guess w _ _ v -> (val == v || Ada.Lovelace (val - v) >= Ledger.minAdaTxOut) && tok == Just w
+            Guess w _ _ v -> (val == v || Ada.Lovelace (val - v) >= Ledger.minAdaTxOutEstimated) && tok == Just w
             GiveToken _   -> isJust tok
         where
             tok = s ^. contractState . hasToken
@@ -246,7 +247,7 @@ genGuess :: Gen String
 genGuess = QC.elements ["hello", "secret", "hunter2", "*******"]
 
 genValue :: Gen Integer
-genValue = choose (Ada.getLovelace Ledger.minAdaTxOut, 100_000_000)
+genValue = choose (Ada.getLovelace Ledger.minAdaTxOutEstimated, 100_000_000)
 
 -- Dynamic Logic ----------------------------------------------------------
 
@@ -278,7 +279,7 @@ noLockedFunds = do
     w      <- forAllQ $ elementsQ wallets
     secret <- viewContractState currentSecret
     val    <- viewContractState gameValue
-    when (val >= Ada.getLovelace Ledger.minAdaTxOut) $ do
+    when (val >= Ada.getLovelace Ledger.minAdaTxOutEstimated) $ do
         monitor $ label "Unlocking funds"
         action $ GiveToken w
         action $ Guess w secret "" val
@@ -312,30 +313,35 @@ prop_CheckNoLockedFundsProof = checkNoLockedFundsProofWithOptions options noLock
 
 -- * Unit tests
 
+validatorAddress :: Ledger.CardanoAddress
+validatorAddress
+  = Scripts.validatorCardanoAddress Ledger.testnet
+  $ G.typedValidator gameParam
+
 tests :: TestTree
 tests =
     testGroup "game state machine with secret arguments tests"
     [ checkPredicateOptions options "run a successful game trace"
         (walletFundsChange w2 (Ada.adaValueOf 3 <> guessTokenVal)
-        .&&. valueAtAddress (Scripts.validatorAddress $ G.typedValidator gameParam) (Ada.adaValueOf 5 ==)
+        .&&. valueAtAddress validatorAddress (Ada.adaValueOf 5 ==)
         .&&. walletFundsChange w1 (Ada.adaValueOf (-8)))
         successTrace
 
     , checkPredicateOptions options "run a 2nd successful game trace"
         (walletFundsChange w2 (Ada.adaValueOf 3)
-        .&&. valueAtAddress (Scripts.validatorAddress $ G.typedValidator gameParam) (Ada.adaValueOf 0 ==)
+        .&&. valueAtAddress validatorAddress (Ada.adaValueOf 0 ==)
         .&&. walletFundsChange w1 (Ada.adaValueOf (-8))
         .&&. walletFundsChange w3 (Ada.adaValueOf 5 <> guessTokenVal))
         successTrace2
 
     , checkPredicateOptions options "run a successful game trace where we try to leave 1 Ada in the script address"
         (walletFundsChange w1 (Ada.toValue (-2_000_000) <> guessTokenVal)
-        .&&. valueAtAddress (Scripts.validatorAddress $ G.typedValidator gameParam) (Ada.toValue 2_000_000 ==))
+        .&&. valueAtAddress validatorAddress (Ada.toValue 2_000_000 ==))
         traceLeaveTwoAdaInScript
 
     , checkPredicateOptions options "run a failed trace"
         (walletFundsChange w2 (Ada.toValue 2_000_000 <> guessTokenVal)
-        .&&. valueAtAddress (Scripts.validatorAddress $ G.typedValidator gameParam) (Ada.adaValueOf 8 ==)
+        .&&. valueAtAddress validatorAddress (Ada.adaValueOf 8 ==)
         .&&. walletFundsChange w1 (Ada.toValue (-2_000_000) <> Ada.adaValueOf (-8)))
         failTrace
 
@@ -377,17 +383,17 @@ runTestsWithCoverage = do
     coverageTests ref = testGroup "game state machine tests"
                          [ checkPredicateCoverageOptions options "run a successful game trace"
                             ref
-                            (walletFundsChange w2 (Ada.toValue Ledger.minAdaTxOut <> Ada.adaValueOf 3 <> guessTokenVal)
-                            .&&. valueAtAddress (Scripts.validatorAddress $ G.typedValidator gameParam) (Ada.adaValueOf 5 ==)
-                            .&&. walletFundsChange w1 (Ada.toValue (-Ledger.minAdaTxOut) <> Ada.adaValueOf (-8)))
+                            (walletFundsChange w2 (Ada.toValue Ledger.minAdaTxOutEstimated <> Ada.adaValueOf 3 <> guessTokenVal)
+                            .&&. valueAtAddress validatorAddress (Ada.adaValueOf 5 ==)
+                            .&&. walletFundsChange w1 (Ada.toValue (-Ledger.minAdaTxOutEstimated) <> Ada.adaValueOf (-8)))
                             successTrace
 
                         , checkPredicateCoverageOptions options "run a 2nd successful game trace"
                             ref
                             (walletFundsChange w2 (Ada.adaValueOf 3)
-                            .&&. valueAtAddress (Scripts.validatorAddress $ G.typedValidator gameParam) (Ada.adaValueOf 0 ==)
-                            .&&. walletFundsChange w1 (Ada.toValue (-Ledger.minAdaTxOut) <> Ada.adaValueOf (-8))
-                            .&&. walletFundsChange w3 (Ada.toValue Ledger.minAdaTxOut <> Ada.adaValueOf 5 <> guessTokenVal))
+                            .&&. valueAtAddress validatorAddress (Ada.adaValueOf 0 ==)
+                            .&&. walletFundsChange w1 (Ada.toValue (-Ledger.minAdaTxOutEstimated) <> Ada.adaValueOf (-8))
+                            .&&. walletFundsChange w3 (Ada.toValue Ledger.minAdaTxOutEstimated <> Ada.adaValueOf 5 <> guessTokenVal))
                             successTrace2
                         ]
 
@@ -408,6 +414,7 @@ successTrace = do
     _ <- Trace.waitNSlots 1
     hdl2 <- Trace.activateContractWallet w2 G.contract
     Trace.callEndpoint @"guess" hdl2 GuessArgs { guessArgsGameParam = gameParam
+                                               , guessTokenTarget = Ledger.toPlutusAddress $ mockWalletAddress w2
                                                , guessArgsOldSecret = "hello"
                                                , guessArgsNewSecret = secretArg "new secret"
                                                , guessArgsValueTakenOut = Ada.adaValueOf 3
@@ -423,6 +430,7 @@ successTrace2 = do
     _ <- Trace.waitNSlots 1
     hdl3 <- Trace.activateContractWallet w3 G.contract
     Trace.callEndpoint @"guess" hdl3 GuessArgs { guessArgsGameParam = gameParam
+                                               , guessTokenTarget = Ledger.toPlutusAddress $ mockWalletAddress w3
                                                , guessArgsOldSecret = "new secret"
                                                , guessArgsNewSecret = secretArg "hello"
                                                , guessArgsValueTakenOut = Ada.adaValueOf 5
@@ -440,6 +448,7 @@ traceLeaveTwoAdaInScript = do
                                             }
     _ <- Trace.waitNSlots 2
     _ <- Trace.callEndpoint @"guess" hdl GuessArgs { guessArgsGameParam = gameParam
+                                                   , guessTokenTarget = Ledger.toPlutusAddress $ mockWalletAddress w1
                                                    , guessArgsOldSecret = "hello"
                                                    , guessArgsNewSecret = secretArg "new secret"
                                                    , guessArgsValueTakenOut = Ada.adaValueOf 7
@@ -460,6 +469,7 @@ failTrace = do
     _ <- Trace.waitNSlots 1
     hdl2 <- Trace.activateContractWallet w2 G.contract
     _ <- Trace.callEndpoint @"guess" hdl2 GuessArgs { guessArgsGameParam = gameParam
+                                                    , guessTokenTarget = Ledger.toPlutusAddress $ mockWalletAddress w2
                                                     , guessArgsOldSecret = "hola"
                                                     , guessArgsNewSecret = secretArg "new secret"
                                                     , guessArgsValueTakenOut = Ada.adaValueOf 3
@@ -482,7 +492,7 @@ certification = defaultCertification {
   where
     unitTest ref =
       checkPredicateCoverageOptions options "run a successful game trace" ref
-        (walletFundsChange w2 (Ada.toValue Ledger.minAdaTxOut <> Ada.adaValueOf 3 <> guessTokenVal)
-        .&&. valueAtAddress (Scripts.validatorAddress $ G.typedValidator gameParam) (Ada.adaValueOf 5 ==)
-        .&&. walletFundsChange w1 (Ada.toValue (-Ledger.minAdaTxOut) <> Ada.adaValueOf (-8)))
+        (walletFundsChange w2 (Ada.toValue Ledger.minAdaTxOutEstimated <> Ada.adaValueOf 3 <> guessTokenVal)
+        .&&. valueAtAddress validatorAddress (Ada.adaValueOf 5 ==)
+        .&&. walletFundsChange w1 (Ada.toValue (-Ledger.minAdaTxOutEstimated) <> Ada.adaValueOf (-8)))
         successTrace

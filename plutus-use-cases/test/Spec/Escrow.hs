@@ -16,11 +16,7 @@ module Spec.Escrow( tests
                   , prop_Escrow_DoubleSatisfaction
                   , prop_FinishEscrow
                   , prop_NoLockedFunds
-                  , EscrowModel
-                  , certification
-                  , check_propEscrowWithCoverage
-                  , prop_CrashTolerance
-                  , prop_UnitTest) where
+                  , EscrowModel) where
 
 import Control.Lens hiding (both)
 import Control.Monad (void, when)
@@ -30,7 +26,7 @@ import Data.Foldable
 import Data.Map (Map)
 import Data.Map qualified as Map
 
-import Ledger (Slot (..), minAdaTxOut)
+import Ledger (Slot (..), minAdaTxOutEstimated)
 import Ledger.Ada qualified as Ada
 import Ledger.Time (POSIXTime)
 import Ledger.TimeSlot qualified as TimeSlot
@@ -47,15 +43,9 @@ import PlutusTx.Monoid (inv)
 import Test.QuickCheck as QC hiding ((.&&.))
 import Test.Tasty
 import Test.Tasty.HUnit qualified as HUnit
-
--- Don't need when removing prop from testTree
--- import Test.Tasty.QuickCheck hiding ((.&&.))
+import Test.Tasty.QuickCheck hiding ((.&&.))
 
 import Spec.Escrow.Endpoints
-
-import Plutus.Contract.Test.Certification
-import Plutus.Contract.Test.ContractModel.CrashTolerance
-import Plutus.Contract.Test.Coverage
 
 data EscrowModel = EscrowModel { _contributions :: Map Wallet Value
                                , _refundSlot    :: Slot
@@ -136,7 +126,7 @@ instance ContractModel EscrowModel where
     Refund w -> s ^. currentSlot >= s ^. contractState . refundSlot
              && Nothing /= (s ^. contractState . contributions . at w)
     Pay _ v -> s ^. currentSlot + 1 < s ^. contractState . refundSlot
-            && Ada.adaValueOf (fromInteger v) `geq` Ada.toValue minAdaTxOut
+            && Ada.adaValueOf (fromInteger v) `geq` Ada.toValue minAdaTxOutEstimated
     BadRefund w w' -> s ^. currentSlot < s ^. contractState . refundSlot - 2  -- why -2?
                    || w /= w'
 
@@ -204,15 +194,13 @@ noLockProof = defaultNLFP
 prop_NoLockedFunds :: Property
 prop_NoLockedFunds = checkNoLockedFundsProofWithOptions options noLockProof
 
--- test1 :: TestTree
--- test1 = testProperty "QuickCheck ContractModel" $ withMaxSuccess 10 prop_Escrow
 
 tests :: TestTree
 tests = testGroup "escrow"
     [ let con = void $ payEp @() @EscrowSchema @EscrowError (escrowParams startTime) in
       checkPredicateOptions options "can pay"
         ( assertDone con (Trace.walletInstanceTag w1) (const True) "escrow pay not done"
-        .&&. walletFundsChange w1 (Ada.adaValueOf (-100))
+        .&&. walletFundsChange w1 (Ada.adaValueOf (-10))
         )
         $ do
           hdl <- Trace.activateContractWallet w1 con
@@ -272,9 +260,8 @@ tests = testGroup "escrow"
                                (Scripts.validatorScript $ typedValidator (escrowParams startTime))
                                32000
 
-    -- Ali: Disabled these tests for now as I am using certification instead.
-    -- , testProperty "QuickCheck ContractModel" prop_Escrow
-    -- , testProperty "QuickCheck NoLockedFunds" prop_NoLockedFunds
+    , testProperty "QuickCheck ContractModel" prop_Escrow
+    , testProperty "QuickCheck NoLockedFunds" prop_NoLockedFunds
 
     -- TODO: commented because the test fails after 'CardanoTx(Both)' was deleted.
     -- The fix would be to start using CardanoTx instead of EmulatorTx in 'DoubleSatisfation.doubleSatisfactionCandidates'.
@@ -348,65 +335,3 @@ refundTrace = do
     _ <- Trace.waitNSlots 100
     Trace.callEndpoint @"refund-escrow" hdl1 ()
     void $ Trace.waitNSlots 1
-
-
-
-instance CrashTolerance EscrowModel where
-  available a          alive = (Key $ WalletKey w) `elem` alive
-    where w = case a of
-                Pay w _       -> w
-                Redeem w      -> w
-                Refund w      -> w
-                BadRefund w _ -> w
-
-  restartArguments _ WalletKey{} = ()
-
-prop_CrashTolerance :: Actions (WithCrashTolerance EscrowModel) -> Property
-prop_CrashTolerance = propRunActions_
-
-
-unitTest1 :: DL EscrowModel ()
-unitTest1 = do
-              val <- forAllQ $ chooseQ (10, 20)
-              action $ Pay w1 val
-              action $ Pay w2 val
-              action $ Pay w3 val
-              action $ Redeem w4
-
-
-unitTest2 :: DL EscrowModel ()
-unitTest2 = do
-              val <- forAllQ $ chooseQ (10, 20)
-              action $ Pay w1 val
-              waitUntilDL 100
-              action $ Refund w1
-
-
--- unitTestFail :: DL EscrowModel ()
--- unitTestFail = do
---              action $ Redeem w4
-
-prop_UnitTest :: Property
-prop_UnitTest = withMaxSuccess 1 $ forAllDL unitTest2 prop_Escrow
-
-
--- | Certification.
-certification :: Certification EscrowModel
-certification = defaultCertification {
-    certNoLockedFunds = Just noLockProof,
-    certCrashTolerance = Just Instance,
-    certUnitTests = Just unitTest,
-    certDLTests = [("redeem test", unitTest1), ("refund test", unitTest2)],
-    certCoverageIndex      = covIdx
-  }
-  where unitTest _ = tests
-
-check_propEscrowWithCoverage :: IO ()
-check_propEscrowWithCoverage = do
-  cr <- quickCheckWithCoverage stdArgs (set coverageIndex covIdx defaultCoverageOptions) $ \covopts ->
-    withMaxSuccess 100 $
-      propRunActionsWithOptions @EscrowModel defaultCheckOptionsContractModel covopts
-        (const (pure True))
-  writeCoverageReport "Escrow" cr
-
-

@@ -19,6 +19,7 @@ import Data.ByteString.Lazy qualified as LBS
 import Data.ByteString.Short qualified as SBS
 import Data.Functor (($>))
 import Data.List.NonEmpty (NonEmpty ((:|)))
+import Data.List.NonEmpty qualified as NE
 import Data.Map qualified as Map
 import Data.Set qualified as Set
 import GHC.Stack qualified as GHC
@@ -35,7 +36,7 @@ import Hedgehog.Extras.Stock.IO.Network.Sprocket qualified as IO
 import Hedgehog.Extras.Test qualified as HE
 import Hedgehog.Extras.Test.Base qualified as H
 import Test.Tasty (TestTree, testGroup)
--- import Test.Tasty.Hedgehog (testPropertyNamed)
+import Test.Tasty.Hedgehog (testPropertyNamed)
 
 import Cardano.Api qualified as C
 import Cardano.Api.Shelley qualified as C
@@ -57,11 +58,11 @@ import Hedgehog.Extras qualified as H
 import Marconi.Index.ScriptTx qualified as ScriptTx
 import Marconi.Indexers qualified as M
 import Marconi.Logging ()
+import RewindableIndex.Storable qualified as Storable
 
 tests :: TestTree
 tests = testGroup "Integration"
-  [ -- Uncomment when bug #775 on github is fixed (PLT-1068)
-    -- testPropertyNamed "prop_script_hash_in_local_testnet_tx_match" "testIndex" testIndex
+  [ testPropertyNamed "prop_script_hash_in_local_testnet_tx_match" "testIndex" testIndex
   ]
 
 {- | We test the script transaction indexer by setting up a testnet,
@@ -88,7 +89,7 @@ testIndex = H.integration . HE.runFinallies . workspace "chairman" $ \tempAbsBas
   -- can write index updates to it and we can await for them (also
   -- making us not need threadDelay)
   indexedTxs <- liftIO IO.newChan
-  let writeScriptUpdate (ScriptTx.ScriptTxUpdate txScripts _slotNo) = case txScripts of
+  let writeScriptUpdate (ScriptTx.ScriptTxEvent txScripts _slotNo) = case txScripts of
         (x : xs) -> IO.writeChan indexedTxs $ x :| xs
         _        -> pure ()
 
@@ -98,7 +99,7 @@ testIndex = H.integration . HE.runFinallies . workspace "chairman" $ \tempAbsBas
 
     coordinator <- M.initialCoordinator 1
     ch <- IO.atomically . IO.dupTChan $ M._channel coordinator
-    (loop, indexer) <- M.scriptTxWorker_ (\_ update -> writeScriptUpdate update $> []) (ScriptTx.Depth 0) coordinator ch sqliteDb
+    (loop, indexer) <- M.scriptTxWorker_ (\update -> writeScriptUpdate update $> []) (ScriptTx.Depth 1) coordinator ch sqliteDb
 
     -- Receive ChainSyncEvents and pass them on to indexer's channel
     void $ IO.forkIO $ do
@@ -287,7 +288,6 @@ testIndex = H.integration . HE.runFinallies . workspace "chairman" $ \tempAbsBas
 
   submitTx localNodeConnectInfo tx2
 
-
   {- Test if what the indexer got is what we sent.
 
   We test both of (1) what we get from `onInsert` callback and (2)
@@ -296,9 +296,15 @@ testIndex = H.integration . HE.runFinallies . workspace "chairman" $ \tempAbsBas
   because the indexer runs in a separate thread and there is no way
   of awaiting the data to be flushed into the database. -}
 
-  (ScriptTx.TxCbor tx, indexedScriptHashes) :| _ <- liftIO $ IO.readChan indexedTxs
+  indexedWithScriptHashes <- liftIO $ IO.readChan indexedTxs
 
-  ScriptTx.ScriptAddress indexedScriptHash <- headM indexedScriptHashes
+  -- We have to filter out the txs the empty scripts hashes because
+  -- sometimes the RollForward event contains a block with the first transaction 'tx1'
+  -- which has no scripts. The test fails because of that in 'headM indexedScriptHashes'.
+  -- For more details see https://github.com/input-output-hk/plutus-apps/issues/775
+  let (ScriptTx.TxCbor tx, indexedScriptHashes) = head $ NE.filter (\(_, hashes) -> hashes /= []) indexedWithScriptHashes
+
+  ScriptTx.ScriptTxAddress indexedScriptHash <- headM indexedScriptHashes
 
   indexedTx2 :: C.Tx C.AlonzoEra <- H.leftFail $ C.deserialiseFromCBOR (C.AsTx C.AsAlonzoEra) tx
 
@@ -310,7 +316,11 @@ testIndex = H.integration . HE.runFinallies . workspace "chairman" $ \tempAbsBas
     let
       queryLoop n = do
         H.threadDelay 250_000 -- wait 250ms before querying
-        txCbors <- liftIO $ ScriptTx.query indexer (ScriptTx.ScriptAddress plutusScriptHash) []
+        -- With the new indexer, this should pass right away (by finding the in-memory
+        -- transaction. However, because the indexer is not updated by the indexer thread
+        -- it's memory buffer will remain empty. So this will only test that the event
+        -- is present in the database.
+        ScriptTx.ScriptTxResult txCbors <- liftIO $ Storable.query Storable.QEverything indexer (ScriptTx.ScriptTxAddress plutusScriptHash)
         case txCbors of
           result : _ -> pure result
           _          -> queryLoop (n + 1)

@@ -54,11 +54,16 @@ library
     Plutus.Contracts.Stablecoin
     Plutus.Contracts.Swap
     Plutus.Contracts.TokenAccount
-    Plutus.Contracts.Tutorial.Endpoints
     Plutus.Contracts.Tutorial.Escrow
     Plutus.Contracts.Tutorial.EscrowStrict
-    Plutus.Contracts.Tutorial.Spec
-    
+    Plutus.Contracts.Uniswap
+    Plutus.Contracts.Uniswap.OffChain
+    Plutus.Contracts.Uniswap.OnChain
+    Plutus.Contracts.Uniswap.Pool
+    Plutus.Contracts.Uniswap.Trace
+    Plutus.Contracts.Uniswap.Types
+    Plutus.Contracts.Vesting
+
   hs-source-dirs:     src
   default-language:   Haskell2010
   default-extensions:
@@ -86,10 +91,7 @@ library
   -- Local components
   --------------------
   build-depends:
-      data-default
-    , plutus-contract-certification
-    , QuickCheck
-    , playground-common          >=1.0.0
+      playground-common          >=1.0.0
     , plutus-chain-index-core    >=1.0.0
     , plutus-contract            >=1.0.0
     , plutus-core                >=1.0.0
@@ -124,8 +126,6 @@ library
     , streaming
     , template-haskell
     , text
-    , tasty -any
-    , tasty-hunit
 
   if flag(defer-plugin-errors)
     ghc-options: -fplugin-opt PlutusTx.Plugin:defer-errors
@@ -139,6 +139,8 @@ test-suite plutus-use-cases-test
     Spec.Crowdfunding
     Spec.Currency
     Spec.ErrorHandling
+    Spec.Escrow
+    Spec.Escrow.Endpoints
     Spec.Future
     Spec.Game
     Spec.GameStateMachine
@@ -232,6 +234,8 @@ executable plutus-use-cases-scripts
     Spec.Crowdfunding
     Spec.Currency
     Spec.ErrorHandling
+    Spec.Escrow
+    Spec.Escrow.Endpoints
     Spec.Future
     Spec.Game
     Spec.GameStateMachine

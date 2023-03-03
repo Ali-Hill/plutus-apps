@@ -21,14 +21,14 @@ import Data.Aeson (FromJSON, ToJSON)
 import Data.Text qualified as T
 import GHC.Generics (Generic)
 import Ledger (Ada, PaymentPubKeyHash (unPaymentPubKeyHash), ScriptContext (ScriptContext, scriptContextTxInfo),
-               valuePaidTo)
+               pNetworkId, valuePaidTo)
 import Ledger.Ada qualified as Ada
 import Ledger.Constraints qualified as Constraints
 import Ledger.Typed.Scripts qualified as Scripts
-import Plutus.Contract (Contract, Endpoint, Promise, endpoint, logInfo, selectList, submitTxConstraints,
+import Plutus.Contract (Contract, Endpoint, Promise, endpoint, getParams, logInfo, selectList, submitTxConstraints,
                         submitTxConstraintsSpending, type (.\/), utxosAt)
 import PlutusTx qualified
-import PlutusTx.Prelude (Bool, Semigroup ((<>)), ($), (&&), (-), (.), (>=))
+import PlutusTx.Prelude (Bool, Semigroup ((<>)), ($), (&&), (-), (.), (<$>), (>=))
 import Prelude qualified as Haskell
 import Schema (ToSchema)
 import Wallet.Emulator.Wallet (Wallet, mockWalletPaymentPubKeyHash)
@@ -66,7 +66,7 @@ splitValidator :: Scripts.TypedValidator Split
 splitValidator = Scripts.mkTypedValidator @Split
     $$(PlutusTx.compile [|| validateSplit ||])
     $$(PlutusTx.compile [|| wrap ||]) where
-        wrap = Scripts.mkUntypedValidator @SplitData @()
+        wrap = Scripts.mkUntypedValidator @ScriptContext @SplitData @()
 
 -- BLOCK4
 
@@ -106,14 +106,15 @@ mkSplitData LockArgs{recipient1Wallet, recipient2Wallet, totalAda} =
 lockFunds :: SplitData -> Contract () SplitSchema T.Text ()
 lockFunds s@SplitData{amount} = do
     logInfo $ "Locking " <> Haskell.show amount
-    let constraints = Constraints.mustPayToTheScript s (Ada.toValue amount)
+    let constraints = Constraints.mustPayToTheScriptWithDatumHash s (Ada.toValue amount)
     void $ submitTxConstraints splitValidator constraints
 
 -- BLOCK8
 
 unlockFunds :: SplitData -> Contract () SplitSchema T.Text ()
 unlockFunds SplitData{recipient1, recipient2, amount} = do
-    let contractAddress = Scripts.validatorAddress splitValidator
+    networkId <- pNetworkId <$> getParams
+    let contractAddress = Scripts.validatorCardanoAddress networkId splitValidator
     utxos <- utxosAt contractAddress
     let half = Ada.divide amount 2
         tx =

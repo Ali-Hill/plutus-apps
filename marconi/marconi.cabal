@@ -1,6 +1,6 @@
 cabal-version: 3.0
 name:          marconi
-version:       0.1.0.0
+version:       1.0.0.0
 license:       Apache-2.0
 license-files:
   LICENSE
@@ -22,16 +22,21 @@ source-repository head
 common lang
   default-language:   Haskell2010
   default-extensions:
+    DeriveAnyClass
     DeriveFoldable
     DeriveFunctor
     DeriveGeneric
     DeriveLift
     DeriveTraversable
     ExplicitForAll
+    FlexibleInstances
     GeneralizedNewtypeDeriving
     ImportQualifiedPost
+    InstanceSigs
+    MultiParamTypeClasses
     ScopedTypeVariables
     StandaloneDeriving
+    TypeFamilies
 
   ghc-options:
     -Wall -Widentities -Wincomplete-record-updates
@@ -70,19 +75,22 @@ library
     , cardano-ledger-shelley
     , cardano-ledger-shelley-ma
     , iohk-monitoring
-    , plutus-ledger-api
 
   ------------------------
   -- Non-IOG dependencies
   ------------------------
   build-depends:
+    , async
     , base
     , bytestring
     , containers
+    , filepath
     , lens
     , mwc-random
     , optparse-applicative
+    , parsec
     , prettyprinter
+    , raw-strings-qq
     , serialise
     , sqlite-simple
     , stm
@@ -105,16 +113,14 @@ executable marconi
   --------------------------
   -- Other IOG dependencies
   --------------------------
-  build-depends:
-    , cardano-api
-    , iohk-monitoring
+  build-depends:  iohk-monitoring
 
   ------------------------
   -- Non-IOG dependencies
   ------------------------
   build-depends:
-    , base                  >=4.9 && <5
-    , optparse-applicative
+    , base           >=4.9 && <5
+    , directory
     , prettyprinter
 
 test-suite marconi-test
@@ -123,7 +129,9 @@ test-suite marconi-test
   type:           exitcode-stdio-1.0
   main-is:        Spec.hs
   hs-source-dirs: test
-  other-modules:  Integration
+  other-modules:
+    Integration
+    Spec.Utxo
 
   --------------------
   -- Local components
@@ -131,6 +139,7 @@ test-suite marconi-test
   build-depends:
     , cardano-streaming
     , marconi
+    , rewindable-index
 
   --------------------------
   -- Other IOG dependencies
@@ -148,17 +157,25 @@ test-suite marconi-test
   -- Non-IOG dependencies
   ------------------------
   build-depends:
-    , base             >=4.9 && <5
+    , base                  >=4.9 && <5
     , bytestring
     , containers
     , directory
     , filepath
     , hedgehog
     , hedgehog-extras
+    , lens
+    , optparse-applicative
     , prettyprinter
     , serialise
+    , sqlite-simple
     , stm
     , streaming
     , tasty
+    , tasty-golden
     , tasty-hedgehog
+    , tasty-hunit
     , temporary
+    , text
+
+-- , aeson

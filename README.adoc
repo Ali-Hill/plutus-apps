@@ -4,6 +4,8 @@
 :toc: left
 :reproducible:
 
+image:https://img.shields.io/badge/policy-Cardano%20Engineering%20Handbook-informational[link=https://input-output-hk.github.io/cardano-engineering-handbook]
+
 The Plutus Application Framework, part of the Plutus Platform, is a framework for developing distributed applications using the Cardano blockchain.
 For more information about the projects, see the <<user-documentation>>.
 
@@ -12,7 +14,6 @@ This repository contains:
 * Plutus Platform
 ** Libraries which implement the Plutus Application Framework, a framework for writing applications that work with Cardano.
 ** A selection of end-to-end usecases written with the Plutus Application Framework
-** The Plutus Playground, a web-based playground for learning and writing basic Plutus Applications.
 
 [IMPORTANT]
 ====
@@ -165,15 +166,6 @@ Run `cabal build plutus-pab` from the root to build the Plutus PAB library.
 
 See the link:./cabal.project[cabal project file] to see the other packages that you can build with `cabal`.
 
-=== Deployment
-
-The Plutus Playground is automatically deployed upon certain pushes to GitHub
-
-* https://plutus-playground-plutus-apps-staging.plutus.aws.iohkdev.io/[Staging] is deployed from every commit pushed to `main` (this URL subject to change)
-* https://playground.plutus.iohkdev.io/[Production] is deployed from every release tag (matching `vYYYY-MM-DD`)
-
-For more details, including instructions for setting up ad hoc testing deployments, see https://github.com/input-output-hk/plutus-ops[the plutus-ops repo].
-
 [[nix-advice]]
 == Nix
 
@@ -192,7 +184,7 @@ To set up the cache:
 . On non-NixOS, edit `/etc/nix/nix.conf` and add the following lines:
 +
 ----
-substituters = https://hydra.iohk.io https://cache.iog.io https://cache.nixos.org/
+substituters = https://cache.iog.io https://cache.nixos.org/
 trusted-public-keys = hydra.iohk.io:f/Ea+s+dFdN+3Y/G+FDgSq+a5NEWhJGzdjvKNGv0/EQ= cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY=
 extra-experimental-features = nix-command flakes
 ----
@@ -206,7 +198,7 @@ You must be a https://nixos.org/nix/manual/#ssec-multi-user[trusted user] to do 
 +
 ----
 nix = {
-  binaryCaches          = [ "https://hydra.iohk.io" "https://cache.iog.io" ];
+  binaryCaches          = [ "https://cache.iog.io" ];
   binaryCachePublicKeys = [ "hydra.iohk.io:f/Ea+s+dFdN+3Y/G+FDgSq+a5NEWhJGzdjvKNGv0/EQ=" ];
 };
 ----

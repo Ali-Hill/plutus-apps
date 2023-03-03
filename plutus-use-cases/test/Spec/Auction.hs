@@ -35,7 +35,7 @@ import Data.Default (Default (def))
 import Data.Monoid (Last (..))
 
 import Ledger (Ada, Slot (..), Value)
-import Ledger qualified as Ledger
+import Ledger qualified
 import Ledger.Ada qualified as Ada
 import Plutus.Contract hiding (currentSlot)
 import Plutus.Contract.Test hiding (not)
@@ -63,7 +63,7 @@ slotCfg = def
 params :: AuctionParams
 params =
     AuctionParams
-        { apOwner   = mockWalletPaymentPubKeyHash w1
+        { apOwner   = Ledger.toPlutusAddress $ mockWalletAddress w1
         , apAsset   = theToken
         , apEndTime = TimeSlot.scSlotZeroTime slotCfg + 100000
         }
@@ -131,7 +131,7 @@ trace1FinalState =
     AuctionOutput
         { auctionState = Last $ Just $ Finished $ HighestBid
             { highestBid = trace1WinningBid
-            , highestBidder = mockWalletPaymentPubKeyHash w2
+            , highestBidder = Ledger.toPlutusAddress $ mockWalletAddress w2
             }
         , auctionThreadToken = Last $ Just threadToken
         }
@@ -141,7 +141,7 @@ trace2FinalState =
     AuctionOutput
         { auctionState = Last $ Just $ Finished $ HighestBid
             { highestBid = trace2WinningBid
-            , highestBidder = mockWalletPaymentPubKeyHash w2
+            , highestBidder = Ledger.toPlutusAddress $ mockWalletAddress w2
             }
         , auctionThreadToken = Last $ Just threadToken
         }
@@ -275,7 +275,7 @@ instance ContractModel AuctionModel where
     shrinkAction _ (Bid w v) = [ Bid w v' | v' <- shrink v ]
 
     monitoring _ (Bid _ bid) =
-      classify (Ada.lovelaceOf bid == Ada.adaOf 100 - (Ledger.minAdaTxOut <> Ledger.maxFee))
+      classify (Ada.lovelaceOf bid == Ada.adaOf 100 - (Ledger.minAdaTxOutEstimated <> Ledger.maxFee))
         "Maximum bid reached"
     monitoring _ _ = id
 

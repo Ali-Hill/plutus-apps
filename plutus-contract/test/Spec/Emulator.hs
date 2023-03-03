@@ -12,17 +12,17 @@
 {-# OPTIONS_GHC -fno-warn-unused-do-bind #-}
 module Spec.Emulator(tests) where
 
-
+import Cardano.Api.Shelley qualified as C
 import Control.Lens ((&), (.~), (^.))
 import Control.Monad (void)
 import Control.Monad.Freer qualified as Eff
-import Control.Monad.Freer.Error qualified as E
 import Control.Monad.Freer.Writer (Writer, runWriter, tell)
 import Data.ByteString.Lazy qualified as BSL
 import Data.ByteString.Lazy.Char8 (pack)
 import Data.Default (Default (def))
 import Data.Foldable (fold)
 import Data.Map qualified as Map
+import Data.Maybe (fromMaybe)
 import Data.Text qualified as Text
 import Hedgehog (Property, forAll, property)
 import Hedgehog qualified
@@ -33,11 +33,12 @@ import Ledger (CardanoTx (..), Language (PlutusV1), OnChainTx (Valid), PaymentPu
                Versioned (Versioned, unversioned), cardanoTxMap, getCardanoTxOutRefs, getCardanoTxOutputs,
                mkValidatorScript, onCardanoTx, outputs, txOutValue, unitDatum, unitRedeemer, unspentOutputs)
 import Ledger.Ada qualified as Ada
+import Ledger.Fee (selectCoin)
 import Ledger.Generators (Mockchain (Mockchain))
 import Ledger.Generators qualified as Gen
 import Ledger.Index qualified as Index
 import Ledger.Params (Params (Params, pNetworkId))
-import Ledger.Tx.CardanoAPI (toCardanoTxOut, toCardanoTxOutDatumInTx)
+import Ledger.Tx.CardanoAPI (toCardanoAddressInEra, toCardanoTxOutDatumInTx, toCardanoTxOutValue)
 import Ledger.Validation qualified as Validation
 import Ledger.Value qualified as Value
 import Plutus.Contract.Test hiding (not)
@@ -46,17 +47,15 @@ import Plutus.Script.Utils.V1.Typed.Scripts (mkUntypedValidator)
 import Plutus.Trace (EmulatorTrace, PrintEffect (PrintLn))
 import Plutus.Trace qualified as Trace
 import Plutus.V1.Ledger.Contexts (ScriptContext)
-import Plutus.V2.Ledger.Api qualified as PV2
 import PlutusTx qualified
 import PlutusTx.Numeric qualified as P
 import PlutusTx.Prelude qualified as PlutusTx
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.Golden (goldenVsString)
 import Test.Tasty.Hedgehog (testPropertyNamed)
-import Wallet (WalletAPIError, payToPaymentPublicKeyHash_, submitTxn)
+import Wallet (payToPaymentPublicKeyHash_, submitTxn)
 import Wallet.API qualified as W
 import Wallet.Emulator.Chain qualified as Chain
-import Wallet.Emulator.Types (selectCoin)
 import Wallet.Graph qualified
 
 tests :: TestTree
@@ -138,12 +137,12 @@ selectCoinProp :: Property
 selectCoinProp = property $ do
     inputs <- forAll $ zip [(1 :: Integer) ..] <$> Gen.list (Range.linear 1 100) Gen.genValueNonNegative
     target <- forAll Gen.genValueNonNegative
-    let result = Eff.run $ E.runError @WalletAPIError (selectCoin inputs target)
+    let result = selectCoin inputs target
     case result of
         Left _ ->
             Hedgehog.assert $ not $ foldMap snd inputs `Value.geq` target
         Right (ins, change) ->
-            Hedgehog.assert $ foldMap snd ins == (target P.+ change)
+            Hedgehog.assert $ foldMap (fromMaybe mempty . (`lookup` inputs)) ins == (target P.+ change)
 
 txnUpdateUtxo :: Property
 txnUpdateUtxo = property $ do
@@ -211,13 +210,10 @@ invalidScript = property $ do
     let emulatorTx = onCardanoTx id (\_ -> error "Unexpected Cardano.Api.Tx") txn1
     let setOutputs o =
             either (const Hedgehog.failure) (pure . TxOut)
-          $ toCardanoTxOut pNetworkId
-              (\(PV2.OutputDatum d) -> Right $ toCardanoTxOutDatumInTx d)
-          $ PV2.TxOut
-                (mkValidatorAddress $ unversioned failValidator)
-                (txOutValue o)
-                (PV2.OutputDatum unitDatum)
-                Nothing
+          $ C.TxOut <$> toCardanoAddressInEra pNetworkId (mkValidatorAddress $ unversioned failValidator)
+            <*> toCardanoTxOutValue (txOutValue o)
+            <*> Right (toCardanoTxOutDatumInTx unitDatum)
+            <*> pure C.ReferenceScriptNone
     outs <- traverse setOutputs $ emulatorTx ^. outputs
     let scriptTxn = EmulatorTx $
             emulatorTx
@@ -241,16 +237,9 @@ invalidScript = property $ do
           invalidTxn
 
     Hedgehog.annotateShow signedInvalidTxn
-    Hedgehog.assert (signedInvalidTxn ==
-      Left (
-        Left ( Index.Phase2
-             , Index.ScriptFailure
-               ( EvaluationError
-                   ["I always fail everything"]
-                   "CekEvaluationFailure: An error has occurred:  User error:\nThe machine terminated because of an error, either from a built-in function or from an explicit use of 'error'."
-                )
-              )
-            )
+    Hedgehog.assert (case signedInvalidTxn of
+      Left (Left (Index.Phase2, Index.ScriptFailure (EvaluationError msgs _))) -> elem "I always fail everything" msgs
+      _                                                                        -> False
       )
     where
         failValidator :: Versioned Validator

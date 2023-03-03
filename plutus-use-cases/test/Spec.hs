@@ -5,6 +5,7 @@ import Spec.Auction qualified
 import Spec.Crowdfunding qualified
 import Spec.Currency qualified
 import Spec.ErrorHandling qualified
+import Spec.Escrow qualified
 import Spec.Future qualified
 import Spec.Game qualified
 import Spec.GameStateMachine qualified
@@ -38,6 +39,7 @@ tests =
     Spec.MultiSigStateMachine.tests,
     Spec.Currency.tests,
     Spec.PubKey.tests,
+    Spec.Escrow.tests,
     Spec.SimpleEscrow.tests,
     Spec.Game.tests,
     Spec.GameStateMachine.tests,

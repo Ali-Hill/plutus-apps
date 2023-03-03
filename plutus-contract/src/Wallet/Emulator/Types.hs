@@ -17,6 +17,7 @@ module Wallet.Emulator.Types(
     Wallet.Emulator.Wallet.WalletId(..),
     Crypto.XPrv,
     Crypto.XPub,
+    Wallet.Emulator.Wallet.mockWalletAddress,
     Wallet.Emulator.Wallet.mockWalletPaymentPubKey,
     Wallet.Emulator.Wallet.mockWalletPaymentPubKeyHash,
     addSignature,
@@ -61,8 +62,7 @@ module Wallet.Emulator.Types(
     Wallet.Emulator.Chain.currentSlot,
     processEmulated,
     Wallet.Emulator.MultiAgent.fundsDistribution,
-    Wallet.Emulator.MultiAgent.emLog,
-    Wallet.Emulator.Wallet.selectCoin
+    Wallet.Emulator.MultiAgent.emLog
     ) where
 
 import Cardano.Crypto.Wallet qualified as Crypto
