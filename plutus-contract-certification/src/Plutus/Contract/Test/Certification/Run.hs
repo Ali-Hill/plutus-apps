@@ -62,34 +62,7 @@ import Test.QuickCheck.Random as QC
 import Test.Tasty qualified as Tasty
 import Test.Tasty.Runners qualified as Tasty
 import Text.Read hiding (lift)
-import Plutus.Contract.Test ( CheckOptions, emulatorConfig, Wallet )
-import Cardano.Api.Shelley                ( ProtocolParameters(..) )
-import Ledger                             ( Params(..), protocolParamsL, Value )
-import Plutus.Trace.Emulator              ( EmulatorConfig (EmulatorConfig)
-                                          , params
-                                          )
-import Data.Default    ( def )
-import Data.Map as Map ( fromList )
-
-walletsWithValue :: [(Wallet,Value)]
-walletsWithValue =
-    [ (w, v <>  mconcat (map (`assetClassValue` 1_000_000) allAssetClasses))
-    | w <- wallets
-    ]
-  where
-    v :: Value
-    v = lovelaceValueOf 100_000_000
-
--- | Emulator configuration.
-emConfig :: EmulatorConfig
-emConfig = EmulatorConfig (Left $ fromList walletsWithValue) def
-
-increaseMaxCollateral' :: CheckOptions -> CheckOptions
-increaseMaxCollateral' = over (emulatorConfig . params) increaseMaxCollIn
-    where
-      increaseMaxCollIn :: Params -> Params
-      increaseMaxCollIn = over protocolParamsL $
-          \pp -> pp { protocolParamMaxCollateralInputs = Just 200 }
+import Plutus.Contract.Test ( CheckOptions )
 
 newtype JSONShowRead a = JSONShowRead a
 
@@ -219,25 +192,25 @@ addOnTestEvents opts prop
     addCallback ch r = r { callbacks = cb : callbacks r }
       where cb = PostTest NotCounterexample $ \ _st res -> writeChan ch $ QuickCheckTestEvent (ok res)
 
-runStandardProperty :: forall m. ContractModel m => CertificationOptions -> CoverageIndex -> CertMonad QC.Result
-runStandardProperty opts covIdx = liftIORep $ quickCheckWithCoverageAndResult
+runStandardProperty :: forall m. ContractModel m => CertificationOptions -> CoverageIndex -> CheckOptions -> CertMonad QC.Result
+runStandardProperty opts covIdx copts = liftIORep $ quickCheckWithCoverageAndResult
                                   (mkQCArgs opts)
                                   (set coverageIndex covIdx defaultCoverageOptions)
                                 $ \ covopts -> addOnTestEvents opts $
                                                propRunActionsWithOptions
                                                  @m
-                                                 (defaultCheckOptionsContractModel & emulatorConfig .~ emConfig & increaseMaxCollateral')
+                                                 copts
                                                  covopts
                                                  (\ _ -> pure True)
 
-checkDS :: forall m. ContractModel m => CertificationOptions -> CoverageIndex -> CertMonad QC.Result
-checkDS opts covIdx = liftIORep $ quickCheckWithCoverageAndResult
+checkDS :: forall m. ContractModel m => CertificationOptions -> CoverageIndex -> CheckOptions -> CertMonad QC.Result
+checkDS opts covIdx copts = liftIORep $ quickCheckWithCoverageAndResult
                                   (mkQCArgs opts)
                                   (set coverageIndex covIdx defaultCoverageOptions)
                                 $ \ covopts -> addOnTestEvents opts $
                                                checkDoubleSatisfactionWithOptions
                                                  @m
-                                                 (defaultCheckOptionsContractModel & emulatorConfig .~ emConfig & increaseMaxCollateral')
+                                                 copts
                                                  covopts
 
 checkNoLockedFunds :: ContractModel m => CertificationOptions -> NoLockedFundsProof m -> CertMonad QC.Result
@@ -283,16 +256,17 @@ checkWhitelist :: forall m. ContractModel m
                => Maybe Whitelist
                -> CertificationOptions
                -> CoverageIndex
+               -> CheckOptions
                -> CertMonad (Maybe QC.Result)
 checkWhitelist Nothing _ _           = return Nothing
-checkWhitelist (Just wl) opts covIdx = do
+checkWhitelist (Just wl) opts covIdx copts = do
   a <- wrapQCTask opts WhitelistTask
      $ liftIORep $ quickCheckWithCoverageAndResult
                   (mkQCArgs opts)
                   (set coverageIndex covIdx defaultCoverageOptions)
                   $ \ covopts -> addOnTestEvents opts $
                                  checkErrorWhitelistWithOptions @m
-                                    (defaultCheckOptionsContractModel & emulatorConfig .~ emConfig & increaseMaxCollateral')
+                                    copts
                                     covopts wl
   return (Just a)
 
@@ -300,9 +274,10 @@ checkDLTests :: forall m. ContractModel m
             => [(String, DL m ())]
             -> CertificationOptions
             -> CoverageIndex
+            -> CheckOptions
             -> CertMonad [(String, QC.Result)]
 checkDLTests [] _ _ = pure []
-checkDLTests tests opts covIdx =
+checkDLTests tests opts covIdx copts =
   wrapTask opts DLTestsTask (Prelude.all (QC.isSuccess . snd))
   $ sequence [(s,) <$> liftIORep (quickCheckWithCoverageAndResult
                                     (mkQCArgs opts)
@@ -311,7 +286,7 @@ checkDLTests tests opts covIdx =
                                         addOnTestEvents opts $
                                         forAllDL dl (propRunActionsWithOptions
                                                       @m
-                                                      (defaultCheckOptionsContractModel & emulatorConfig .~ emConfig & increaseMaxCollateral')
+                                                      copts
                                                       covopts (const $ pure True)))
              | (s, dl) <- tests ]
 
@@ -328,7 +303,7 @@ numTestsEvent opts | Just ch <- certEventChannel opts = liftIO $ writeChan ch $ 
                    | otherwise                        = pure ()
 
 certify :: forall m. ContractModel m => Certification m -> IO (CertificationReport m)
-certify = certifyWithOptions defaultCertificationOptions
+certify = certifyWithOptions defaultCertificationOptions defaultCheckOptionsContractModel
 
 wrapTask :: CertificationOptions
          -> CertificationTask
@@ -350,17 +325,18 @@ wrapQCTask opts task m = wrapTask opts task QC.isSuccess $ numTestsEvent opts >>
 certifyWithOptions :: forall m. ContractModel m
                    => CertificationOptions
                    -> Certification m
+                   -> CheckOptions
                    -> IO (CertificationReport m)
-certifyWithOptions opts Certification{..} = runCertMonad $ do
+certifyWithOptions opts Certification{..} copts = runCertMonad $ do
   -- Unit tests
   unitTests    <- wrapTask opts UnitTestsTask (Prelude.all Tasty.resultSuccessful)
                 $ fromMaybe [] <$> traverse runUnitTests certUnitTests
   -- Standard property
   qcRes        <- wrapQCTask opts StandardPropertyTask
-                $ runStandardProperty @m opts certCoverageIndex
+                $ runStandardProperty @m opts certCoverageIndex copts
   -- Double satisfaction
   dsRes        <- wrapQCTask opts DoubleSatisfactionTask
-                $ checkDS @m opts certCoverageIndex
+                $ checkDS @m opts certCoverageIndex copts
   -- No locked funds
   noLock       <- traverse (wrapQCTask opts NoLockedFundsTask . checkNoLockedFunds opts)
                            certNoLockedFunds
@@ -370,9 +346,9 @@ certifyWithOptions opts Certification{..} = runCertMonad $ do
   -- Crash tolerance
   ctRes        <- checkDerived @WithCrashTolerance certCrashTolerance opts CrashToleranceTask certCoverageIndex
   -- Whitelist
-  wlRes        <- checkWhitelist @m certWhitelist opts certCoverageIndex
+  wlRes        <- checkWhitelist @m certWhitelist opts certCoverageIndex copts
   -- DL tests
-  dlRes        <- checkDLTests @m certDLTests opts certCoverageIndex
+  dlRes        <- checkDLTests @m certDLTests opts certCoverageIndex copts
   case certEventChannel opts of
     Just ch -> liftIO $ writeChan ch CertificationDone
     Nothing -> pure ()
