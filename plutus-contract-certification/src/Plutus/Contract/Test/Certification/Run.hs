@@ -247,10 +247,11 @@ checkDerived :: forall d m c. (c m => ContractModel (d m))
              -> CertificationOptions
              -> CertificationTask
              -> CoverageIndex
+             -> CheckOptions
              -> CertMonad (Maybe QC.Result)
-checkDerived Nothing _ _ _                    = return Nothing
-checkDerived (Just Instance) opts task covIdx =
-  Just <$> wrapQCTask opts task (runStandardProperty @(d m) opts covIdx)
+checkDerived Nothing _ _ _ _                   = return Nothing
+checkDerived (Just Instance) opts task covIdx copts =
+  Just <$> wrapQCTask opts task (runStandardProperty @(d m) opts covIdx copts)
 
 checkWhitelist :: forall m. ContractModel m
                => Maybe Whitelist
@@ -258,7 +259,7 @@ checkWhitelist :: forall m. ContractModel m
                -> CoverageIndex
                -> CheckOptions
                -> CertMonad (Maybe QC.Result)
-checkWhitelist Nothing _ _           = return Nothing
+checkWhitelist Nothing _ _ _          = return Nothing
 checkWhitelist (Just wl) opts covIdx copts = do
   a <- wrapQCTask opts WhitelistTask
      $ liftIORep $ quickCheckWithCoverageAndResult
@@ -276,7 +277,7 @@ checkDLTests :: forall m. ContractModel m
             -> CoverageIndex
             -> CheckOptions
             -> CertMonad [(String, QC.Result)]
-checkDLTests [] _ _ = pure []
+checkDLTests [] _ _ _ = pure []
 checkDLTests tests opts covIdx copts =
   wrapTask opts DLTestsTask (Prelude.all (QC.isSuccess . snd))
   $ sequence [(s,) <$> liftIORep (quickCheckWithCoverageAndResult
@@ -344,7 +345,7 @@ certifyWithOptions opts Certification{..} copts = runCertMonad $ do
   noLockLight  <- traverse (wrapQCTask opts NoLockedFundsLightTask . checkNoLockedFundsLight opts)
                            certNoLockedFundsLight
   -- Crash tolerance
-  ctRes        <- checkDerived @WithCrashTolerance certCrashTolerance opts CrashToleranceTask certCoverageIndex
+  ctRes        <- checkDerived @WithCrashTolerance certCrashTolerance opts CrashToleranceTask certCoverageIndex copts
   -- Whitelist
   wlRes        <- checkWhitelist @m certWhitelist opts certCoverageIndex copts
   -- DL tests
