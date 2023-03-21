@@ -65,6 +65,7 @@ library
   build-depends:  
       cardano-api
     , plutus-ledger  
+    , data-default
                   
   ------------------------
   -- Non-IOG dependencies
