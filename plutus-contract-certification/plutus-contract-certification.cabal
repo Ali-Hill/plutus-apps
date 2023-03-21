@@ -62,8 +62,10 @@ library
   --------------------------
   -- Needed Temporarily 
   --------------------------
-  build-depends:  cardano-api
-
+  build-depends:  
+      cardano-api
+    , plutus-ledger  
+                  
   ------------------------
   -- Non-IOG dependencies
   ------------------------
