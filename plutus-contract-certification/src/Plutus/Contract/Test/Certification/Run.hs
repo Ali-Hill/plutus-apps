@@ -197,7 +197,7 @@ runStandardProperty opts covIdx = liftIORep $ quickCheckWithCoverageAndResult
                                 $ \ covopts -> addOnTestEvents opts $
                                                propRunActionsWithOptions
                                                  @m
-                                                 defaultCheckOptionsContractModel
+                                                 (defaultCheckOptionsContractModel & increaseMaxCollateral)
                                                  covopts
                                                  (\ _ -> pure True)
 
@@ -208,7 +208,7 @@ checkDS opts covIdx = liftIORep $ quickCheckWithCoverageAndResult
                                 $ \ covopts -> addOnTestEvents opts $
                                                checkDoubleSatisfactionWithOptions
                                                  @m
-                                                 defaultCheckOptionsContractModel
+                                                 (defaultCheckOptionsContractModel & increaseMaxCollateral)
                                                  covopts
 
 checkNoLockedFunds :: ContractModel m => CertificationOptions -> NoLockedFundsProof m -> CertMonad QC.Result
@@ -263,7 +263,7 @@ checkWhitelist (Just wl) opts covIdx = do
                   (set coverageIndex covIdx defaultCoverageOptions)
                   $ \ covopts -> addOnTestEvents opts $
                                  checkErrorWhitelistWithOptions @m
-                                    defaultCheckOptionsContractModel
+                                    (defaultCheckOptionsContractModel & increaseMaxCollateral)
                                     covopts wl
   return (Just a)
 
@@ -282,7 +282,7 @@ checkDLTests tests opts covIdx =
                                         addOnTestEvents opts $
                                         forAllDL dl (propRunActionsWithOptions
                                                       @m
-                                                      defaultCheckOptionsContractModel
+                                                      (defaultCheckOptionsContractModel & increaseMaxCollateral)
                                                       covopts (const $ pure True)))
              | (s, dl) <- tests ]
 
