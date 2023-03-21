@@ -62,9 +62,9 @@ import Test.QuickCheck.Random as QC
 import Test.Tasty qualified as Tasty
 import Test.Tasty.Runners qualified as Tasty
 import Text.Read hiding (lift)
-import Plutus.Contract.Test ( CheckOptions, emulatorConfig )
+import Plutus.Contract.Test ( CheckOptions, emulatorConfig, Wallet )
 import Cardano.Api.Shelley                ( ProtocolParameters(..) )
-import Ledger                             ( Params(..), protocolParamsL )
+import Ledger                             ( Params(..), protocolParamsL, Value )
 import Plutus.Trace.Emulator              ( EmulatorConfig (EmulatorConfig)
                                           , params
                                           )
