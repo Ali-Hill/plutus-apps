@@ -58,6 +58,11 @@ library
   -- Other IOG dependencies
   --------------------------
   build-depends:   plutus-tx >=1.0.0
+  
+  --------------------------
+  -- Needed Temporarily 
+  --------------------------
+  build-depends:  cardano-api
 
   ------------------------
   -- Non-IOG dependencies
