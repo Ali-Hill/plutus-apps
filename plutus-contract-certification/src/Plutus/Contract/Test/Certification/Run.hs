@@ -69,7 +69,15 @@ import Plutus.Trace.Emulator              ( EmulatorConfig (EmulatorConfig)
                                           )
 import Data.Default    ( def )
 import Data.Map as Map ( fromList )
-import Tests.Prop.Gen   ( walletsWithValue )
+
+walletsWithValue :: [(Wallet,Value)]
+walletsWithValue =
+    [ (w, v <>  mconcat (map (`assetClassValue` 1_000_000) allAssetClasses))
+    | w <- wallets
+    ]
+  where
+    v :: Value
+    v = lovelaceValueOf 100_000_000
 
 -- | Emulator configuration.
 emConfig :: EmulatorConfig
