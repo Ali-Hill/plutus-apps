@@ -68,6 +68,10 @@ import Plutus.Trace.Emulator              ( EmulatorConfig (EmulatorConfig)
                                           , params
                                           )
 
+-- | Emulator configuration.
+emConfig :: EmulatorConfig
+emConfig = EmulatorConfig (Left $ fromList walletsWithValue) def
+
 increaseMaxCollateral' :: CheckOptions -> CheckOptions
 increaseMaxCollateral' = over (emulatorConfig . params) increaseMaxCollIn
     where
@@ -210,7 +214,7 @@ runStandardProperty opts covIdx = liftIORep $ quickCheckWithCoverageAndResult
                                 $ \ covopts -> addOnTestEvents opts $
                                                propRunActionsWithOptions
                                                  @m
-                                                 (defaultCheckOptionsContractModel & increaseMaxCollateral')
+                                                 (defaultCheckOptionsContractModel & emulatorConfig .~ emConfig & increaseMaxCollateral')
                                                  covopts
                                                  (\ _ -> pure True)
 
@@ -221,7 +225,7 @@ checkDS opts covIdx = liftIORep $ quickCheckWithCoverageAndResult
                                 $ \ covopts -> addOnTestEvents opts $
                                                checkDoubleSatisfactionWithOptions
                                                  @m
-                                                 (defaultCheckOptionsContractModel & increaseMaxCollateral')
+                                                 (defaultCheckOptionsContractModel & emulatorConfig .~ emConfig & increaseMaxCollateral')
                                                  covopts
 
 checkNoLockedFunds :: ContractModel m => CertificationOptions -> NoLockedFundsProof m -> CertMonad QC.Result
@@ -276,7 +280,7 @@ checkWhitelist (Just wl) opts covIdx = do
                   (set coverageIndex covIdx defaultCoverageOptions)
                   $ \ covopts -> addOnTestEvents opts $
                                  checkErrorWhitelistWithOptions @m
-                                    (defaultCheckOptionsContractModel & increaseMaxCollateral')
+                                    (defaultCheckOptionsContractModel & emulatorConfig .~ emConfig & increaseMaxCollateral')
                                     covopts wl
   return (Just a)
 
@@ -295,7 +299,7 @@ checkDLTests tests opts covIdx =
                                         addOnTestEvents opts $
                                         forAllDL dl (propRunActionsWithOptions
                                                       @m
-                                                      (defaultCheckOptionsContractModel & increaseMaxCollateral')
+                                                      (defaultCheckOptionsContractModel & emulatorConfig .~ emConfig & increaseMaxCollateral')
                                                       covopts (const $ pure True)))
              | (s, dl) <- tests ]
 
