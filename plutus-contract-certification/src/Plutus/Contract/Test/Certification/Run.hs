@@ -63,6 +63,13 @@ import Test.Tasty.Runners qualified as Tasty
 import Text.Read hiding (lift)
 import Plutus.Contract.Test ( CheckOptions )
 
+increaseMaxCollateral' :: CheckOptions -> CheckOptions
+increaseMaxCollateral' = over (emulatorConfig . params) increaseMaxCollIn
+    where
+      increaseMaxCollIn :: Params -> Params
+      increaseMaxCollIn = over protocolParamsL $
+          \pp -> pp { protocolParamMaxCollateralInputs = Just 200 }
+
 newtype JSONShowRead a = JSONShowRead a
 
 instance Show a => ToJSON (JSONShowRead a) where
@@ -198,7 +205,7 @@ runStandardProperty opts covIdx = liftIORep $ quickCheckWithCoverageAndResult
                                 $ \ covopts -> addOnTestEvents opts $
                                                propRunActionsWithOptions
                                                  @m
-                                                 (defaultCheckOptionsContractModel & increaseMaxCollateral)
+                                                 (defaultCheckOptionsContractModel & increaseMaxCollateral')
                                                  covopts
                                                  (\ _ -> pure True)
 
@@ -209,7 +216,7 @@ checkDS opts covIdx = liftIORep $ quickCheckWithCoverageAndResult
                                 $ \ covopts -> addOnTestEvents opts $
                                                checkDoubleSatisfactionWithOptions
                                                  @m
-                                                 (defaultCheckOptionsContractModel & increaseMaxCollateral)
+                                                 (defaultCheckOptionsContractModel & increaseMaxCollateral')
                                                  covopts
 
 checkNoLockedFunds :: ContractModel m => CertificationOptions -> NoLockedFundsProof m -> CertMonad QC.Result
@@ -264,7 +271,7 @@ checkWhitelist (Just wl) opts covIdx = do
                   (set coverageIndex covIdx defaultCoverageOptions)
                   $ \ covopts -> addOnTestEvents opts $
                                  checkErrorWhitelistWithOptions @m
-                                    (defaultCheckOptionsContractModel & increaseMaxCollateral)
+                                    (defaultCheckOptionsContractModel & increaseMaxCollateral')
                                     covopts wl
   return (Just a)
 
@@ -283,7 +290,7 @@ checkDLTests tests opts covIdx =
                                         addOnTestEvents opts $
                                         forAllDL dl (propRunActionsWithOptions
                                                       @m
-                                                      (defaultCheckOptionsContractModel & increaseMaxCollateral)
+                                                      (defaultCheckOptionsContractModel & increaseMaxCollateral')
                                                       covopts (const $ pure True)))
              | (s, dl) <- tests ]
 
