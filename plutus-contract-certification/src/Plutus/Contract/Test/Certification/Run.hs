@@ -11,6 +11,7 @@
 {-# LANGUAGE TypeApplications      #-}
 {-# LANGUAGE UndecidableInstances  #-}
 {-# OPTIONS_GHC -fno-warn-orphans  #-}
+{-# LANGUAGE NumericUnderscores #-}
 
 module Plutus.Contract.Test.Certification.Run
   ( -- * A certification report holds all the necessary information
