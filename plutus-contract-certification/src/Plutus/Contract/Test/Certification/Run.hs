@@ -303,8 +303,8 @@ numTestsEvent :: CertificationOptions -> CertMonad ()
 numTestsEvent opts | Just ch <- certEventChannel opts = liftIO $ writeChan ch $ QuickCheckNumTestsEvent $ certOptNumTests opts
                    | otherwise                        = pure ()
 
-certify :: forall m. ContractModel m => Certification m -> CheckOptions -> IO (CertificationReport m)
-certify = certifyWithOptions defaultCertificationOptions defaultCheckOptionsContractModel
+certify :: forall m. ContractModel m => Certification m -> IO (CertificationReport m)
+certify m = certifyWithOptions defaultCertificationOptions m defaultCheckOptionsContractModel
 
 wrapTask :: CertificationOptions
          -> CertificationTask
