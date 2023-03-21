@@ -306,6 +306,9 @@ numTestsEvent opts | Just ch <- certEventChannel opts = liftIO $ writeChan ch $ 
 certify :: forall m. ContractModel m => Certification m -> IO (CertificationReport m)
 certify m = certifyWithOptions defaultCertificationOptions m defaultCheckOptionsContractModel
 
+certifyWithCheckOptions :: forall m. ContractModel m => Certification m -> CheckOptions -> IO (CertificationReport m)
+certifyWithCheckOptions m copts = certifyWithOptions defaultCertificationOptions m copts
+
 wrapTask :: CertificationOptions
          -> CertificationTask
          -> (r -> Bool)
