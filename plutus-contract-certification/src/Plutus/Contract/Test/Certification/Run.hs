@@ -61,6 +61,7 @@ import Test.QuickCheck.Random as QC
 import Test.Tasty qualified as Tasty
 import Test.Tasty.Runners qualified as Tasty
 import Text.Read hiding (lift)
+import Plutus.Contract.Test.CheckOptions
 
 newtype JSONShowRead a = JSONShowRead a
 
