@@ -38,6 +38,7 @@ module Plutus.Contract.Test.Certification.Run
   , defaultCertificationOptions
   , certify
   , certifyWithOptions
+  , certifyWithCheckOptions
   ) where
 
 import Control.Concurrent.Chan
