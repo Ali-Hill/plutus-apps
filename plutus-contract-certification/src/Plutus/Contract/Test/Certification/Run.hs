@@ -62,6 +62,7 @@ import Test.Tasty qualified as Tasty
 import Test.Tasty.Runners qualified as Tasty
 import Text.Read hiding (lift)
 import Plutus.Contract.Test ( CheckOptions )
+import Cardano.Api.Shelley                ( ProtocolParameters(..) )
 
 increaseMaxCollateral' :: CheckOptions -> CheckOptions
 increaseMaxCollateral' = over (emulatorConfig . params) increaseMaxCollIn
