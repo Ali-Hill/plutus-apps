@@ -67,6 +67,9 @@ import Ledger                             ( Params(..), protocolParamsL )
 import Plutus.Trace.Emulator              ( EmulatorConfig (EmulatorConfig)
                                           , params
                                           )
+import Data.Default    ( def )
+import Data.Map as Map ( fromList )
+import Tests.Prop.Gen   ( walletsWithValue )
 
 -- | Emulator configuration.
 emConfig :: EmulatorConfig
