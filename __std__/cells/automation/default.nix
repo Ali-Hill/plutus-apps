@@ -1,4 +1,4 @@
 { inputs, cell }@block:
 {
-  ciJobs = import ./ciJobs.nix block;
+  hydra-jobs = import ./hydra-jobs.nix block;
 }

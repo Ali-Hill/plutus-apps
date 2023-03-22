@@ -5,7 +5,7 @@
 , packages ? import ./. { inherit system enableHaskellProfiling sources sourcesOverride; }
 }:
 let
-  inherit (packages) pkgs plutus-apps docs webCommon;
+  inherit (packages) pkgs plutus-apps docs;
   inherit (pkgs) stdenv lib utillinux python3 nixpkgs-fmt glibcLocales;
   inherit (plutus-apps) haskell stylish-haskell sphinxcontrib-haddock sphinx-markdown-tables sphinxemoji scriv nix-pre-commit-hooks cabal-fmt;
 
@@ -23,14 +23,18 @@ let
         narHash = "sha256-3Rnj/g3KLzOW5YSieqsUa9IF1Td22Eskk5KuVsOFgEQ=";
       };
   }).defaultNix;
-  cardano-node = import
-    (pkgs.fetchgit {
-      url = "https://github.com/input-output-hk/cardano-node";
-      # A standard release compatible with the cardano-wallet commit above is always preferred.
-      rev = "1.35.4";
-      sha256 = "1j01m2cp2vdcl26zx9xmipr551v3b2rz9kfn9ik8byfwj1z7652r";
-    })
-    { };
+
+  cardano-node = (import sources.flake-compat {
+    inherit pkgs;
+    src = builtins.fetchTree
+      {
+        type = "github";
+        owner = "input-output-hk";
+        repo = "cardano-node";
+        rev = "ebc7be471b30e5931b35f9bbc236d21c375b91bb";
+        narHash = "sha256-WRRzfpDc+YVmTNbN9LNYY4dS8o21p/6NoKxtcZmoAcg=";
+      };
+  }).defaultNix;
 
   # For Sphinx, scriv, and ad-hoc usage
   pythonTools = python3.withPackages (ps: [
@@ -56,20 +60,13 @@ let
       cabal-fmt = cabal-fmt;
     };
     hooks = {
-      purs-tidy-hook = {
-        enable = true;
-        name = "purs-tidy";
-        entry = "${plutus-apps.purs-tidy}/bin/purs-tidy format-in-place";
-        files = "\\.purs$";
-        language = "system";
-      };
       stylish-haskell.enable = true;
       nixpkgs-fmt = {
         enable = true;
         # While nixpkgs-fmt does exclude patterns specified in `.ignore` this
         # does not appear to work inside the hook. For now we have to thus
         # maintain excludes here *and* in `./.ignore` and *keep them in sync*.
-        excludes = [ ".*nix/pkgs/haskell/materialized.*/.*" ".*/spago-packages.nix$" ];
+        excludes = [ ".*nix/pkgs/haskell/materialized.*/.*" ];
       };
       cabal-fmt.enable = true;
       shellcheck.enable = true;
@@ -116,28 +113,29 @@ let
   # local build inputs ( -> ./nix/pkgs/default.nix )
   localInputs = (with plutus-apps; [
     cabal-install
-    cardano-node.cardano-cli
-    cardano-node.cardano-node
+    cardano-node.packages.${pkgs.system}.cardano-cli
+    cardano-node.packages.${pkgs.system}.cardano-node
     cardano-wallet.packages.${pkgs.system}.cardano-wallet
     cardano-repo-tool
     docs.build-and-serve-docs
     fixPngOptimization
-    fix-purs-tidy
     fixCabalFmt
     fixStylishHaskell
     haskell-language-server
     haskell-language-server-wrapper
     hie-bios
     hlint
-    psa
-    purescript-language-server
-    purs-0_14_3
-    purs-tidy
-    spago
-    spago2nix
     stylish-haskell
-    updateClientDeps
   ]);
+
+  deprecation-warning = ''
+    echo -e "\033[0;33m*********************************************************************"
+    echo -e "* nix-shell is deprecated and will be gone on March 13th 2023.      *"
+    echo -e "* Please exit this shell and run 'nix develop' instead.             *"
+    echo -e "* For any problem with the new shell please notify @zeme-iohk       *"
+    echo -e "* and revert to using 'nix-shell' until fixed.                      *"
+    echo -e "*********************************************************************\033[0m"
+  '';
 
 in
 haskell.project.shellFor {
@@ -148,6 +146,7 @@ haskell.project.shellFor {
 
   shellHook = ''
     ${pre-commit-check.shellHook}
+    ${deprecation-warning}
   ''
   # Work around https://github.com/NixOS/nix/issues/3345, which makes
   # tests etc. run single-threaded in a nix-shell.
@@ -159,11 +158,10 @@ haskell.project.shellFor {
   ''
   + ''
     export GITHUB_SHA=$(git rev-parse HEAD)
-    export WEB_COMMON_SRC=${webCommon.cleanSrc}
 
-    # This is probably set by haskell.nix's shellFor, but it interferes 
+    # This is probably set by haskell.nix's shellFor, but it interferes
     # with the pythonTools in nativeBuildInputs above.
-    # This workaround will become obsolete soon once this respository 
+    # This workaround will become obsolete soon once this respository
     # is migrated to Standard.
     export PYTHONPATH=
   '';

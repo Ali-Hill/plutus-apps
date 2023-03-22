@@ -44,23 +44,24 @@ import Control.Monad (void)
 import Data.Aeson (FromJSON, ToJSON)
 import Data.ByteString.Char8 qualified as C
 import GHC.Generics (Generic)
-import Ledger (Address, POSIXTime, ScriptContext, TokenName, Value)
-import Ledger.Ada qualified as Ada
+import Ledger (Address, POSIXTime)
 import Ledger.Address.Orphans ()
-import Ledger.Constraints (TxConstraints)
-import Ledger.Constraints qualified as Constraints
+import Ledger.Tx.Constraints (TxConstraints)
+import Ledger.Tx.Constraints qualified as Constraints
 import Ledger.Typed.Scripts qualified as Scripts
-import Ledger.Value qualified as V
 import Plutus.Contract (AsContractError (_ContractError), Contract, ContractError, Endpoint, Promise, endpoint,
                         selectList, type (.\/))
 import Plutus.Contract.Secrets (SecretArgument, escape_sha2_256, extractSecret)
 import Plutus.Contract.StateMachine (State (State, stateData, stateValue), Void)
 import Plutus.Contract.StateMachine qualified as SM
-import Plutus.V1.Ledger.Scripts (MintingPolicyHash)
+import Plutus.Script.Utils.Ada qualified as Ada
+import Plutus.Script.Utils.V2.Scripts (MintingPolicyHash)
+import Plutus.Script.Utils.V2.Typed.Scripts qualified as V2
+import Plutus.Script.Utils.Value (TokenName, Value)
+import Plutus.Script.Utils.Value qualified as Value
 import PlutusTx qualified
 import PlutusTx.Prelude (Bool (False, True), BuiltinByteString, Eq, Maybe (Just, Nothing), check, sha2_256, toBuiltin,
                          traceIfFalse, ($), (&&), (-), (.), (<$>), (<>), (==), (>>))
-import Schema (ToSchema)
 
 import Plutus.Contract.Test.Coverage.Analysis
 import PlutusTx.Coverage
@@ -74,7 +75,7 @@ data GameParam = GameParam
     , gameParamStartTime :: POSIXTime
     -- ^ Starting time of the game
     } deriving (Haskell.Show, Generic)
-      deriving anyclass (ToJSON, FromJSON, ToSchema)
+      deriving anyclass (ToJSON, FromJSON)
 
 PlutusTx.makeLift ''GameParam
 
@@ -102,7 +103,7 @@ data LockArgs =
         , lockArgsValue     :: Value
         -- ^ Value that is locked by the contract initially
         } deriving stock (Haskell.Show, Generic)
-          deriving anyclass (ToJSON, FromJSON, ToSchema)
+          deriving anyclass (ToJSON, FromJSON)
 
 -- | Arguments for the @"guess"@ endpoint
 data GuessArgs =
@@ -118,7 +119,7 @@ data GuessArgs =
         , guessArgsValueTakenOut :: Value
         -- ^ How much to extract from the contract
         } deriving stock (Haskell.Show, Generic)
-          deriving anyclass (ToJSON, FromJSON, ToSchema)
+          deriving anyclass (ToJSON, FromJSON)
 
 -- | The schema of the contract. It consists of the two endpoints @"lock"@
 --   and @"guess"@ with their respective argument types.
@@ -149,7 +150,7 @@ newtype GuessToken = GuessToken { unGuessToken :: Value }
     deriving newtype (Eq, Haskell.Show)
 
 token :: MintingPolicyHash -> TokenName -> Value
-token mps tn = V.singleton (V.mpsSymbol mps) tn 1
+token mps tn = Value.singleton (Value.mpsSymbol mps) tn 1
 
 -- | State of the guessing game
 data GameState =
@@ -209,7 +210,7 @@ transition _ State{stateData=oldData, stateValue=oldValue} input = case (oldData
             newValue = oldValue - takenOut
          in Just ( constraints
                  , State
-                    { stateData = if V.isZero (Ada.toValue $ Ada.fromValue newValue)
+                    { stateData = if Value.isZero (Ada.toValue $ Ada.fromValue newValue)
                                      then Finished
                                      else Locked mph tn nextSecret
                     , stateValue = newValue
@@ -226,11 +227,11 @@ machine gameParam = SM.mkStateMachine Nothing (transition gameParam) isFinal whe
     isFinal _        = False
 
 {-# INLINABLE mkValidator #-}
-mkValidator :: GameParam -> Scripts.ValidatorType GameStateMachine
+mkValidator :: GameParam -> V2.ValidatorType GameStateMachine
 mkValidator gameParam = SM.mkValidator (machine gameParam)
 
-typedValidator :: GameParam -> Scripts.TypedValidator GameStateMachine
-typedValidator = Scripts.mkTypedValidatorParam @GameStateMachine
+typedValidator :: GameParam -> V2.TypedValidator GameStateMachine
+typedValidator = V2.mkTypedValidatorParam @GameStateMachine
     $$(PlutusTx.compile [|| mkValidator ||])
     $$(PlutusTx.compile [|| wrap ||])
     where
@@ -261,11 +262,8 @@ guess = endpoint @"guess" $ \GuessArgs{guessArgsGameParam, guessTokenTarget, gue
         $ SM.runStep (client guessArgsGameParam)
             (Guess guessTokenTarget guessedSecret newSecret guessArgsValueTakenOut)
 
-cc :: PlutusTx.CompiledCode (GameParam -> GameState -> GameInput -> ScriptContext -> ())
-cc = $$(PlutusTx.compile [|| \a b c d -> check (mkValidator a b c d) ||])
-
 covIdx :: CoverageIndex
-covIdx = computeRefinedCoverageIndex cc
+covIdx = $refinedCoverageIndex $$(PlutusTx.compile [|| \a b c d -> check (mkValidator a b c d) ||])
 
 PlutusTx.unstableMakeIsData ''GameState
 PlutusTx.makeLift ''GameState

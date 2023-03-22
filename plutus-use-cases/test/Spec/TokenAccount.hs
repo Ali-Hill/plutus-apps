@@ -10,24 +10,23 @@ import Control.Monad (void)
 import Control.Monad.Freer (run)
 import Control.Monad.Freer.Error (runError)
 import Data.Default (Default (..))
-import Ledger.Ada qualified as Ada
-import Ledger.Value (TokenName, Value)
 import Plutus.Contract (Contract)
 import Plutus.Contract.Test
-import Streaming.Prelude qualified as S
-import Wallet.Emulator.Stream (foldEmulatorStreamM, takeUntilSlot)
-
 import Plutus.Contracts.TokenAccount (Account (..), TokenAccountError, TokenAccountSchema, tokenAccountContract)
 import Plutus.Contracts.TokenAccount qualified as Accounts
+import Plutus.Script.Utils.Ada qualified as Ada
+import Plutus.Script.Utils.Value (TokenName, Value)
 import Plutus.Trace.Emulator qualified as Trace
+import Streaming.Prelude qualified as S
 import Wallet.Emulator.Folds qualified as Folds
+import Wallet.Emulator.Stream (foldEmulatorStreamM, takeUntilSlot)
 
 tests :: TestTree
 tests = testGroup "token account"
     [ checkPredicate "Create a token account"
         (assertNoFailedTransactions
         .&&. assertNotDone contract (Trace.walletInstanceTag w1) "contract should not have any errors"
-        .&&. walletFundsChange w1 theToken)
+        .&&. walletFundsChangePlutus w1 theToken)
         $ do
             hdl <- Trace.activateContractWallet w1 contract
             Trace.callEndpoint @"new-account" hdl (tokenName, mockWalletAddress w1)
@@ -36,7 +35,7 @@ tests = testGroup "token account"
     , checkPredicate "Pay into the account"
         (assertNoFailedTransactions
         .&&. assertNotDone contract (Trace.walletInstanceTag w1) "contract should not have any errors"
-        .&&. walletFundsChange w1 (Ada.adaValueOf (-10) <> theToken))
+        .&&. walletFundsChangePlutus w1 (Ada.adaValueOf (-10) <> theToken))
         $ do
             hdl <- Trace.activateContractWallet w1 contract
             Trace.callEndpoint @"new-account" hdl (tokenName, mockWalletAddress w1)
@@ -47,8 +46,8 @@ tests = testGroup "token account"
     , checkPredicate "Transfer & redeem all funds"
         (assertNoFailedTransactions
         .&&. assertNotDone contract (Trace.walletInstanceTag w1) "contract should not have any errors"
-        .&&. walletFundsChange w1 (Ada.adaValueOf (-10))
-        .&&. walletFundsChange w2 (theToken <> Ada.adaValueOf 10)
+        .&&. walletFundsChangePlutus w1 (Ada.adaValueOf (-10))
+        .&&. walletFundsChangePlutus w2 (theToken <> Ada.adaValueOf 10)
         )
         tokenAccountTrace
 
@@ -80,7 +79,7 @@ theToken = Accounts.accountToken account
 
 -- | Check that the balance of the given account satisfies a predicate.
 assertAccountBalance :: Account -> (Value -> Bool) -> TracePredicate
-assertAccountBalance acc = valueAtAddress (Accounts.address acc)
+assertAccountBalance acc = plutusValueAtAddress (Accounts.address acc)
 
 -- | Create a new token account for wallet 1, pay 10 ada to the token account
 -- contract, transfer the token to wallet 2 alongside 2 ada, then use the token

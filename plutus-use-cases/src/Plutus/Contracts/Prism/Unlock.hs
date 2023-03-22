@@ -28,12 +28,10 @@ import Control.Lens (makeClassyPrisms)
 import Control.Monad (forever)
 import Data.Aeson (FromJSON, ToJSON)
 import GHC.Generics (Generic)
-import Ledger.Ada qualified as Ada
 import Ledger.Address (PaymentPubKeyHash)
-import Ledger.Constraints (ScriptLookups, SomeLookupsAndConstraints (..), TxConstraints (..))
-import Ledger.Constraints qualified as Constraints
 import Ledger.Tx (getCardanoTxId)
-import Ledger.Value (TokenName)
+import Ledger.Tx.Constraints (ScriptLookups, SomeLookupsAndConstraints (..), TxConstraints (..))
+import Ledger.Tx.Constraints qualified as Constraints
 import Plutus.Contract
 import Plutus.Contract.StateMachine (InvalidTransition, SMContractError, StateMachine, StateMachineTransition (..))
 import Plutus.Contract.StateMachine qualified as SM
@@ -45,8 +43,9 @@ import Plutus.Contracts.Prism.StateMachine (IDAction (PresentCredential), IDStat
 import Plutus.Contracts.Prism.StateMachine qualified as StateMachine
 import Plutus.Contracts.TokenAccount (TokenAccountError)
 import Plutus.Contracts.TokenAccount qualified as TokenAccount
+import Plutus.Script.Utils.Ada qualified as Ada
+import Plutus.Script.Utils.Value (TokenName)
 import Prelude as Haskell
-import Schema (ToSchema)
 
 data STOSubscriber =
     STOSubscriber
@@ -56,7 +55,7 @@ data STOSubscriber =
         , wSTOAmount    :: Integer
         }
     deriving stock (Generic, Haskell.Eq, Haskell.Show)
-    deriving anyclass (ToJSON, FromJSON, ToSchema)
+    deriving anyclass (ToJSON, FromJSON)
 
 type STOSubscriberSchema = Endpoint "sto" STOSubscriber
 
@@ -81,7 +80,7 @@ subscribeSTO = forever $ handleError (const $ return ()) $ awaitPromise $
                 <> Constraints.mustPayToPubKey wSTOIssuer (Ada.lovelaceValueOf wSTOAmount)
                 <> credConstraints
             lookups =
-                Constraints.plutusV1MintingPolicy (STO.policy stoData)
+                Constraints.plutusV2MintingPolicy (STO.policy stoData)
                 <> credLookups
         mapError WithdrawTxError
             $ submitTxConstraintsWith lookups constraints >>= awaitTxConfirmed . getCardanoTxId

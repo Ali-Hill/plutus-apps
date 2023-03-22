@@ -1,6 +1,6 @@
 { inputs, cell }@block:
 {
-  combined-plutus-apps-haddock = import ./read-the-docs-site.nix block;
+  combined-plutus-apps-haddock = import ./combined-plutus-apps-haddock.nix block;
 
   read-the-docs-site = import ./read-the-docs-site.nix block;
 
@@ -26,11 +26,9 @@
 
   fix-stylish-haskell = import ./fix-stylish-haskell.nix block;
 
-  fix-purs-tidy = import ./fix-purs-tidy.nix block;
-
   ghc = import ./ghc.nix block;
 
-  haskell-language-server = import ./haskell-language-server.nix block;
+  haskell-language-server-wrapper = import ./haskell-language-server-wrapper.nix block;
 
   hie-bios = import ./hie-bios.nix block;
 
@@ -48,6 +46,24 @@
 
   sphinx-build-readthedocs-site = import ./sphinx-build-readthedocs-site.nix block;
 
+  plutus-use-cases = import ./plutus-use-cases.nix block;
+
+  plutus-uniswap = import ./plutus-uniswap.nix block;
+
+  pab-cli = import ./pab-cli.nix block;
+
+  plutus-chain-index = import ./plutus-chain-index.nix block;
+
+  marconi-chain-index = import ./marconi-chain-index.nix block;
+
+  marconi-sidechain = import ./marconi-sidechain.nix block;
+
+  plutus-playground-client-entrypoint = import ./plutus-playground-client-entrypoint.nix block;
+
+  create-script-context = import ./create-script-context.nix block;
+
+  cardano-wallet = import ./cardano-wallet.nix block;
+
   scriv = import ./scriv.nix block;
 
   inherit (import ./sphinxcontrib-haddock.nix block)
@@ -57,4 +73,5 @@
     sphinxcontrib-haddock
 
     sphobjinv;
+
 }

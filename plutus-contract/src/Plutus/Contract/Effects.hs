@@ -96,16 +96,15 @@ import Control.Lens (Iso', Prism', iso, makePrisms, prism')
 import Data.Aeson (FromJSON, ToJSON)
 import Data.Aeson qualified as JSON
 import Data.List.NonEmpty (NonEmpty)
-import Data.OpenApi.Schema qualified as OpenApi
 import Data.String (fromString)
 import GHC.Generics (Generic)
 import Ledger.Address (CardanoAddress, toPlutusAddress)
-import Ledger.Constraints.OffChain (UnbalancedTx)
 import Ledger.Credential (Credential)
 import Ledger.Scripts (Validator)
 import Ledger.Slot (Slot, SlotRange)
 import Ledger.Time (POSIXTime, POSIXTimeRange)
-import Ledger.Tx (CardanoTx, DecoratedTxOut, Versioned, getCardanoTxId, onCardanoTx)
+import Ledger.Tx (CardanoTx, DecoratedTxOut, Versioned, getCardanoTxId)
+import Ledger.Tx.Constraints.OffChain (UnbalancedTx)
 import Plutus.ChainIndex (Page (pageItems), PageQuery)
 import Plutus.ChainIndex.Api (IsUtxoResponse (IsUtxoResponse), QueryResponse (QueryResponse),
                               TxosResponse (TxosResponse), UtxosResponse (UtxosResponse))
@@ -142,7 +141,7 @@ data PABReq =
     | PosixTimeRangeToContainedSlotRangeReq POSIXTimeRange
     | YieldUnbalancedTxReq UnbalancedTx
     deriving stock (Eq, Show, Generic)
-    deriving anyclass (ToJSON, FromJSON, OpenApi.ToSchema)
+    deriving anyclass (ToJSON, FromJSON)
 
 instance Pretty PABReq where
   pretty = \case
@@ -162,7 +161,7 @@ instance Pretty PABReq where
     OwnAddressesReq                         -> "Own addresses"
     ChainIndexQueryReq q                    -> "Chain index query:" <+> pretty q
     BalanceTxReq utx                        -> "Balance tx:" <+> pretty utx
-    WriteBalancedTxReq tx                   -> "Write balanced tx:" <+> onCardanoTx pretty (fromString . show) tx
+    WriteBalancedTxReq tx                   -> "Write balanced tx:" <+> (fromString $ show tx)
     ExposeEndpointReq ep                    -> "Expose endpoint:" <+> pretty ep
     PosixTimeRangeToContainedSlotRangeReq r -> "Posix time range to contained slot range:" <+> pretty r
     YieldUnbalancedTxReq utx                -> "Yield unbalanced tx:" <+> pretty utx
@@ -281,7 +280,7 @@ data ChainIndexQuery =
   | TxoSetAtAddress (PageQuery TxOutRef) Credential
   | GetTip
     deriving stock (Eq, Show, Generic)
-    deriving anyclass (ToJSON, FromJSON, OpenApi.ToSchema)
+    deriving anyclass (ToJSON, FromJSON)
 
 instance Pretty ChainIndexQuery where
     pretty = \case
@@ -406,7 +405,7 @@ data ActiveEndpoint = ActiveEndpoint
   , aeMetadata    :: Maybe JSON.Value -- ^ Data that should be shown to the user
   }
   deriving (Eq, Show, Generic)
-  deriving anyclass (ToJSON, FromJSON, OpenApi.ToSchema)
+  deriving anyclass (ToJSON, FromJSON)
 
 instance Pretty ActiveEndpoint where
   pretty ActiveEndpoint{aeDescription, aeMetadata} =

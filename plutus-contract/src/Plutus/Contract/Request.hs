@@ -7,6 +7,7 @@
 {-# LANGUAGE FlexibleContexts      #-}
 {-# LANGUAGE FlexibleInstances     #-}
 {-# LANGUAGE GADTs                 #-}
+{-# LANGUAGE LambdaCase            #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE NamedFieldPuns        #-}
 {-# LANGUAGE OverloadedStrings     #-}
@@ -39,6 +40,7 @@ module Plutus.Contract.Request(
     , redeemerFromHash
     , txOutFromRef
     , txFromTxId
+    , findReferenceValidatorScripByHash
     , unspentTxOutFromRef
     , utxoRefMembership
     , utxoRefsAt
@@ -88,6 +90,7 @@ module Plutus.Contract.Request(
     , ownAddresses
     , ownAddress
     , ownUtxos
+    , getUnspentOutput
     -- ** Submitting transactions
     , adjustUnbalancedTx
     , submitUnbalancedTx
@@ -109,7 +112,7 @@ module Plutus.Contract.Request(
     ) where
 
 import Cardano.Node.Emulator.Params (Params)
-import Control.Lens (Prism', preview, review, view)
+import Control.Lens (Prism', _2, _Just, only, preview, review, to, view)
 import Control.Monad.Freer.Error qualified as E
 import Control.Monad.Trans.State.Strict (StateT (..), evalStateT)
 import Data.Aeson (FromJSON, ToJSON)
@@ -117,10 +120,11 @@ import Data.Aeson qualified as JSON
 import Data.Aeson.Types qualified as JSON
 import Data.Bifunctor (Bifunctor (..))
 import Data.Default (Default (def))
+import Data.List (find)
 import Data.List.NonEmpty (NonEmpty)
 import Data.Map (Map)
 import Data.Map qualified as Map
-import Data.Maybe (catMaybes, mapMaybe)
+import Data.Maybe (catMaybes, isJust, mapMaybe)
 import Data.Proxy (Proxy (Proxy))
 import Data.Row (AllUniqueLabels, HasType, KnownSymbol, type (.==))
 import Data.Text qualified as Text
@@ -129,17 +133,19 @@ import Data.Void (Void)
 import GHC.Generics (Generic)
 import GHC.Natural (Natural)
 import GHC.TypeLits (Symbol, symbolVal)
-import Ledger (AssetClass, CardanoAddress, DiffMilliSeconds, POSIXTime, PaymentPubKeyHash (PaymentPubKeyHash), Slot,
-               TxId, TxOutRef, Value, cardanoAddressCredential, cardanoPubKeyHash, fromMilliSeconds, txOutRefId)
-import Ledger.Constraints (TxConstraints)
-import Ledger.Constraints.OffChain (ScriptLookups, UnbalancedTx)
-import Ledger.Constraints.OffChain qualified as Constraints
+import Ledger (CardanoAddress, DiffMilliSeconds, POSIXTime, PaymentPubKeyHash (PaymentPubKeyHash), Slot, TxId, TxOutRef,
+               ValidatorHash (ValidatorHash), cardanoAddressCredential, cardanoPubKeyHash,
+               decoratedTxOutReferenceScript, fromMilliSeconds, getScriptHash, scriptHash, txOutRefId)
 import Ledger.Tx (CardanoTx, DecoratedTxOut, Versioned, decoratedTxOutValue, getCardanoTxId)
+import Ledger.Tx.Constraints (TxConstraints)
+import Ledger.Tx.Constraints.OffChain (ScriptLookups, UnbalancedTx)
+import Ledger.Tx.Constraints.OffChain qualified as Constraints
 import Ledger.Typed.Scripts (Any, TypedValidator, ValidatorTypes (DatumType, RedeemerType))
-import Ledger.Value qualified as V
+import Plutus.Contract.Error (ContractError (OtherContractError), _ContractError)
 import Plutus.Contract.Util (loopM)
 import Plutus.V1.Ledger.Api (Datum, DatumHash, MintingPolicy, MintingPolicyHash, Redeemer, RedeemerHash, StakeValidator,
-                             StakeValidatorHash, Validator, ValidatorHash)
+                             StakeValidatorHash, Validator)
+import Plutus.V1.Ledger.Value (AssetClass)
 import PlutusTx qualified
 
 import Plutus.Contract.Effects (ActiveEndpoint (ActiveEndpoint, aeDescription, aeMetadata),
@@ -151,12 +157,14 @@ import Plutus.Contract.Schema (Input, Output)
 import Wallet.Types (ContractInstanceId, EndpointDescription (EndpointDescription),
                      EndpointValue (EndpointValue, unEndpointValue))
 
+import Cardano.Api qualified as C
 import Data.Foldable (fold)
 import Data.List.NonEmpty qualified as NonEmpty
+import Ledger.Value.CardanoAPI (valueGeq, valueLeq)
 import Plutus.ChainIndex (ChainIndexTx, Page (nextPageQuery, pageItems), PageQuery, txOutRefs)
 import Plutus.ChainIndex.Api (IsUtxoResponse, QueryResponse, TxosResponse, UtxosResponse, collectQueryResponse, paget)
 import Plutus.ChainIndex.Types (RollbackState (Unknown), Tip, TxOutStatus, TxStatus)
-import Plutus.Contract.Error (AsContractError (_ChainIndexContractError, _ConstraintResolutionContractError, _EndpointDecodeContractError, _ResumableContractError, _TxToCardanoConvertContractError, _WalletContractError))
+import Plutus.Contract.Error (AsContractError (_ChainIndexContractError, _ConstraintResolutionContractError, _EndpointDecodeContractError, _OtherContractError, _ResumableContractError, _TxToCardanoConvertContractError, _WalletContractError))
 import Plutus.Contract.Resumable (prompt)
 import Plutus.Contract.Types (Contract (Contract), MatchingError (WrongVariantError), Promise (Promise), mapError,
                               runError, throwError)
@@ -503,6 +511,14 @@ ownUtxos = do
     addrs <- ownAddresses
     fold <$> mapM utxosAt (NonEmpty.toList addrs)
 
+-- | Get an unspent output belonging to the wallet.
+getUnspentOutput :: AsContractError e => Contract w s e TxOutRef
+getUnspentOutput = do
+    utxos <- ownUtxos
+    case Map.keys utxos of
+        inp : _ -> pure  inp
+        []      -> throwError $ review _OtherContractError "Balanced transaction has no inputs"
+
 -- | Get all the unspent transaction output at an address w.r.t. a page query TxOutRef
 queryUnspentTxOutsAt ::
     forall w s e.
@@ -516,6 +532,31 @@ queryUnspentTxOutsAt addr pq = do
   case cir of
     E.UnspentTxOutsAtResponse r -> pure r
     r                           -> throwError $ review _ChainIndexContractError ("UnspentTxOutAtResponse", r)
+
+-- | Find the reference to an utxo containing a reference script
+-- by its the script hash, amongst the utxos at a given address
+findReferenceValidatorScripByHash ::
+    forall w s e.
+    ( AsContractError e
+    )
+    => ValidatorHash
+    -> CardanoAddress
+    -> Contract w s e TxOutRef
+findReferenceValidatorScripByHash hash address = do
+    utxos <- utxosAt address
+    maybe
+      (throwError $ review _ContractError $ OtherContractError "Enable to find the referenc script")
+      pure
+      $ searchReferenceScript hash utxos
+    where
+        searchReferenceScript :: ValidatorHash -> Map TxOutRef DecoratedTxOut -> Maybe TxOutRef
+        searchReferenceScript (ValidatorHash h) = let
+            getReferenceScriptHash = _2 . decoratedTxOutReferenceScript
+                . _Just . to (getScriptHash . scriptHash)
+                . only h
+            in fmap fst
+            . find (isJust . preview getReferenceScriptHash)
+            . Map.toList
 
 -- | Get the unspent transaction outputs at an address.
 utxosAt ::
@@ -713,16 +754,16 @@ fundsAtAddressGt
        ( AsContractError e
        )
     => CardanoAddress
-    -> Value
+    -> C.Value
     -> Contract w s e (Map TxOutRef DecoratedTxOut)
 fundsAtAddressGt addr vl =
-    fundsAtAddressCondition (\presentVal -> presentVal `V.gt` vl) addr
+    fundsAtAddressCondition (\presentVal -> not (presentVal `valueLeq` vl)) addr
 
 fundsAtAddressCondition
     :: forall w s e.
        ( AsContractError e
        )
-    => (Value -> Bool)
+    => (C.Value -> Bool)
     -> CardanoAddress
     -> Contract w s e (Map TxOutRef DecoratedTxOut)
 fundsAtAddressCondition condition addr = loopM go () where
@@ -741,10 +782,10 @@ fundsAtAddressGeq
        ( AsContractError e
        )
     => CardanoAddress
-    -> Value
+    -> C.Value
     -> Contract w s e (Map TxOutRef DecoratedTxOut)
 fundsAtAddressGeq addr vl =
-    fundsAtAddressCondition (\presentVal -> presentVal `V.geq` vl) addr
+    fundsAtAddressCondition (\presentVal -> presentVal `valueGeq` vl) addr
 
 -- | Wait for the status of a transaction to change
 awaitTxStatusChange :: forall w s e. AsContractError e => TxId -> Contract w s e TxStatus
@@ -979,7 +1020,7 @@ mkTxConstraints :: forall a w s e.
   -> Contract w s e UnbalancedTx
 mkTxConstraints lookups constraints = do
     params <- getParams
-    let result = Constraints.mkTxWithParams params lookups constraints
+    let result = Constraints.mkTx params lookups constraints
         logData = MkTxLog
           { mkTxLogLookups = Constraints.generalise lookups
           , mkTxLogTxConstraints = bimap PlutusTx.toBuiltinData PlutusTx.toBuiltinData constraints
@@ -1011,7 +1052,8 @@ submitTxConstraintsWith
   => ScriptLookups a
   -> TxConstraints (RedeemerType a) (DatumType a)
   -> Contract w s e CardanoTx
-submitTxConstraintsWith sl constraints = mkTxConstraints sl constraints >>= submitUnbalancedTx
+submitTxConstraintsWith sl constraints =
+  mkTxConstraints sl constraints >>= submitUnbalancedTx
 
 -- | A version of 'submitTx' that waits until the transaction has been
 --   confirmed on the ledger before returning.

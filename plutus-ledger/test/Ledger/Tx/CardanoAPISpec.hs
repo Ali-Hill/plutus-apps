@@ -4,82 +4,55 @@
 {-# OPTIONS_GHC -Wmissing-import-lists #-}
 module Ledger.Tx.CardanoAPISpec(tests) where
 
-import Cardano.Api (AsType (AsPaymentKey, AsStakeKey), AssetId (AdaAssetId, AssetId), Key (verificationKeyHash),
-                    NetworkId (Mainnet, Testnet), NetworkMagic (NetworkMagic),
-                    PaymentCredential (PaymentCredentialByKey), PolicyId (PolicyId),
+import Cardano.Api (AsType (AsPaymentKey, AsStakeKey), Key (verificationKeyHash), NetworkId (Mainnet, Testnet),
+                    NetworkMagic (NetworkMagic), PaymentCredential (PaymentCredentialByKey),
                     StakeAddressReference (NoStakeAddress, StakeAddressByValue), StakeCredential, makeShelleyAddress,
                     shelleyAddressInEra)
-import Cardano.Api.Shelley (StakeCredential (StakeCredentialByKey), TxBody (ShelleyTxBody))
-import Gen.Cardano.Api.Typed (genAssetName, genScriptHash, genValueDefault)
+import Cardano.Api.Shelley (StakeCredential (StakeCredentialByKey))
+import Gen.Cardano.Api.Typed (genAssetName, genTxId, genValueDefault)
 import Gen.Cardano.Api.Typed qualified as Gen
-import Ledger (toPlutusAddress)
-import Ledger.Test (someValidator)
-import Ledger.Tx (Language (PlutusV1), Tx (txMint), Versioned (Versioned), addMintingPolicy)
-import Ledger.Tx.CardanoAPI (fromCardanoAssetId, fromCardanoAssetName, fromCardanoPolicyId, fromCardanoValue,
-                             makeTransactionBody, toCardanoAddressInEra, toCardanoAssetId, toCardanoAssetName,
-                             toCardanoPolicyId, toCardanoTxBodyContent, toCardanoValue)
-import Ledger.Value qualified as Value
-import Plutus.Script.Utils.V1.Scripts qualified as PV1
-import Plutus.Script.Utils.V1.Typed.Scripts.MonetaryPolicies qualified as MPS
-import Plutus.V1.Ledger.Scripts (unitRedeemer)
-
-import Data.Default (def)
-import Data.Function ((&))
-import Data.String (fromString)
 import Hedgehog (Gen, Property, forAll, property, tripping, (===))
 import Hedgehog qualified
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
+import Ledger (toPlutusAddress)
+import Ledger.Tx.CardanoAPI (fromCardanoAssetName, fromCardanoTxId, fromCardanoValue, toCardanoAddressInEra,
+                             toCardanoAssetName, toCardanoTxId, toCardanoValue)
+import Ledger.Value.CardanoAPI (combine, valueFromList, valueGeq)
+import PlutusTx.Lattice ((\/))
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.Hedgehog (testPropertyNamed)
 
 tests :: TestTree
-tests = testGroup "Ledger.CardanoAPI"
+tests =
+  testGroup "CardanoAPI"
+  [ testGroup "Ledger.Tx.CardanoAPI"
     [ testPropertyNamed "Cardano Address -> Plutus Address roundtrip" "addressRoundTripSpec" addressRoundTripSpec
-    , testPropertyNamed "Tx conversion retains minting policy scripts" "txConversionRetainsMPS" convertMintingTx
-    , testPropertyNamed "MintingPolicyHash <- Cardano PolicyId roundtrip" "cardanoPolicyIdRoundTrip" cardanoPolicyIdRoundTrip
     , testPropertyNamed "TokenName <- Cardano AssetName roundtrip" "cardanoAssetNameRoundTrip" cardanoAssetNameRoundTrip
-    , testPropertyNamed "AssetClass <- Cardano AssetId roundtrip" "cardanoAssetIdRoundTrip" cardanoAssetIdRoundTrip
     , testPropertyNamed "Plutus Value <- Cardano Value roundtrip" "cardanoValueRoundTrip" cardanoValueRoundTrip
+    , testPropertyNamed "TxId round trip" "cardanoValueRoundTrip" cardanoTxIdRoundTrip
     ]
-
--- Copied from Gen.Cardano.Api.Typed, because it's not exported.
-genPolicyId :: Gen PolicyId
-genPolicyId =
-  Gen.frequency
-      -- mostly from a small number of choices, so we get plenty of repetition
-    [ (9, Gen.element [ fromString (x : replicate 55 '0') | x <- ['a'..'c'] ])
-
-       -- and some from the full range of the type
-    , (1, PolicyId <$> genScriptHash)
+  , testGroup "Ledger.Value.CardanoAPI"
+    [ testPropertyNamed "combineLeftId" "combineLeftId" combineLeftId
+    , testPropertyNamed "combineRightId" "combineRightId" combineRightId
+    , testPropertyNamed "valueJoinGeq" "valueJoinGeq" valueJoinGeq
     ]
-
--- Copied from Gen.Cardano.Api.Typed, because it's not exported.
-genAssetId :: Gen AssetId
-genAssetId = Gen.choice
-    [ AssetId <$> genPolicyId <*> genAssetName
-    , return AdaAssetId
-    ]
-
-cardanoPolicyIdRoundTrip :: Property
-cardanoPolicyIdRoundTrip = property $ do
-    policyId <- forAll genPolicyId
-    tripping policyId fromCardanoPolicyId toCardanoPolicyId
+  ]
 
 cardanoAssetNameRoundTrip :: Property
 cardanoAssetNameRoundTrip = property $ do
     assetName <- forAll genAssetName
     tripping assetName fromCardanoAssetName toCardanoAssetName
 
-cardanoAssetIdRoundTrip :: Property
-cardanoAssetIdRoundTrip = property $ do
-    assetId <- forAll genAssetId
-    tripping assetId fromCardanoAssetId toCardanoAssetId
-
 cardanoValueRoundTrip :: Property
 cardanoValueRoundTrip = property $ do
     value <- forAll genValueDefault
     tripping value fromCardanoValue toCardanoValue
+
+cardanoTxIdRoundTrip :: Property
+cardanoTxIdRoundTrip = property $ do
+    txId <- forAll genTxId
+    tripping txId fromCardanoTxId toCardanoTxId
 
 -- | From a cardano address, we should be able to convert it to a plutus address,
 -- back to the same initial cardano address.
@@ -125,20 +98,23 @@ genNetworkId =
 genNetworkMagic :: Gen NetworkMagic
 genNetworkMagic = NetworkMagic <$> Gen.word32 Range.constantBounded
 
+combineLeftId :: Property
+combineLeftId = property $ do
+  valueL <- forAll genValueDefault
+  valueR <- forAll genValueDefault
+  combine (\a l _ -> valueFromList [(a, l)]) valueL valueR === valueL
 
-convertMintingTx :: Property
-convertMintingTx = property $ do
-  let vHash = PV1.validatorHash someValidator
-      mps  = MPS.mkForwardingMintingPolicy vHash
-      mpsHash = PV1.mintingPolicyHash mps
-      vL n = Value.singleton (Value.mpsSymbol mpsHash) "L" n
-      tx   = mempty { txMint = vL 1 }
-          & addMintingPolicy (Versioned mps PlutusV1) (unitRedeemer, Nothing)
-      ectx = toCardanoTxBodyContent (Testnet $ NetworkMagic 1) def [] tx >>= makeTransactionBody Nothing mempty
-  case ectx of
-    -- Check that the converted tx contains exactly one script
-    Right (ShelleyTxBody _ _ [_script] _ _ _) -> do
-      Hedgehog.success
-    msg -> do
-      Hedgehog.annotateShow msg
-      Hedgehog.failure
+combineRightId :: Property
+combineRightId = property $ do
+  valueL <- forAll genValueDefault
+  valueR <- forAll genValueDefault
+  combine (\a _ r -> valueFromList [(a, r)]) valueL valueR === valueR
+
+valueJoinGeq :: Property
+valueJoinGeq = property $ do
+  valueL <- forAll genValueDefault
+  valueR <- forAll genValueDefault
+  let jn = valueL \/ valueR
+  Hedgehog.annotateShow (valueL, valueR, jn)
+  Hedgehog.assert (jn `valueGeq` valueL)
+  Hedgehog.assert (jn `valueGeq` valueR)

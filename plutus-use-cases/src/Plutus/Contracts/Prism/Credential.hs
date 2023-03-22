@@ -20,18 +20,16 @@ import Data.Aeson (FromJSON, ToJSON)
 import Data.Hashable (Hashable)
 import GHC.Generics (Generic)
 import Ledger.Address (PaymentPubKeyHash (unPaymentPubKeyHash))
-import Ledger.Value (TokenName, Value)
-import Ledger.Value qualified as Value
 import Plutus.Contracts.TokenAccount (Account (..))
 import Plutus.Script.Utils.Typed qualified as Scripts
-import Plutus.Script.Utils.V1.Scripts (mintingPolicyHash)
-import Plutus.V1.Ledger.Api (ScriptContext (..))
-import Plutus.V1.Ledger.Contexts (txSignedBy)
-import Plutus.V1.Ledger.Scripts qualified as Scripts
+import Plutus.Script.Utils.V2.Scripts (mintingPolicyHash)
+import Plutus.Script.Utils.Value (TokenName, Value)
+import Plutus.Script.Utils.Value qualified as Value
+import Plutus.V2.Ledger.Api (MintingPolicy, ScriptContext (..), mkMintingPolicyScript)
+import Plutus.V2.Ledger.Contexts (txSignedBy)
 import PlutusTx qualified
 import PlutusTx.Prelude
 import Prelude qualified as Haskell
-import Schema (ToSchema)
 
 -- | Entity that is authorised to mint credential tokens
 newtype CredentialAuthority =
@@ -39,7 +37,7 @@ newtype CredentialAuthority =
         { unCredentialAuthority :: PaymentPubKeyHash
         }
     deriving stock (Generic, Haskell.Eq, Haskell.Show, Haskell.Ord)
-    deriving anyclass (ToJSON, FromJSON, Hashable, ToSchema)
+    deriving anyclass (ToJSON, FromJSON, Hashable)
 
 -- | Named credential issued by a credential authority
 data Credential =
@@ -48,7 +46,7 @@ data Credential =
         , credName      :: TokenName
         }
     deriving stock (Generic, Haskell.Eq, Haskell.Show, Haskell.Ord)
-    deriving anyclass (ToJSON, FromJSON, Hashable, ToSchema)
+    deriving anyclass (ToJSON, FromJSON, Hashable)
 
 -- | The minting policy script validating the creation of credential tokens
 {-# INLINABLE validateMint #-}
@@ -58,8 +56,8 @@ validateMint CredentialAuthority{unCredentialAuthority} _ ScriptContext{scriptCo
     -- tokens, so we just need to check the signature
     txinfo `txSignedBy` unPaymentPubKeyHash unCredentialAuthority
 
-policy :: CredentialAuthority -> Scripts.MintingPolicy
-policy credential = Scripts.mkMintingPolicyScript $
+policy :: CredentialAuthority -> MintingPolicy
+policy credential = mkMintingPolicyScript $
     $$(PlutusTx.compile [|| \c -> Scripts.mkUntypedMintingPolicy (validateMint c) ||])
         `PlutusTx.applyCode`
             PlutusTx.liftCode credential

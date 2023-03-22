@@ -41,7 +41,6 @@ import Data.Text qualified as Text
 import Data.Yaml (decodeFileThrow)
 import Database.SQLite.Simple qualified as Sqlite
 import GHC.Generics (Generic)
-import Ledger.Ada (lovelaceValueOf)
 import Network.HTTP.Client (ManagerSettings (managerResponseTimeout), defaultManagerSettings, newManager,
                             responseTimeoutNone)
 import Plutus.ChainIndex.Types (Point (..))
@@ -58,7 +57,6 @@ import Plutus.PAB.Run (runWithOpts)
 import Plutus.PAB.Run.Cli (ConfigCommandArgs, runConfigCommand)
 import Plutus.PAB.Run.Command (ConfigCommand (ChainIndex, ForkCommands, Migrate), allServices)
 import Plutus.PAB.Run.CommandParser (AppOpts (AppOpts, cmd, configPath, logConfigPath, minLogLevel, passphrase, resumeFrom, rollbackHistory, runEkgServer, storageBackend))
-import Plutus.PAB.Run.PSGenerator (HasPSTypes (psTypes))
 import Plutus.PAB.Types (ChainQueryConfig (ChainIndexConfig),
                          Config (Config, chainQueryConfig, dbConfig, nodeServerConfig, pabWebserverConfig, walletServerConfig),
                          DbConfig (..), takeSqliteDB)
@@ -67,6 +65,7 @@ import Plutus.PAB.Webserver.API (API)
 import Plutus.PAB.Webserver.Client (InstanceClient (callInstanceEndpoint),
                                     PabClient (PabClient, activateContract, instanceClient), pabClient)
 import Plutus.PAB.Webserver.Types (ContractActivationArgs (ContractActivationArgs, caID, caWallet))
+import Plutus.Script.Utils.Ada (lovelaceValueOf)
 import Prettyprinter (Pretty (pretty), viaShow)
 import Servant ((:<|>))
 import Servant qualified
@@ -88,11 +87,7 @@ data TestingContracts = PingPong
 
 instance HasDefinitions TestingContracts where
   getDefinitions = [ PingPong ]
-  getSchema _    = Builtin.endpointsToSchemas @PingPong.PingPongSchema
   getContract _  = SomeBuiltin PingPong.simplePingPong
-
-instance HasPSTypes TestingContracts where
-  psTypes = undefined
 
 instance Pretty TestingContracts where
   pretty = viaShow

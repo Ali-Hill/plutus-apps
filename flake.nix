@@ -1,111 +1,152 @@
-# NOTE: This flake is only provided as interface to `bitte` and shouldn't be used otherwise
+# The flake.nix is the entrypoint of all nix code.
 #
-# Occasionally building flake builds will segfault. The workaround for this is to
-# disable the garbage collector `GC_DONT_GC=1  nix build .#docs
+# This repository uses the standard tool https://github.com/divnix/std.
+# Familiarity with std is required to be able to contribute effectively.
+# While official documentation for std can be found in its GitHub, this flake
+# has been thoroughly commented so as to quickstart new maintainers.
+# This flake can also be used as a template for new std-based projects.
+# Further documentation can be found in nix/README.md
 #
-# In case you are not sure if you should be using this flake, the answer is: No.
+# You may want to refer to the standard glossary as you go along:
+# https://divnix.github.io/std/glossary.html
 {
-  description = "plutus-apps flake for pinning sources and bitte deployments";
+  description = "Plutus Apps";
 
   inputs = {
-    flake-utils.url = "github:numtide/flake-utils";
-
-    # We intentionally import nixpkgs and haskell.nix as non-flakes, to match the
-    # flake-free normal build workflow exactly.
     nixpkgs = {
       url = "github:NixOS/nixpkgs";
+    };
+    std = {
+      url = "github:divnix/std";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+    flake-compat = {
+      url = "github:input-output-hk/flake-compat";
       flake = false;
     };
     haskell-nix = {
       url = "github:input-output-hk/haskell.nix";
-      flake = false;
-    };
-    cardano-repo-tool = {
-      url = "github:input-output-hk/cardano-repo-tool";
-      flake = false;
-    };
-    easy-purescript-nix = {
-      url = "github:justinwoo/easy-purescript-nix";
-      flake = false;
-    };
-    flake-compat = {
-      url = "github:input-output-hk/flake-compat/fixes";
-      flake = false;
-    };
-    gitignore-nix = {
-      url = "github:hercules-ci/gitignore.nix";
-      flake = false;
+      inputs = {
+        hackage.follows = "hackage-nix";
+        nixpkgs.follows = "nixpkgs";
+      };
     };
     hackage-nix = {
       url = "github:input-output-hk/hackage.nix";
-      flake = false;
-    };
-    haskell-language-server = {
-      # Pinned to a release
-      url = "github:haskell/haskell-language-server?ref=1.5.1";
-      flake = false;
-    };
-    iohk-nix = {
-      url = "github:input-output-hk/iohk-nix";
-      flake = false;
-    };
-    npmlock2nix = {
-      url = "github:tweag/npmlock2nix";
-      flake = false;
-    };
-    plutus-core = {
-      url = "github:input-output-hk/plutus";
-      flake = false;
-    };
-    pre-commit-hooks-nix = {
-      url = "github:cachix/pre-commit-hooks.nix";
-      flake = false;
-    };
-    spago2nix = {
-      url = "github:justinwoo/spago2nix";
       flake = false;
     };
     sphinxcontrib-haddock = {
       url = "github:michaelpj/sphinxcontrib-haddock";
       flake = false;
     };
-    stackage-nix = {
-      url = "github:input-output-hk/stackage.nix";
-      flake = false;
+    gitignore-nix = {
+      url = "github:hercules-ci/gitignore.nix";
+      inputs.nixpkgs.follows = "nixpkgs";
     };
-    web-common = {
-      url = "github:input-output-hk/purescript-web-common";
-      flake = false;
+    iohk-nix = {
+      url = "github:input-output-hk/iohk-nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+    pre-commit-hooks-nix = {
+      url = "github:cachix/pre-commit-hooks.nix";
+      inputs.nixpkgs.follows = "nixpkgs";
     };
     CHaP = {
       url = "github:input-output-hk/cardano-haskell-packages?ref=repo";
       flake = false;
     };
-    tullia = {
-      url = "github:input-output-hk/tullia";
-      # Can't follow since nixpkgs is set to flake=false here
-      # inputs.nixpkgs.follows = "nixpkgs";
+    haskell-language-server = {
+      # TODO Bump to 1.9.0.0 once plutus-apps hits GHC 9.2
+      url = "github:haskell/haskell-language-server?ref=1.8.0.0";
+      flake = false;
+    };
+    plutus-core = {
+      url = "github:input-output-hk/plutus";
     };
   };
 
-  outputs = { self, flake-utils, tullia, ... }@inputs:
-    (flake-utils.lib.eachSystem [ "x86_64-linux" "x86_64-darwin" ] (system:
-      let
-        topLevel = import ./. {
-          inherit system;
-          sources = inputs;
-        };
-      in
+  # The flake outputs are managed by std.
+  outputs = inputs:
+
+    # The growOn function takes care of producing the flake outputs.
+    inputs.std.growOn
       {
-        packages = topLevel.bitte-packages;
-        legacyPackages = topLevel;
+        # Boilerplate
+        inherit inputs;
 
-        hydraJobs = import ./hydraJobs.nix { inherit system; };
+        # All nix files will reside inside this folder, no exception.
+        # Each subfolder of cellsFrom is a "cell".
+        # Cell names are arbitrary; a cell name is its folder name.
+        # Cells are for highest-level organization and grouping of nix code.
+        #
+        # In this repository we have two cells:
+        #   automation
+        #     Hydra jobsets and GHA tasks
+        #   plutus-apps
+        #     devcontainer, devshells, library and packages for plutus-apps and its documentation
+        cellsFrom = ./__std__/cells;
 
-      } //
+        # Each cell contains "cell blocks".
+        # Block names are arbitrary.
+        # Each block can be thought of as providing a "feature" to its cell.
+        # Cell blocks have types.
+        # Each cell block must be either:
+        #   A nix file named after the cell block
+        #   A directory named after the cell block and containing a default.nix
+        # Not all cells have the same cell blocks.
+        # All cell blocks belong in a cell.
+        #
+        # In this repository we have six cell blocks, listed below with their type:
+        #   devshells :: devshells
+        #     Development shells available via nix develop
+        #   packages :: installables
+        #     Derivations available via nix build
+        #   devcontainer :: installables
+        #     Docker image for creating a VS Code development environment
+        #   library :: functions
+        #     Everything that is not a derivation goes here
+        #     Includes functions, attrsets and simple literal values shared across cells
+        #     These are not exposed to the flake
+        #   hydra-jobs :: installables
+        #     Jobsets for our Hydra CI
+        #
+        # std provides a TUI to interact with the cell blocks.
+        # Available interactions are determined by the cell block's type.
+        # Because this repository does not yet use the TUI, the type is mostly irrelevant.
+        cellBlocks = [
+          (inputs.std.devshells "devshells")
+          (inputs.std.installables "packages")
+          (inputs.std.installables "devcontainer")
+          (inputs.std.functions "library")
+          (inputs.std.installables "hydra-jobs")
+        ];
+      }
 
-      tullia.fromSimple system (import ./nix/tullia.nix)
-    ));
+      # The growOn function will then accept an arbitrary number of "soil" attrs.
+      # This is where we translate cells and cell blocks into a standard nix flake
+      # outputs attrs.
+      #
+      # This is where we also decide which cells and which cell blocks will
+      # make it into the flake. To exclude stuff from the flake, we simply
+      # do not "harvest" it.
+      #
+      # The attrs will be recursively merged in the order in which they appear.
+      {
+        # Here we say that we want the "devshells" cell block of the plutus-apps cell
+        # (which contains a number of shell-able derivations) to be exposed
+        # by the flake and accessible via nix develop.
+        devShells = inputs.std.harvest inputs.self [ "plutus-apps" "devshells" ];
+        packages = inputs.std.harvest inputs.self [ "plutus-apps" "packages" ];
+      }
+      {
+        # Here we say that we want the "devcontainer" cell block of the plutus-apps cell
+        # (which contains a number of buildable derivations) to be exposed
+        # by the flake and accessible via nix build (or nix run).
+        packages = inputs.std.harvest inputs.self [ "plutus-apps" "devcontainer" ];
+      }
+      {
+        hydraJobs = inputs.std.harvest inputs.self [ "automation" "hydra-jobs" ];
+      };
 
   nixConfig = {
     extra-substituters = [

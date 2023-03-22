@@ -27,6 +27,7 @@ module Ledger.Address
     , xprvToStakingCredential
     , xprvToStakePubKey
     , xprvToStakePubKeyHash
+    , mkValidatorCardanoAddress
     ) where
 
 import Cardano.Api qualified as C
@@ -37,12 +38,13 @@ import Cardano.Crypto.Wallet qualified as Crypto
 import Codec.Serialise (Serialise)
 import Data.Aeson (FromJSON, FromJSONKey, ToJSON, ToJSONKey)
 import Data.Hashable (Hashable)
-import Data.OpenApi qualified as OpenApi
 import GHC.Generics (Generic)
 import Ledger.Address.Orphans as Export ()
 import Ledger.Crypto (PubKey (PubKey), PubKeyHash (PubKeyHash), pubKeyHash, toPublicKey)
 import Ledger.Orphans ()
-import Ledger.Scripts (StakeValidatorHash (..), ValidatorHash (..))
+import Ledger.Scripts (Language (..), StakeValidatorHash (..), Validator, ValidatorHash (..), Versioned (..))
+import Plutus.Script.Utils.V1.Address qualified as PV1
+import Plutus.Script.Utils.V2.Address qualified as PV2
 import Plutus.V1.Ledger.Address as Export hiding (pubKeyHashAddress)
 import Plutus.V1.Ledger.Credential (Credential (PubKeyCredential, ScriptCredential), StakingCredential (StakingHash))
 import PlutusTx qualified
@@ -103,7 +105,7 @@ newtype PaymentPrivateKey = PaymentPrivateKey { unPaymentPrivateKey :: Crypto.XP
 
 newtype PaymentPubKey = PaymentPubKey { unPaymentPubKey :: PubKey }
     deriving stock (Eq, Ord, Generic)
-    deriving anyclass (ToJSON, FromJSON, ToJSONKey, FromJSONKey, OpenApi.ToSchema)
+    deriving anyclass (ToJSON, FromJSON, ToJSONKey, FromJSONKey)
     deriving newtype (PlutusTx.Eq, PlutusTx.Ord, Serialise, PlutusTx.ToData, PlutusTx.FromData, PlutusTx.UnsafeFromData)
     deriving (Show, Pretty) via PubKey
 makeLift ''PaymentPubKey
@@ -113,7 +115,7 @@ xprvToPaymentPubKey = PaymentPubKey . toPublicKey
 
 newtype PaymentPubKeyHash = PaymentPubKeyHash { unPaymentPubKeyHash :: PubKeyHash }
     deriving stock (Eq, Ord, Generic)
-    deriving anyclass (ToJSON, FromJSON, ToJSONKey, FromJSONKey, OpenApi.ToSchema)
+    deriving anyclass (ToJSON, FromJSON, ToJSONKey, FromJSONKey)
     deriving newtype (PlutusTx.Eq, PlutusTx.Ord, Serialise, Hashable, PlutusTx.ToData, PlutusTx.FromData, PlutusTx.UnsafeFromData)
     deriving (Show, Pretty) via PubKeyHash
 makeLift ''PaymentPubKeyHash
@@ -123,7 +125,7 @@ xprvToPaymentPubKeyHash = PaymentPubKeyHash . pubKeyHash . toPublicKey
 
 newtype StakePubKey = StakePubKey { unStakePubKey :: PubKey }
     deriving stock (Eq, Ord, Generic)
-    deriving anyclass (ToJSON, FromJSON, ToJSONKey, FromJSONKey, OpenApi.ToSchema)
+    deriving anyclass (ToJSON, FromJSON, ToJSONKey, FromJSONKey)
     deriving newtype (PlutusTx.Eq, PlutusTx.Ord, Serialise, PlutusTx.ToData, PlutusTx.FromData, PlutusTx.UnsafeFromData)
     deriving (Show, Pretty) via PubKey
 makeLift ''StakePubKey
@@ -133,7 +135,7 @@ xprvToStakePubKey = StakePubKey . toPublicKey
 
 newtype StakePubKeyHash = StakePubKeyHash { unStakePubKeyHash :: PubKeyHash }
     deriving stock (Eq, Ord, Generic)
-    deriving anyclass (ToJSON, FromJSON, ToJSONKey, FromJSONKey, OpenApi.ToSchema)
+    deriving anyclass (ToJSON, FromJSON, ToJSONKey, FromJSONKey)
     deriving newtype (PlutusTx.Eq, PlutusTx.Ord, Serialise, Hashable, PlutusTx.ToData, PlutusTx.FromData, PlutusTx.UnsafeFromData)
     deriving (Show, Pretty) via PubKeyHash
 makeLift ''StakePubKeyHash
@@ -176,3 +178,7 @@ stakePubKeyHashCredential = StakingHash . PubKeyCredential . unStakePubKeyHash
 stakeValidatorHashCredential :: StakeValidatorHash -> StakingCredential
 stakeValidatorHashCredential (StakeValidatorHash h) = StakingHash . ScriptCredential . ValidatorHash $ h
 
+-- | Cardano address of a versioned 'Validator' script.
+mkValidatorCardanoAddress :: C.NetworkId -> Versioned Validator -> C.AddressInEra C.BabbageEra
+mkValidatorCardanoAddress networkId (Versioned val PlutusV1) = PV1.mkValidatorCardanoAddress networkId val
+mkValidatorCardanoAddress networkId (Versioned val PlutusV2) = PV2.mkValidatorCardanoAddress networkId val

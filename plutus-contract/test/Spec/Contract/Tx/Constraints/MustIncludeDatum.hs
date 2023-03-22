@@ -14,14 +14,14 @@ import Cardano.Node.Emulator.Params qualified as Params
 import Control.Monad (void)
 import Data.Void (Void)
 import Ledger qualified
-import Ledger.Ada qualified as Ada
-import Ledger.Constraints qualified as Constraints
-import Ledger.Constraints.OnChain.V1 qualified as Constraints
 import Ledger.Tx qualified as Tx
+import Ledger.Tx.Constraints qualified as Constraints
+import Ledger.Tx.Constraints.OnChain.V1 qualified as Constraints
 import Ledger.Typed.Scripts qualified as Scripts
 import Plutus.Contract as Con
 import Plutus.Contract.Test (assertEvaluationError, assertValidatedTransactionCount, checkPredicate,
                              mockWalletPaymentPubKeyHash, w1)
+import Plutus.Script.Utils.Ada qualified as Ada
 import Plutus.Script.Utils.Typed qualified as Typed
 import Plutus.Script.Utils.V1.Scripts qualified as PSU.V1
 import Plutus.Trace qualified as Trace
@@ -87,7 +87,7 @@ mustIncludeDatumInTxWhenPayingToScriptContract offChainDatums onChainDatums = do
             Constraints.typedValidatorLookups typedValidator
             <> Constraints.unspentOutputs utxos
         tx2 =
-            Constraints.collectFromTheScript utxos onChainDatums
+            Constraints.spendUtxosFromTheScript utxos onChainDatums
             <> mustPayToTheScriptAndIncludeDatumsIfUsingOffChainConstraint
     ledgerTx2 <- submitTxConstraintsWith @UnitTest lookups2 tx2
     awaitTxConfirmed $ Tx.getCardanoTxId ledgerTx2
@@ -139,7 +139,7 @@ mustIncludeDatumInTxCalledBeforeOtherConstraints =
                 Constraints.typedValidatorLookups typedValidator
                 <> Constraints.unspentOutputs utxos
             tx2 =
-                Constraints.collectFromTheScript utxos [validatorDatum, otherDatumBs]
+                Constraints.spendUtxosFromTheScript utxos [validatorDatum, otherDatumBs]
                 <> Constraints.mustPayToOtherScriptWithDatumInTx
                      valHash
                      otherDatumBs

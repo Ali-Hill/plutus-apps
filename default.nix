@@ -32,8 +32,6 @@ rec {
     plutus-pab-examples
     plutus-uniswap;
 
-  webCommon = pkgs.callPackage sources.web-common { inherit (plutus-apps.lib) gitignore-nix; };
-
   plutus-use-cases = pkgs.callPackage ./plutus-use-cases {
     inherit haskell;
   };
@@ -42,16 +40,16 @@ rec {
 
   plutus-chain-index = plutus-apps.haskell.packages.plutus-chain-index.components.exes.plutus-chain-index;
 
-  marconi = plutus-apps.haskell.packages.marconi.components.exes.marconi;
+  marconi-chain-index = plutus-apps.haskell.packages.marconi-chain-index.components.exes.marconi-chain-index;
 
-  marconi-mamba = plutus-apps.haskell.packages.marconi-mamba.components.exes.marconi-mamba;
+  marconi-sidechain = plutus-apps.haskell.packages.marconi-sidechain.components.exes.marconi-sidechain;
 
   create-script-context = plutus-apps.haskell.packages.plutus-example.components.exes.create-script-context;
 
   tests = import ./nix/tests/default.nix {
     inherit pkgs docs;
     inherit (plutus-apps.lib) gitignore-nix;
-    inherit (plutus-apps) fixStylishHaskell fix-purs-tidy fixPngOptimization fixCabalFmt;
+    inherit (plutus-apps) fixStylishHaskell fixPngOptimization fixCabalFmt;
     src = ./.;
   };
 

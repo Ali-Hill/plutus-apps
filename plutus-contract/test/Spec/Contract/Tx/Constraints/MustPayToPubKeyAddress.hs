@@ -15,17 +15,17 @@ import Test.Tasty (TestTree, testGroup)
 
 
 import Ledger qualified
-import Ledger.Ada qualified as Ada
-import Ledger.Constraints qualified as Constraints
-import Ledger.Constraints.OnChain.V1 qualified as Constraints
-import Ledger.Constraints.OnChain.V2 qualified as V2.Constraints
 import Ledger.Test (asDatum, asRedeemer)
 import Ledger.Tx qualified as Tx
+import Ledger.Tx.Constraints qualified as Constraints
 import Ledger.Tx.Constraints qualified as Tx.Constraints
+import Ledger.Tx.Constraints.OnChain.V1 qualified as Constraints
+import Ledger.Tx.Constraints.OnChain.V2 qualified as V2.Constraints
 import Ledger.Typed.Scripts qualified as Scripts
 import Plutus.Contract as Con
 import Plutus.Contract.Test (assertEvaluationError, assertFailedTransaction, assertValidatedTransactionCount,
                              checkPredicate, defaultCheckOptions, emulatorConfig, mockWalletPaymentPubKeyHash, w1, w2)
+import Plutus.Script.Utils.Ada qualified as Ada
 import Plutus.Script.Utils.V1.Scripts qualified as PSU.V1
 import Plutus.Script.Utils.V2.Scripts qualified as PSU.V2
 import Plutus.Trace qualified as Trace
@@ -369,7 +369,7 @@ mkMustPayToPubKeyAddressPolicy checkScriptContext = \case
 mustPayToPubKeyAddressPolicyHash :: LanguageContext -> Ledger.MintingPolicyHash
 mustPayToPubKeyAddressPolicyHash tc = mintingPolicyHash tc $ mustPayToPubKeyAddressPolicy tc
 
-mustPayToPubKeyAddressPolicyCurrencySymbol :: LanguageContext -> Ledger.CurrencySymbol
+mustPayToPubKeyAddressPolicyCurrencySymbol :: LanguageContext -> Value.CurrencySymbol
 mustPayToPubKeyAddressPolicyCurrencySymbol = Value.mpsSymbol . mustPayToPubKeyAddressPolicyHash
 
 type SubmitTx

@@ -38,17 +38,19 @@ import Data.Semigroup (Sum (..))
 import Data.String (fromString)
 import Data.Text (Text)
 import GHC.Generics (Generic)
-import Ledger (Address, POSIXTime, TokenName)
-import Ledger.Ada qualified as Ada
-import Ledger.Constraints (TxConstraints)
-import Ledger.Constraints qualified as Constraints
-import Ledger.Interval qualified as Interval
+import Ledger (Address, POSIXTime)
+import Ledger.Tx.Constraints (TxConstraints)
+import Ledger.Tx.Constraints qualified as Constraints
+import Ledger.Tx.Constraints.ValidityInterval qualified as Interval
 import Ledger.Typed.Scripts qualified as Scripts
-import Ledger.Value qualified as Value
 import Plutus.Contract
 import Plutus.Contract.StateMachine (AsSMContractError, State (..), StateMachine (..), Void)
 import Plutus.Contract.StateMachine qualified as SM
-import Plutus.V1.Ledger.Scripts (MintingPolicyHash)
+import Plutus.Script.Utils.Ada qualified as Ada
+import Plutus.Script.Utils.V2.Scripts (MintingPolicyHash)
+import Plutus.Script.Utils.V2.Typed.Scripts qualified as V2
+import Plutus.Script.Utils.Value (TokenName)
+import Plutus.Script.Utils.Value qualified as Value
 import PlutusTx qualified
 import PlutusTx.AssocMap qualified as AssocMap
 import PlutusTx.Prelude
@@ -139,11 +141,11 @@ machine params = SM.mkStateMachine Nothing (transition params) isFinal where
     isFinal _ = False
 
 {-# INLINABLE mkValidator #-}
-mkValidator :: Params -> Scripts.ValidatorType GovernanceMachine
+mkValidator :: Params -> V2.ValidatorType GovernanceMachine
 mkValidator params = SM.mkValidator $ machine params
 
-typedValidator :: Params -> Scripts.TypedValidator GovernanceMachine
-typedValidator = Scripts.mkTypedValidatorParam @GovernanceMachine
+typedValidator :: Params -> V2.TypedValidator GovernanceMachine
+typedValidator = V2.mkTypedValidatorParam @GovernanceMachine
     $$(PlutusTx.compile [|| mkValidator ||])
     $$(PlutusTx.compile [|| wrap ||])
     where
@@ -173,7 +175,7 @@ transition Params{..} State{ stateData = s, stateValue} i = case (s, i) of
         let (total, constraints) = foldMap
                 (\(addr, nm) -> let v = votingValue mph nm in (v, Constraints.mustPayToAddress addr v))
                 (zip initialHolders tokenNames)
-        in Just (constraints <> Constraints.mustMintValue total, State s stateValue)
+        in Just (constraints <> Constraints.mustMintValue (Value.noAdaValue total), State s stateValue)
 
     (GovState law mph Nothing, ProposeChange owner proposal@Proposal{tokenName}) ->
         let constraints = ownsVotingToken owner mph tokenName
@@ -181,14 +183,9 @@ transition Params{..} State{ stateData = s, stateValue} i = case (s, i) of
 
     (GovState law mph (Just (Voting p oldMap)), AddVote owner tokenName vote) ->
         let newMap = AssocMap.insert tokenName vote oldMap
-            -- Correct validity interval should be:
-            -- @
-            --   Interval (LowerBound NegInf True) (Interval.strictUpperBound $ votingDeadline p)
-            -- @
-            -- See Note [Validity Interval's upper bound]
-            validityTimeRange = Interval.to (votingDeadline p - 2)
+            validityTimeRange = Interval.lessThan $ votingDeadline p - 1
             constraints = ownsVotingToken owner mph tokenName
-                        <> Constraints.mustValidateIn validityTimeRange
+                        <> Constraints.mustValidateInTimeRange validityTimeRange
         in Just (constraints, State (GovState law mph (Just (Voting p newMap))) stateValue)
 
     (GovState oldLaw mph (Just (Voting p votes)), FinishVoting) ->

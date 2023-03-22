@@ -41,22 +41,25 @@ module Plutus.Contracts.Tutorial.EscrowStrict(
     , Action(..)
     ) where
 
-import Control.Lens (_1, has, makeClassyPrisms, only, review, view)
+import Control.Lens (_1, has, makeClassyPrisms, only, review)
 import Control.Monad (void)
 import Control.Monad.Error.Lens (throwing)
 import Data.Aeson (FromJSON, ToJSON)
 import GHC.Generics (Generic)
 
-import Ledger (PaymentPubKeyHash (unPaymentPubKeyHash), TxId, getCardanoTxId, scriptOutputsAt, txSignedBy, valuePaidTo)
+import Ledger (PaymentPubKeyHash (unPaymentPubKeyHash), TxId, datumHash, getCardanoTxId)
 import Ledger qualified
-import Ledger.Constraints (TxConstraints)
-import Ledger.Constraints qualified as Constraints
 import Ledger.Tx qualified as Tx
+import Ledger.Tx.Constraints (TxConstraints)
+import Ledger.Tx.Constraints qualified as Constraints
 import Ledger.Typed.Scripts (TypedValidator)
 import Ledger.Typed.Scripts qualified as Scripts
-import Ledger.Value (Value, geq, lt)
-import Plutus.V1.Ledger.Api (Datum (Datum), DatumHash, ValidatorHash)
-import Plutus.V1.Ledger.Contexts (ScriptContext (..), TxInfo (..))
+import Plutus.Script.Utils.V2.Contexts (ScriptContext (..), TxInfo (..), scriptOutputsAt, txSignedBy)
+import Plutus.Script.Utils.V2.Typed.Scripts qualified as V2
+import Plutus.Script.Utils.Value (Value, geq, lt)
+import Plutus.V2.Ledger.Api (Datum (Datum), DatumHash, ValidatorHash)
+import Plutus.V2.Ledger.Contexts (valuePaidTo)
+import Plutus.V2.Ledger.Tx (OutputDatum (OutputDatumHash))
 
 import Cardano.Node.Emulator.Params qualified as Params
 import Plutus.Contract
@@ -186,7 +189,7 @@ meetsTarget ptx = \case
     ScriptTarget validatorHash dataValue vl ->
         case scriptOutputsAt validatorHash ptx of
             [(dataValue', vl')] ->
-                traceIfFalse "dataValue" (dataValue' == dataValue)
+                traceIfFalse "dataValue" (dataValue' == (OutputDatumHash dataValue))
                 && traceIfFalse "value" (vl' == vl)
             _ -> False
 
@@ -199,9 +202,9 @@ validate EscrowParams{escrowTargets} contributor action ScriptContext{scriptCont
         Refund ->
             traceIfFalse "txSignedBy" (scriptContextTxInfo `txSignedBy` unPaymentPubKeyHash contributor)
 
-typedValidator :: EscrowParams Datum -> Scripts.TypedValidator Escrow
-typedValidator escrow = go (Haskell.fmap Ledger.datumHash escrow) where
-    go = Scripts.mkTypedValidatorParam @Escrow
+typedValidator :: EscrowParams Datum -> V2.TypedValidator Escrow
+typedValidator escrow = go (Haskell.fmap datumHash escrow) where
+    go = V2.mkTypedValidatorParam @Escrow
         $$(PlutusTx.compile [|| validate ||])
         $$(PlutusTx.compile [|| wrap ||])
     wrap = Scripts.mkUntypedValidator
@@ -279,9 +282,9 @@ redeem inst escrow = mapError (review _EscrowError) $ do
     let addr = Scripts.validatorCardanoAddress networkId inst
     unspentOutputs <- utxosAt addr
     let
-        tx = Constraints.collectFromTheScript unspentOutputs Redeem
+        tx = Constraints.spendUtxosFromTheScript unspentOutputs Redeem
                 <> foldMap mkTx (escrowTargets escrow)
-    if foldMap (view Tx.decoratedTxOutValue) unspentOutputs `lt` targetTotal escrow
+    if foldMap Tx.decoratedTxOutPlutusValue unspentOutputs `lt` targetTotal escrow
        then throwing _RedeemFailed NotEnoughFundsAtAddress
        else do
          utx <- mkTxConstraints ( Constraints.typedValidatorLookups inst
@@ -312,9 +315,9 @@ refund inst _escrow = do
     networkId <- Params.pNetworkId <$> getParams
     pk <- ownFirstPaymentPubKeyHash
     unspentOutputs <- utxosAt (Scripts.validatorCardanoAddress networkId inst)
-    let pkh = Ledger.datumHash $ Datum $ PlutusTx.toBuiltinData pk
+    let pkh = datumHash $ Datum $ PlutusTx.toBuiltinData pk
     let flt _ ciTxOut = has (Tx.decoratedTxOutScriptDatum . _1 . only pkh) ciTxOut
-        tx' = Constraints.collectFromTheScriptFilter flt unspentOutputs Refund
+        tx' = Constraints.spendUtxosFromTheScriptFilter flt unspentOutputs Refund
     if Constraints.modifiesUtxoSet tx'
     then do
         utx <- mkTxConstraints ( Constraints.typedValidatorLookups inst

@@ -68,6 +68,8 @@ module Plutus.Contract.Test.ContractModel.Interface
     , SpecificationEmulatorTrace
     , registerToken
     , delay
+    , fromSlotNo
+    , toSlotNo
 
     -- * Test scenarios
     --
@@ -117,9 +119,10 @@ module Plutus.Contract.Test.ContractModel.Interface
     , propRunActions
     , propRunActionsWithOptions
     , CMI.defaultCheckOptionsContractModel
+    , CMI.checkThreatModel
+    , CMI.checkThreatModelWithOptions
     -- ** DL properties
     , QCCM.forAllDL
-    , QCCM.forAllDL_
 
     -- ** Standard properties
     --
@@ -170,11 +173,11 @@ import Data.Data
 import GHC.Generics hiding (to)
 
 import Cardano.Api qualified as CardanoAPI
-import Ledger.Ada qualified as Ada
 import Ledger.Slot
-import Ledger.Value
 import Plutus.Contract (Contract)
 import Plutus.Contract.Test hiding (not)
+import Plutus.Script.Utils.Ada qualified as Ada
+import Plutus.Script.Utils.Value
 import Plutus.Trace.Emulator as Trace (BaseEmulatorEffects, waitNSlots)
 import PlutusTx.Builtins qualified as Builtins
 
@@ -185,7 +188,9 @@ import Test.QuickCheck qualified as QC
 import Plutus.Contract.Test.ContractModel.Internal qualified as CMI
 import Plutus.Contract.Test.Coverage as Coverage
 import Test.QuickCheck.ContractModel qualified as QCCM
+import Test.QuickCheck.ContractModel.ThreatModel.DoubleSatisfaction qualified as QCCM
 import Test.QuickCheck.DynamicLogic qualified as QCD
+import Test.QuickCheck.StateModel qualified as QCSM
 
 -- | A function returning the `ContractHandle` corresponding to a `ContractInstanceKey`. A
 --   `HandleFun` is provided to the `perform` function to enable calling contract endpoints with
@@ -212,6 +217,9 @@ class ( Typeable state
       , Show (Action state)
       , Eq (Action state)
       , QCCM.HasSymTokens (Action state)
+      , QCSM.HasVariables (Action state)
+      , QCSM.HasVariables state
+      , Generic state
       , (forall w s e p. Eq (ContractInstanceKey state w s e p))
       , (forall w s e p. Show (ContractInstanceKey state w s e p))
       ) => ContractModel state where
@@ -340,7 +348,7 @@ class ( Typeable state
     restricted _ = False
 
 newtype WrappedState state = WrapState { unwrapState :: state }
-  deriving (Ord, Eq)
+  deriving (Ord, Eq, Generic)
   deriving newtype (Show)
 
 deriving instance Eq (ContractInstanceKey state w s e p) => Eq (CMI.ContractInstanceKey (WrappedState state) w s e p)
@@ -529,7 +537,7 @@ propRunActionsWithOptions ::
     -> Actions state                              -- ^ The actions to run
     -> Property
 propRunActionsWithOptions opts copts predicate actions =
-  CMI.propRunActionsWithOptions opts copts (predicate . fmap coerce) actions
+  CMI.propRunActionsWithOptions opts copts (predicate . fmap coerce) CMI.balanceChangePredicate actions
 
 -- | Sanity check a `ContractModel`. Ensures that wallet balances are not always unchanged.
 propSanityCheckModel :: forall state. ContractModel state => Property
@@ -629,7 +637,8 @@ checkDoubleSatisfactionWithOptions :: forall m. ContractModel m
                                    -> CMI.CoverageOptions
                                    -> Actions m
                                    -> Property
-checkDoubleSatisfactionWithOptions _opts _covopts _acts = error "TODO"
+checkDoubleSatisfactionWithOptions opts covopts acts =
+  CMI.checkThreatModelWithOptions opts covopts QCCM.doubleSatisfaction acts
 
 instance QCCM.HasSymTokens Wallet where
   getAllSymTokens _ = mempty
@@ -637,7 +646,9 @@ instance QCCM.HasSymTokens Value where
   getAllSymTokens _ = mempty
 
 data SomeContractInstanceKey state where
-  Key :: (CMI.SchemaConstraints w s e, Typeable p) => ContractInstanceKey state w s e p -> SomeContractInstanceKey state
+  Key :: (CMI.SchemaConstraints w s e, Typeable p)
+      => ContractInstanceKey state w s e p
+      -> SomeContractInstanceKey state
 
 instance ContractModel state => Eq (SomeContractInstanceKey state) where
   Key k == Key k' = Just k == cast k'
@@ -647,3 +658,7 @@ instance ContractModel state => Show (SomeContractInstanceKey state) where
 
 invSymValue :: QCCM.SymValue -> QCCM.SymValue
 invSymValue = QCCM.inv
+
+instance QCCM.HasSymTokens Builtins.BuiltinByteString where
+  getAllSymTokens _ = mempty
+deriving via QCSM.HasNoVariables Builtins.BuiltinByteString instance QCSM.HasVariables Builtins.BuiltinByteString

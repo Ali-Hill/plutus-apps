@@ -89,6 +89,7 @@ module Plutus.PAB.Core
     ) where
 
 import Cardano.Node.Emulator.Params (Params)
+import Cardano.Wallet.LocalClient.ExportTx (ExportTx)
 import Control.Applicative (empty, (<|>))
 import Control.Concurrent.STM (STM)
 import Control.Concurrent.STM qualified as STM
@@ -111,12 +112,11 @@ import Data.Text (Text)
 import Ledger (TxOutRef)
 import Ledger.Address (Address, PaymentPubKeyHash, cardanoAddressCredential, pubKeyHashAddress)
 import Ledger.Tx (CardanoTx, TxId, decoratedTxOutValue)
-import Ledger.Value (Value)
+import Ledger.Value.CardanoAPI (fromCardanoValue)
 import Plutus.ChainIndex (ChainIndexQueryEffect, RollbackState (Unknown), TxOutStatus, TxStatus)
 import Plutus.ChainIndex qualified as ChainIndex
 import Plutus.ChainIndex.Api qualified as ChainIndex
 import Plutus.Contract.Effects (ActiveEndpoint (ActiveEndpoint, aeDescription), PABReq)
-import Plutus.Contract.Wallet (ExportTx)
 import Plutus.PAB.Core.ContractInstance (ContractInstanceMsg, ContractInstanceState)
 import Plutus.PAB.Core.ContractInstance qualified as ContractInstance
 import Plutus.PAB.Core.ContractInstance.STM (Activity (Active, Done, Stopped), BlockchainEnv, InstancesState,
@@ -133,6 +133,7 @@ import Plutus.PAB.Timeout (Timeout (..))
 import Plutus.PAB.Timeout qualified as Timeout
 import Plutus.PAB.Types (PABError (ContractInstanceNotFound, InstanceAlreadyStopped, OtherError, WalletError))
 import Plutus.PAB.Webserver.Types (ContractActivationArgs (ContractActivationArgs, caID, caWallet))
+import Plutus.Script.Utils.Value (Value)
 import Wallet.API (Slot)
 import Wallet.API qualified as WAPI
 import Wallet.Effects (NodeClientEffect, WalletEffect)
@@ -641,7 +642,7 @@ valueAt :: Wallet -> PABAction t env Value
 valueAt wallet = do
   handleAgentThread wallet Nothing $ do
     txOutsM <- ChainIndex.collectQueryResponse (\pq -> ChainIndex.unspentTxOutSetAtAddress pq cred)
-    pure $ foldMap (view $ _2 . decoratedTxOutValue) $ concat txOutsM
+    pure $ fromCardanoValue $ foldMap (view $ _2 . decoratedTxOutValue) $ concat txOutsM
   where
     cred = cardanoAddressCredential $ mockWalletAddress wallet
 

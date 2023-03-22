@@ -45,33 +45,35 @@ module Plutus.Contracts.Escrow(
     , covIdx
     ) where
 
-import Control.Lens (_1, has, makeClassyPrisms, only, review, view)
+import Control.Lens (_1, has, makeClassyPrisms, only, review)
 import Control.Monad (void)
 import Control.Monad.Error.Lens (throwing)
 import Data.Aeson (FromJSON, ToJSON)
 import GHC.Generics (Generic)
 
-import Plutus.V1.Ledger.Api (ScriptContext (..), TxInfo (..))
 import PlutusTx qualified
 import PlutusTx.Code
 import PlutusTx.Coverage
 import PlutusTx.Prelude hiding (Applicative (..), Semigroup (..), check, foldMap)
 
 import Cardano.Node.Emulator.Params (pNetworkId)
-import Ledger (POSIXTime, PaymentPubKeyHash (unPaymentPubKeyHash), TxId, getCardanoTxId, interval, scriptOutputsAt,
-               txSignedBy, valuePaidTo)
+import Ledger (POSIXTime, PaymentPubKeyHash (unPaymentPubKeyHash), TxId, getCardanoTxId)
 import Ledger qualified
-import Ledger.Constraints (TxConstraints)
-import Ledger.Constraints qualified as Constraints
-import Ledger.Interval (after, before, from)
-import Ledger.Interval qualified as Interval
+import Ledger.Interval (after, before)
 import Ledger.Tx qualified as Tx
+import Ledger.Tx.Constraints (TxConstraints)
+import Ledger.Tx.Constraints qualified as Constraints
+import Ledger.Tx.Constraints.ValidityInterval qualified as Interval
 import Ledger.Typed.Scripts (TypedValidator)
 import Ledger.Typed.Scripts qualified as Scripts
-import Ledger.Value (Value, geq, lt)
 import Plutus.Contract
 import Plutus.Script.Utils.Scripts (datumHash)
-import Plutus.V1.Ledger.Scripts (Datum (Datum), DatumHash, ValidatorHash)
+import Plutus.Script.Utils.V2.Contexts (ScriptContext (..), TxInfo (..), scriptOutputsAt, txInfoValidRange, txSignedBy)
+import Plutus.Script.Utils.V2.Typed.Scripts qualified as V2
+import Plutus.Script.Utils.Value (Value, geq, lt)
+import Plutus.V2.Ledger.Api (Datum (Datum), DatumHash, ValidatorHash)
+import Plutus.V2.Ledger.Contexts (valuePaidTo)
+import Plutus.V2.Ledger.Tx (OutputDatum (OutputDatumHash))
 
 import Prelude (Semigroup (..), foldMap)
 import Prelude qualified as Haskell
@@ -197,7 +199,7 @@ meetsTarget ptx = \case
     ScriptTarget validatorHash dataValue vl ->
         case scriptOutputsAt validatorHash ptx of
             [(dataValue', vl')] ->
-                traceIfFalse "dataValue" (dataValue' == dataValue)
+                traceIfFalse "dataValue" (dataValue' == (OutputDatumHash dataValue))
                 && traceIfFalse "value" (vl' `geq` vl)
             _ -> False
 
@@ -212,9 +214,9 @@ validate EscrowParams{escrowDeadline, escrowTargets} contributor action ScriptCo
             traceIfFalse "escrowDeadline-before" ((escrowDeadline - 1) `before` txInfoValidRange scriptContextTxInfo)
             && traceIfFalse "txSignedBy" (scriptContextTxInfo `txSignedBy` unPaymentPubKeyHash contributor)
 
-typedValidator :: EscrowParams Datum -> Scripts.TypedValidator Escrow
+typedValidator :: EscrowParams Datum -> V2.TypedValidator Escrow
 typedValidator escrow = go (Haskell.fmap datumHash escrow) where
-    go = Scripts.mkTypedValidatorParam @Escrow
+    go = V2.mkTypedValidatorParam @Escrow
         $$(PlutusTx.compile [|| validate ||])
         $$(PlutusTx.compile [|| wrap ||])
     wrap = Scripts.mkUntypedValidator
@@ -261,7 +263,7 @@ pay ::
 pay inst escrow vl = do
     pk <- ownFirstPaymentPubKeyHash
     let tx = Constraints.mustPayToTheScriptWithDatumInTx pk vl
-          <> Constraints.mustValidateIn (Ledger.interval 1 (escrowDeadline escrow))
+          <> Constraints.mustValidateInTimeRange (Interval.interval 1 (1 + escrowDeadline escrow))
     mkTxConstraints (Constraints.typedValidatorLookups inst) tx
         >>= adjustUnbalancedTx
         >>= submitUnbalancedTx
@@ -298,19 +300,14 @@ redeem inst escrow = mapError (review _EscrowError) $ do
     current <- snd <$> currentNodeClientTimeRange
     if current >= escrowDeadline escrow
     then throwing _RedeemFailed DeadlinePassed
-    else if foldMap (view Tx.decoratedTxOutValue) unspentOutputs `lt` targetTotal escrow
+    else if foldMap Tx.decoratedTxOutPlutusValue unspentOutputs `lt` targetTotal escrow
     then throwing _RedeemFailed NotEnoughFundsAtAddress
     else do
       let
-          -- Correct validity interval should be:
-          -- @
-          --   Interval (LowerBound NegInf True) (Interval.strictUpperBound $ escrowDeadline escrow)
-          -- @
-          -- See Note [Validity Interval's upper bound]
-          validityTimeRange = Interval.to (Haskell.pred $ Haskell.pred $ escrowDeadline escrow)
-          tx = Constraints.collectFromTheScript unspentOutputs Redeem
+          validityTimeRange = Interval.lessThan $ Haskell.pred $ escrowDeadline escrow
+          tx = Constraints.spendUtxosFromTheScript unspentOutputs Redeem
                   <> foldMap mkTx (escrowTargets escrow)
-                  <> Constraints.mustValidateIn validityTimeRange
+                  <> Constraints.mustValidateInTimeRange validityTimeRange
       utx <- mkTxConstraints ( Constraints.typedValidatorLookups inst
                             <> Constraints.unspentOutputs unspentOutputs
                              ) tx
@@ -343,9 +340,9 @@ refund inst escrow = do
     pk <- ownFirstPaymentPubKeyHash
     let pkh = datumHash $ Datum $ PlutusTx.toBuiltinData pk
     let flt _ ciTxOut = has (Tx.decoratedTxOutScriptDatum . _1 . only pkh) ciTxOut
-        tx' = Constraints.collectFromTheScriptFilter flt unspentOutputs Refund
+        tx' = Constraints.spendUtxosFromTheScriptFilter flt unspentOutputs Refund
                 <> Constraints.mustBeSignedBy pk
-                <> Constraints.mustValidateIn (from (escrowDeadline escrow))
+                <> Constraints.mustValidateInTimeRange (Interval.from $ escrowDeadline escrow)
     if Constraints.modifiesUtxoSet tx'
     then do
         utx <- mkTxConstraints ( Constraints.typedValidatorLookups inst
@@ -368,7 +365,7 @@ payRedeemRefund params vl = do
         go = do
             networkId <- pNetworkId <$> getParams
             cur <- utxosAt (Scripts.validatorCardanoAddress networkId inst)
-            let presentVal = foldMap (view Tx.decoratedTxOutValue) cur
+            let presentVal = foldMap Tx.decoratedTxOutPlutusValue cur
             if presentVal `geq` targetTotal params
                 then Right <$> redeem inst params
                 else do

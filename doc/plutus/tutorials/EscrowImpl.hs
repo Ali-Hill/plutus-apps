@@ -56,16 +56,16 @@ import GHC.Generics (Generic)
 import Ledger (POSIXTime, PaymentPubKeyHash (unPaymentPubKeyHash), ScriptContext (ScriptContext, scriptContextTxInfo),
                TxId, getCardanoTxId, interval, scriptOutputsAt, txSignedBy, valuePaidTo)
 import Ledger qualified
-import Ledger.Constraints (TxConstraints)
-import Ledger.Constraints qualified as Constraints
 import Ledger.Interval (after, before, from)
-import Ledger.Interval qualified as Interval
 import Ledger.Tx qualified as Tx
+import Ledger.Tx.Constraints (TxConstraints)
+import Ledger.Tx.Constraints qualified as Constraints
+import Ledger.Tx.Constraints.ValidityInterval qualified as Interval
 import Ledger.Typed.Scripts (TypedValidator)
 import Ledger.Typed.Scripts qualified as Scripts
-import Ledger.Value (Value, geq, lt)
 import Plutus.Script.Utils.Scripts qualified as Scripts
 import Plutus.Script.Utils.V1.Scripts qualified as Scripts
+import Plutus.Script.Utils.Value (Value, geq, lt)
 import Plutus.V1.Ledger.Api (Datum (Datum), DatumHash, ValidatorHash)
 import Plutus.V1.Ledger.Contexts (ScriptContext (ScriptContext, scriptContextTxInfo), TxInfo (txInfoValidRange))
 
@@ -270,7 +270,7 @@ pay ::
 pay inst escrow vl = do
     pk <- ownFirstPaymentPubKeyHash
     let tx = Constraints.mustPayToTheScriptWithDatumHash pk vl
-          <> Constraints.mustValidateIn (Ledger.interval 1 (escrowDeadline escrow))
+          <> Constraints.mustValidateInTimeRange (Interval.interval 1 (1 + escrowDeadline escrow))
     utx <- mkTxConstraints (Constraints.typedValidatorLookups inst) tx >>= adjustUnbalancedTx
     getCardanoTxId <$> submitUnbalancedTx utx
 
@@ -304,13 +304,13 @@ redeem inst escrow = mapError (review _EscrowError) $ do
     current <- Haskell.snd <$> currentNodeClientTimeRange
     unspentOutputs <- utxosAt addr
     let
-        valRange = Interval.to (Haskell.pred $ escrowDeadline escrow)
-        tx = Constraints.collectFromTheScript unspentOutputs Redeem
+        valRange = Interval.lessThan $ escrowDeadline escrow
+        tx = Constraints.spendUtxosFromTheScript unspentOutputs Redeem
                 <> foldMap mkTx (escrowTargets escrow)
-                <> Constraints.mustValidateIn valRange
+                <> Constraints.mustValidateInTimeRange valRange
     if current >= escrowDeadline escrow
     then throwing _RedeemFailed DeadlinePassed
-    else if foldMap (view Tx.decoratedTxOutValue) unspentOutputs `lt` targetTotal escrow
+    else if foldMap Tx.decoratedTxOutPlutusValue unspentOutputs `lt` targetTotal escrow
          then throwing _RedeemFailed NotEnoughFundsAtAddress
          else do
            utx <- mkTxConstraints ( Constraints.typedValidatorLookups inst
@@ -343,8 +343,8 @@ refund inst escrow = do
     unspentOutputs <- utxosAt (Scripts.validatorCardanoAddress networkId inst)
     let pkh = Scripts.datumHash $ Datum $ PlutusTx.toBuiltinData pk
     let flt _ ciTxOut = has (Tx.decoratedTxOutScriptDatum . _1 . only pkh) ciTxOut
-        tx' = Constraints.collectFromTheScriptFilter flt unspentOutputs Refund
-                <> Constraints.mustValidateIn (from (Haskell.succ $ escrowDeadline escrow))
+        tx' = Constraints.spendUtxosFromTheScriptFilter flt unspentOutputs Refund
+                <> Constraints.mustValidateInTimeRange (Interval.from (Haskell.succ $ escrowDeadline escrow))
     if Constraints.modifiesUtxoSet tx'
     then do
         utx <- mkTxConstraints ( Constraints.typedValidatorLookups inst
@@ -366,7 +366,7 @@ payRedeemRefund params vl = do
     let inst = typedValidator params
         go = do
             cur <- utxosAt (Scripts.validatorCardanoAddress networkId inst)
-            let presentVal = foldMap (view Tx.decoratedTxOutValue) cur
+            let presentVal = foldMap Tx.decoratedTxOutPlutusValue cur
             if presentVal `geq` targetTotal params
                 then Right <$> redeem inst params
                 else do

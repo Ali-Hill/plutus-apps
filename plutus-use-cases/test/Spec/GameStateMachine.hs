@@ -28,21 +28,24 @@ module Spec.GameStateMachine
   , prop_SanityCheckModel
   , prop_SanityCheckAssertions
   , prop_GameCrashTolerance
+  , prop_noGuessWithoutToken
   , certification
   , gameParam
   ) where
 
+import Cardano.Api qualified as CardanoAPI
 import Cardano.Node.Emulator.Params qualified as Params
 import Control.Exception hiding (handle)
 import Control.Lens
 import Control.Monad
 import Control.Monad.Freer.Extras.Log (LogLevel (..))
-import Data.Data
 import Data.Map qualified as Map
 import Data.Maybe
 import Data.Set qualified as Set
+import Ledger.Tx.CardanoAPI.Internal
 import Prettyprinter
 import Test.QuickCheck as QC hiding (checkCoverage, (.&&.))
+import Test.QuickCheck.ContractModel.ThreatModel
 import Test.Tasty hiding (after)
 import Test.Tasty.HUnit qualified as HUnit
 import Test.Tasty.QuickCheck (testProperty)
@@ -50,15 +53,15 @@ import Test.Tasty.QuickCheck (testProperty)
 import Cardano.Node.Emulator.TimeSlot qualified as TimeSlot
 import Data.Default (Default (def))
 import Ledger qualified
-import Ledger.Ada qualified as Ada
 import Ledger.Typed.Scripts qualified as Scripts
-import Ledger.Value (Value)
 import Plutus.Contract.Secrets
 import Plutus.Contract.Test hiding (not)
 import Plutus.Contract.Test.Certification
 import Plutus.Contract.Test.ContractModel
 import Plutus.Contract.Test.ContractModel.CrashTolerance
 import Plutus.Contracts.GameStateMachine as G hiding (Guess)
+import Plutus.Script.Utils.Ada qualified as Ada
+import Plutus.Script.Utils.Value (Value)
 import Plutus.Trace.Emulator as Trace
 import PlutusTx.Coverage
 
@@ -76,7 +79,7 @@ data GameModel = GameModel
     , _hasToken      :: Maybe Wallet
     , _currentSecret :: String
     }
-    deriving (Show, Data)
+    deriving (Show, Generic)
 
 makeLenses 'GameModel
 
@@ -323,27 +326,27 @@ tests :: TestTree
 tests =
     testGroup "game state machine with secret arguments tests"
     [ checkPredicateOptions options "run a successful game trace"
-        (walletFundsChange w2 (Ada.adaValueOf 3 <> guessTokenVal)
-        .&&. valueAtAddress validatorAddress (Ada.adaValueOf 5 ==)
-        .&&. walletFundsChange w1 (Ada.adaValueOf (-8)))
+        (walletFundsChangePlutus w2 (Ada.adaValueOf 3 <> guessTokenVal)
+        .&&. plutusValueAtAddress validatorAddress (Ada.adaValueOf 5 ==)
+        .&&. walletFundsChangePlutus w1 (Ada.adaValueOf (-8)))
         successTrace
 
     , checkPredicateOptions options "run a 2nd successful game trace"
-        (walletFundsChange w2 (Ada.adaValueOf 3)
-        .&&. valueAtAddress validatorAddress (Ada.adaValueOf 0 ==)
-        .&&. walletFundsChange w1 (Ada.adaValueOf (-8))
-        .&&. walletFundsChange w3 (Ada.adaValueOf 5 <> guessTokenVal))
+        (walletFundsChangePlutus w2 (Ada.adaValueOf 3)
+        .&&. plutusValueAtAddress validatorAddress (Ada.adaValueOf 0 ==)
+        .&&. walletFundsChangePlutus w1 (Ada.adaValueOf (-8))
+        .&&. walletFundsChangePlutus w3 (Ada.adaValueOf 5 <> guessTokenVal))
         successTrace2
 
     , checkPredicateOptions options "run a successful game trace where we try to leave 1 Ada in the script address"
-        (walletFundsChange w1 (Ada.toValue (-2_000_000) <> guessTokenVal)
-        .&&. valueAtAddress validatorAddress (Ada.toValue 2_000_000 ==))
+        (walletFundsChangePlutus w1 (Ada.toValue (-2_000_000) <> guessTokenVal)
+        .&&. plutusValueAtAddress validatorAddress (Ada.toValue 2_000_000 ==))
         traceLeaveTwoAdaInScript
 
     , checkPredicateOptions options "run a failed trace"
-        (walletFundsChange w2 (Ada.toValue 2_000_000 <> guessTokenVal)
-        .&&. valueAtAddress validatorAddress (Ada.adaValueOf 8 ==)
-        .&&. walletFundsChange w1 (Ada.toValue (-2_000_000) <> Ada.adaValueOf (-8)))
+        (walletFundsChangePlutus w2 (Ada.toValue 2_000_000 <> guessTokenVal)
+        .&&. plutusValueAtAddress validatorAddress (Ada.adaValueOf 8 ==)
+        .&&. walletFundsChangePlutus w1 (Ada.toValue (-2_000_000) <> Ada.adaValueOf (-8)))
         failTrace
 
     -- TODO: turn this on again when reproducibility issue in core is fixed
@@ -384,17 +387,17 @@ runTestsWithCoverage = do
     coverageTests ref = testGroup "game state machine tests"
                          [ checkPredicateCoverageOptions options "run a successful game trace"
                             ref
-                            (walletFundsChange w2 (Ada.toValue Ledger.minAdaTxOutEstimated <> Ada.adaValueOf 3 <> guessTokenVal)
-                            .&&. valueAtAddress validatorAddress (Ada.adaValueOf 5 ==)
-                            .&&. walletFundsChange w1 (Ada.toValue (-Ledger.minAdaTxOutEstimated) <> Ada.adaValueOf (-8)))
+                            (walletFundsChangePlutus w2 (Ada.toValue Ledger.minAdaTxOutEstimated <> Ada.adaValueOf 3 <> guessTokenVal)
+                            .&&. plutusValueAtAddress validatorAddress (Ada.adaValueOf 5 ==)
+                            .&&. walletFundsChangePlutus w1 (Ada.toValue (-Ledger.minAdaTxOutEstimated) <> Ada.adaValueOf (-8)))
                             successTrace
 
                         , checkPredicateCoverageOptions options "run a 2nd successful game trace"
                             ref
-                            (walletFundsChange w2 (Ada.adaValueOf 3)
-                            .&&. valueAtAddress validatorAddress (Ada.adaValueOf 0 ==)
-                            .&&. walletFundsChange w1 (Ada.toValue (-Ledger.minAdaTxOutEstimated) <> Ada.adaValueOf (-8))
-                            .&&. walletFundsChange w3 (Ada.toValue Ledger.minAdaTxOutEstimated <> Ada.adaValueOf 5 <> guessTokenVal))
+                            (walletFundsChangePlutus w2 (Ada.adaValueOf 3)
+                            .&&. plutusValueAtAddress validatorAddress (Ada.adaValueOf 0 ==)
+                            .&&. walletFundsChangePlutus w1 (Ada.toValue (-Ledger.minAdaTxOutEstimated) <> Ada.adaValueOf (-8))
+                            .&&. walletFundsChangePlutus w3 (Ada.toValue Ledger.minAdaTxOutEstimated <> Ada.adaValueOf 5 <> guessTokenVal))
                             successTrace2
                         ]
 
@@ -482,6 +485,27 @@ guessTokenVal =
     let sym = Scripts.forwardingMintingPolicyHash $ G.typedValidator gameParam
     in G.token sym "guess"
 
+guessTokenVal' :: CardanoAPI.Value
+guessTokenVal' = either undefined id $ toCardanoValue guessTokenVal
+
+-- | Threat model checking that the guess token is required to submit guesses. Finds a transaction
+--   spending a game output and passing along the guess token, and checks that the transaction fails
+--   to validate if you remove the token.
+noGuessWithoutToken :: ThreatModel ()
+noGuessWithoutToken = do
+  let scriptAddr = Scripts.validatorCardanoAddressAny Params.testnet $ G.typedValidator gameParam
+  ensureHasInputAt scriptAddr
+
+  let hasGuessToken out = guessTokenVal' `leqValue` valueOf out
+  i <- anyInputSuchThat  hasGuessToken
+  o <- anyOutputSuchThat hasGuessToken
+
+  shouldNotValidate $ changeValueOf i (valueOf i <> CardanoAPI.negateValue guessTokenVal')
+                   <> changeValueOf o (valueOf o <> CardanoAPI.negateValue guessTokenVal')
+
+prop_noGuessWithoutToken :: Actions GameModel -> Property
+prop_noGuessWithoutToken = checkThreatModelWithOptions options defaultCoverageOptions noGuessWithoutToken
+
 -- | Certification.
 certification :: Certification GameModel
 certification = defaultCertification {
@@ -493,7 +517,7 @@ certification = defaultCertification {
   where
     unitTest ref =
       checkPredicateCoverageOptions options "run a successful game trace" ref
-        (walletFundsChange w2 (Ada.toValue Ledger.minAdaTxOutEstimated <> Ada.adaValueOf 3 <> guessTokenVal)
-        .&&. valueAtAddress validatorAddress (Ada.adaValueOf 5 ==)
-        .&&. walletFundsChange w1 (Ada.toValue (-Ledger.minAdaTxOutEstimated) <> Ada.adaValueOf (-8)))
+        (walletFundsChangePlutus w2 (Ada.toValue Ledger.minAdaTxOutEstimated <> Ada.adaValueOf 3 <> guessTokenVal)
+        .&&. plutusValueAtAddress validatorAddress (Ada.adaValueOf 5 ==)
+        .&&. walletFundsChangePlutus w1 (Ada.toValue (-Ledger.minAdaTxOutEstimated) <> Ada.adaValueOf (-8)))
         successTrace

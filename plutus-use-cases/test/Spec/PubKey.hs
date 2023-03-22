@@ -4,12 +4,12 @@ module Spec.PubKey(tests, pubKeyTrace) where
 import Control.Monad (void)
 import Data.Map qualified as Map
 
-import Ledger.Ada qualified as Ada
-import Ledger.Constraints qualified as Constraints
 import Ledger.Scripts (unitRedeemer)
+import Ledger.Tx.Constraints qualified as Constraints
 import Ledger.Typed.Scripts as Scripts
 import Plutus.Contract
 import Plutus.Contract.Test
+import Plutus.Script.Utils.Ada qualified as Ada
 import Plutus.Trace.Emulator qualified as Trace
 
 import Plutus.Contracts.PubKey (PubKeyError, pubKeyContract)
@@ -21,7 +21,7 @@ theContract = do
   pk <- ownFirstPaymentPubKeyHash
   (txOutRef, ciTxOut, pkInst) <- pubKeyContract (mockWalletPaymentPubKeyHash w1) (Ada.adaValueOf 10)
   let lookups = maybe mempty (Constraints.unspentOutputs . Map.singleton txOutRef) ciTxOut
-              <> Constraints.plutusV1OtherScript (Scripts.validatorScript pkInst)
+              <> Constraints.plutusV2OtherScript (Scripts.validatorScript pkInst)
   void $ submitTxConstraintsWith @Scripts.Any lookups (Constraints.mustSpendScriptOutput txOutRef unitRedeemer <> Constraints.mustBeSignedBy pk)
 
 tests :: TestTree

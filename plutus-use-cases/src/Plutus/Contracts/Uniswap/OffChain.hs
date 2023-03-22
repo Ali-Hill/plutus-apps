@@ -36,33 +36,35 @@ module Plutus.Contracts.Uniswap.OffChain
     ) where
 
 import Cardano.Node.Emulator.Params (testnet)
-import Control.Lens (view, (^?))
+import Control.Lens ((^?))
 import Control.Monad hiding (fmap)
+import Data.Aeson (FromJSON, ToJSON)
 import Data.Map qualified as Map
 import Data.Monoid (Last (..))
 import Data.Proxy (Proxy (..))
 import Data.Text (Text, pack)
 import Data.Void (Void, absurd)
-import Ledger (CardanoAddress, DecoratedTxOut, datumInDatumFromQuery, decoratedTxOutScriptDatum, decoratedTxOutValue)
-import Ledger.Constraints as Constraints hiding (adjustUnbalancedTx)
+import GHC.Generics (Generic)
+import Ledger (CardanoAddress, DecoratedTxOut, datumInDatumFromQuery, decoratedTxOutPlutusValue,
+               decoratedTxOutScriptDatum)
+import Ledger.Tx.Constraints as Constraints hiding (adjustUnbalancedTx)
 import Ledger.Typed.Scripts qualified as Scripts
-import Playground.Contract
 import Plutus.Contract as Contract
 import Plutus.Contract.Test.Coverage.Analysis
 import Plutus.Contracts.Currency qualified as Currency
 import Plutus.Contracts.Uniswap.OnChain (mkUniswapValidator, validateLiquidityMinting)
 import Plutus.Contracts.Uniswap.Pool
 import Plutus.Contracts.Uniswap.Types
-import Plutus.Script.Utils.V1.Address (mkValidatorCardanoAddress)
-import Plutus.Script.Utils.V1.Scripts (scriptCurrencySymbol)
-import Plutus.V1.Ledger.Api (CurrencySymbol, Datum (Datum), DatumHash, MintingPolicy, Redeemer (Redeemer),
-                             ScriptContext, Validator, Value)
-import Plutus.V1.Ledger.Scripts (mkMintingPolicyScript)
+import Plutus.Script.Utils.V2.Address (mkValidatorCardanoAddress)
+import Plutus.Script.Utils.V2.Scripts (scriptCurrencySymbol)
+import Plutus.Script.Utils.V2.Typed.Scripts qualified as V2
+import Plutus.V2.Ledger.Api (CurrencySymbol, Datum (Datum), DatumHash, MintingPolicy, Redeemer (Redeemer), TokenName,
+                             TxOutRef, Validator, Value)
+import Plutus.V2.Ledger.Api qualified as V2
 import PlutusTx qualified
-import PlutusTx.Code
 import PlutusTx.Coverage
 import PlutusTx.Prelude hiding (Semigroup (..), dropWhile, flip, unless)
-import Prelude as Haskell (Int, Semigroup (..), String, div, dropWhile, flip, show, (^))
+import Prelude as Haskell (Int, Semigroup (..), Show, String, div, dropWhile, flip, show, (^))
 import Text.Printf (printf)
 
 data Uniswapping
@@ -100,8 +102,8 @@ uniswapTokenName, poolStateTokenName :: TokenName
 uniswapTokenName = "Uniswap"
 poolStateTokenName = "Pool State"
 
-uniswapInstance :: Uniswap -> Scripts.TypedValidator Uniswapping
-uniswapInstance us = Scripts.mkTypedValidator @Uniswapping
+uniswapInstance :: Uniswap -> V2.TypedValidator Uniswapping
+uniswapInstance us = V2.mkTypedValidator @Uniswapping
     ($$(PlutusTx.compile [|| mkUniswapValidator ||])
         `PlutusTx.applyCode` PlutusTx.liftCode us
         `PlutusTx.applyCode` PlutusTx.liftCode c)
@@ -110,7 +112,7 @@ uniswapInstance us = Scripts.mkTypedValidator @Uniswapping
     c :: Coin PoolState
     c = poolStateCoin us
 
-    wrap = Scripts.mkUntypedValidator @Scripts.ScriptContextV1 @UniswapDatum @UniswapAction
+    wrap = Scripts.mkUntypedValidator @Scripts.ScriptContextV2 @UniswapDatum @UniswapAction
 
 uniswapScript :: Uniswap -> Validator
 uniswapScript = Scripts.validatorScript . uniswapInstance
@@ -122,22 +124,13 @@ uniswap :: CurrencySymbol -> Uniswap
 uniswap cs = Uniswap $ mkCoin cs uniswapTokenName
 
 liquidityPolicy :: Uniswap -> MintingPolicy
-liquidityPolicy us = mkMintingPolicyScript $
+liquidityPolicy us = V2.mkMintingPolicyScript $
     $$(PlutusTx.compile [|| \u t -> Scripts.mkUntypedMintingPolicy (validateLiquidityMinting u t) ||])
         `PlutusTx.applyCode` PlutusTx.liftCode us
         `PlutusTx.applyCode` PlutusTx.liftCode poolStateTokenName
 
-cc :: CompiledCode
-        (Uniswap
-         -> Coin PoolState
-         -> UniswapDatum
-         -> UniswapAction
-         -> ScriptContext
-         -> ())
-cc = $$(PlutusTx.compile [|| \u s r d c -> check $ mkUniswapValidator u s r d c ||])
-
 covIdx :: CoverageIndex
-covIdx = computeRefinedCoverageIndex cc
+covIdx = $refinedCoverageIndex $$(PlutusTx.compile [|| \u s r d c -> check $ mkUniswapValidator u s r d c ||])
 
 liquidityCurrency :: Uniswap -> CurrencySymbol
 liquidityCurrency = scriptCurrencySymbol . liquidityPolicy
@@ -163,7 +156,7 @@ data CreateParams = CreateParams
     , cpCoinB   :: Coin B   -- ^ The other 'Coin'.
     , cpAmountA :: Amount A -- ^ Amount of liquidity for the first 'Coin'.
     , cpAmountB :: Amount B -- ^ Amount of liquidity for the second 'Coin'.
-    } deriving (Show, Generic, ToJSON, FromJSON, ToSchema)
+    } deriving (Show, Generic, ToJSON, FromJSON)
 
 -- | Parameters for the @swap@-endpoint, which allows swaps between the two different coins in a liquidity pool.
 -- One of the provided amounts must be positive, the other must be zero.
@@ -172,20 +165,20 @@ data SwapParams = SwapParams
     , spCoinB   :: Coin B         -- ^ The other 'Coin'.
     , spAmountA :: Amount A       -- ^ The amount the first 'Coin' that should be swapped.
     , spAmountB :: Amount B       -- ^ The amount of the second 'Coin' that should be swapped.
-    } deriving (Show, Generic, ToJSON, FromJSON, ToSchema)
+    } deriving (Show, Generic, ToJSON, FromJSON)
 
 -- | Parameters for the @close@-endpoint, which closes a liquidity pool.
 data CloseParams = CloseParams
     { clpCoinA :: Coin A         -- ^ One 'Coin' of the liquidity pair.
     , clpCoinB :: Coin B         -- ^ The other 'Coin' of the liquidity pair.
-    } deriving (Show, Generic, ToJSON, FromJSON, ToSchema)
+    } deriving (Show, Generic, ToJSON, FromJSON)
 
 -- | Parameters for the @remove@-endpoint, which removes some liquidity from a liquidity pool.
 data RemoveParams = RemoveParams
     { rpCoinA :: Coin A           -- ^ One 'Coin' of the liquidity pair.
     , rpCoinB :: Coin B           -- ^ The other 'Coin' of the liquidity pair.
     , rpDiff  :: Amount Liquidity -- ^ The amount of liquidity tokens to burn in exchange for liquidity from the pool.
-    } deriving (Show, Generic, ToJSON, FromJSON, ToSchema)
+    } deriving (Show, Generic, ToJSON, FromJSON)
 
 -- | Parameters for the @add@-endpoint, which adds liquidity to a liquidity pool in exchange for liquidity tokens.
 data AddParams = AddParams
@@ -193,7 +186,7 @@ data AddParams = AddParams
     , apCoinB   :: Coin B         -- ^ The other 'Coin' of the liquidity pair.
     , apAmountA :: Amount A       -- ^ The amount of coins of the first kind to add to the pool.
     , apAmountB :: Amount B       -- ^ The amount of coins of the second kind to add to the pool.
-    } deriving (Show, Generic, ToJSON, FromJSON, ToSchema)
+    } deriving (Show, Generic, ToJSON, FromJSON)
 
 -- | Creates a Uniswap "factory". This factory will keep track of the existing liquidity pools and enforce that there will be at most one liquidity pool
 -- for any pair of tokens at any given time.
@@ -233,8 +226,8 @@ create us CreateParams{..} = do
         lpVal    = valueOf cpCoinA cpAmountA <> valueOf cpCoinB cpAmountB <> unitValue psC
 
         lookups  = Constraints.typedValidatorLookups usInst        <>
-                   Constraints.plutusV1OtherScript usScript                <>
-                   Constraints.plutusV1MintingPolicy (liquidityPolicy us) <>
+                   Constraints.plutusV2OtherScript usScript                <>
+                   Constraints.plutusV2MintingPolicy (liquidityPolicy us) <>
                    Constraints.unspentOutputs (Map.singleton oref o)
 
         tx       = Constraints.mustPayToTheScriptWithDatumInTx usDat1 usVal                                     <>
@@ -262,8 +255,8 @@ close us CloseParams{..} = do
         redeemer = Redeemer $ PlutusTx.toBuiltinData Close
 
         lookups  = Constraints.typedValidatorLookups usInst        <>
-                   Constraints.plutusV1OtherScript usScript                <>
-                   Constraints.plutusV1MintingPolicy (liquidityPolicy us) <>
+                   Constraints.plutusV2OtherScript usScript                <>
+                   Constraints.plutusV2MintingPolicy (liquidityPolicy us) <>
                    Constraints.unspentOutputs (Map.singleton oref1 o1 <> Map.singleton oref2 o2)
 
         tx       = Constraints.mustPayToTheScriptWithDatumInTx usDat usVal <>
@@ -288,7 +281,7 @@ remove us RemoveParams{..} = do
         lC           = mkCoin (liquidityCurrency us) $ lpTicker lp
         psVal        = unitValue psC
         lVal         = valueOf lC rpDiff
-        inVal        = view decoratedTxOutValue o
+        inVal        = decoratedTxOutPlutusValue o
         inA          = amountOf inVal rpCoinA
         inB          = amountOf inVal rpCoinB
         (outA, outB) = calculateRemoval inA inB liquidity rpDiff
@@ -296,8 +289,8 @@ remove us RemoveParams{..} = do
         redeemer     = Redeemer $ PlutusTx.toBuiltinData Remove
 
         lookups  = Constraints.typedValidatorLookups usInst          <>
-                   Constraints.plutusV1OtherScript usScript                  <>
-                   Constraints.plutusV1MintingPolicy (liquidityPolicy us)   <>
+                   Constraints.plutusV2OtherScript usScript                  <>
+                   Constraints.plutusV2MintingPolicy (liquidityPolicy us)   <>
                    Constraints.unspentOutputs (Map.singleton oref o)
 
         tx       = Constraints.mustPayToTheScriptWithDatumInTx dat val          <>
@@ -313,7 +306,7 @@ add :: forall w s. Uniswap -> AddParams -> Contract w s Text ()
 add us AddParams{..} = do
     (_, (oref, o, lp, liquidity)) <- findUniswapFactoryAndPool us apCoinA apCoinB
     when (apAmountA < 0 || apAmountB < 0) $ throwError "amounts must not be negative"
-    let outVal = view decoratedTxOutValue o
+    let outVal = decoratedTxOutPlutusValue o
         oldA   = amountOf outVal apCoinA
         oldB   = amountOf outVal apCoinB
         newA   = oldA + apAmountA
@@ -334,8 +327,8 @@ add us AddParams{..} = do
         redeemer     = Redeemer $ PlutusTx.toBuiltinData Add
 
         lookups  = Constraints.typedValidatorLookups usInst             <>
-                   Constraints.plutusV1OtherScript usScript                     <>
-                   Constraints.plutusV1MintingPolicy (liquidityPolicy us)       <>
+                   Constraints.plutusV2OtherScript usScript                     <>
+                   Constraints.plutusV2MintingPolicy (liquidityPolicy us)       <>
                    Constraints.unspentOutputs (Map.singleton oref o)
 
         tx       = Constraints.mustPayToTheScriptWithDatumInTx dat val          <>
@@ -355,7 +348,7 @@ swap :: forall w s. Uniswap -> SwapParams -> Contract w s Text ()
 swap us SwapParams{..} = do
     unless (spAmountA > 0 && spAmountB == 0 || spAmountA == 0 && spAmountB > 0) $ throwError "exactly one amount must be positive"
     (_, (oref, o, lp, liquidity)) <- findUniswapFactoryAndPool us spCoinA spCoinB
-    let outVal = view decoratedTxOutValue o
+    let outVal = decoratedTxOutPlutusValue o
     let oldA = amountOf outVal spCoinA
         oldB = amountOf outVal spCoinB
     (newA, newB) <- if spAmountA > 0 then do
@@ -373,7 +366,7 @@ swap us SwapParams{..} = do
         val     = valueOf spCoinA newA <> valueOf spCoinB newB <> unitValue (poolStateCoin us)
 
         lookups = Constraints.typedValidatorLookups inst                 <>
-                  Constraints.plutusV1OtherScript (Scripts.validatorScript inst) <>
+                  Constraints.plutusV2OtherScript (Scripts.validatorScript inst) <>
                   Constraints.unspentOutputs (Map.singleton oref o)
 
         tx      = mustSpendScriptOutput oref (Redeemer $ PlutusTx.toBuiltinData Swap) <>
@@ -393,7 +386,7 @@ pools us = do
     go :: [DecoratedTxOut] -> Contract w s Text [((Coin A, Amount A), (Coin B, Amount B))]
     go []       = return []
     go (o : os) = do
-        let v = view decoratedTxOutValue o
+        let v = decoratedTxOutPlutusValue o
         if isUnity v c
             then do
                 d <- getUniswapDatum o
@@ -417,8 +410,8 @@ pools us = do
 funds :: forall w s. Contract w s Text Value
 funds = do
     addr <- Contract.ownAddress
-    os  <- map snd . Map.toList <$> utxosAt addr
-    return $ mconcat [view decoratedTxOutValue o | o <- os]
+    os   <- map snd . Map.toList <$> utxosAt addr
+    return $ foldMap decoratedTxOutPlutusValue os
 
 getUniswapDatum :: DecoratedTxOut -> Contract w s Text UniswapDatum
 getUniswapDatum o = do
@@ -446,7 +439,7 @@ findUniswapInstance us c f = do
     let addr = uniswapAddress us
     logInfo @String $ printf "looking for Uniswap instance at address %s containing coin %s " (show addr) (show c)
     utxos <- utxosAt addr
-    go  [x | x@(_, o) <- Map.toList utxos, isUnity (view decoratedTxOutValue o) c]
+    go  [x | x@(_, o) <- Map.toList utxos, isUnity (decoratedTxOutPlutusValue o) c]
   where
     go [] = throwError "Uniswap instance not found"
     go ((oref, o) : xs) = do

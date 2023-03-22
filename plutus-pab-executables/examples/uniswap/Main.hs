@@ -4,6 +4,7 @@
 {-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE FlexibleContexts   #-}
 {-# LANGUAGE LambdaCase         #-}
+{-# LANGUAGE NumericUnderscores #-}
 {-# LANGUAGE OverloadedStrings  #-}
 {-# LANGUAGE RankNTypes         #-}
 {-# LANGUAGE TypeApplications   #-}
@@ -23,16 +24,16 @@ import Data.OpenApi.Schema qualified as OpenApi
 import Data.Semigroup qualified as Semigroup
 import Data.Text (Text)
 import GHC.Generics (Generic)
-import Ledger.Ada (adaSymbol, adaToken)
 import Plutus.Contract
 import Plutus.Contracts.Currency qualified as Currency
 import Plutus.Contracts.Uniswap qualified as Uniswap
-import Plutus.Contracts.Uniswap.Trace as US
+import Plutus.Contracts.Uniswap.Trace as Uniswap
 import Plutus.PAB.Effects.Contract.Builtin (Builtin, BuiltinHandler (..), HasDefinitions (..), SomeBuiltin (..))
 import Plutus.PAB.Effects.Contract.Builtin qualified as Builtin
 import Plutus.PAB.Simulator (SimulatorEffectHandlers, logString)
 import Plutus.PAB.Simulator qualified as Simulator
 import Plutus.PAB.Webserver.Server qualified as PAB.Server
+import Plutus.Script.Utils.Ada (adaSymbol, adaToken)
 import Prelude hiding (init)
 import Prettyprinter (Pretty (..), viaShow)
 import Wallet.Emulator.Types (knownWallet)
@@ -59,7 +60,7 @@ main = void $ Simulator.runSimulationWith handlers $ do
                     _                                       -> Nothing
     logString @(Builtin UniswapContracts) $ "Uniswap instance created: " ++ show us
 
-    cids <- fmap Map.fromList $ forM US.wallets $ \w -> do
+    cids <- fmap Map.fromList $ forM Uniswap.wallets $ \w -> do
         cid <- Simulator.activateContract w $ UniswapUser us
         logString @(Builtin UniswapContracts) $ "Uniswap user contract started for " ++ show w
         Simulator.waitForEndpoint cid "funds"
@@ -70,7 +71,7 @@ main = void $ Simulator.runSimulationWith handlers $ do
         logString @(Builtin UniswapContracts) $ "initial funds in wallet " ++ show w ++ ": " ++ show v
         return (w, cid)
 
-    let cp = Uniswap.CreateParams ada (coins Map.! "A") 100000 500000
+    let cp = Uniswap.CreateParams ada (coins Map.! "A") 20_000_000 500000
     logString @(Builtin UniswapContracts) $ "creating liquidity pool: " ++ show (encode cp)
     let cid2 = cids Map.! knownWallet 2
     Simulator.waitForEndpoint cid2 "create"
@@ -95,16 +96,12 @@ instance Pretty UniswapContracts where
 
 instance HasDefinitions UniswapContracts where
     getDefinitions = [Init, UniswapStart]
-    getSchema = \case
-        UniswapUser _ -> Builtin.endpointsToSchemas @Uniswap.UniswapUserSchema
-        UniswapStart  -> Builtin.endpointsToSchemas @Uniswap.UniswapOwnerSchema
-        Init          -> Builtin.endpointsToSchemas @Empty
     getContract = \case
         UniswapUser us -> SomeBuiltin . awaitPromise $ Uniswap.userEndpoints us
         UniswapStart   -> SomeBuiltin Uniswap.ownerEndpoint
-        Init           -> SomeBuiltin US.setupTokens
+        Init           -> SomeBuiltin Uniswap.setupTokens
 
 handlers :: SimulatorEffectHandlers (Builtin UniswapContracts)
 handlers =
-    Simulator.mkSimulatorHandlers def
+    Simulator.mkSimulatorHandlers (Uniswap.increaseTransactionLimits def)
     $ interpret (contractHandler (Builtin.handleBuiltin @UniswapContracts))

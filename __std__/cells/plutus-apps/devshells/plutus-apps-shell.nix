@@ -18,14 +18,14 @@ inputs.std.lib.dev.mkShell {
 
   commands = [
     {
+      package = cell.packages.scriv;
+      category = "general commands";
+      help = "Manage changelogs";
+    }
+    {
       package = cell.packages.fix-png-optimization;
       category = "general commands";
       help = "Fix all PNG files in-place";
-    }
-    {
-      package = cell.packages.fix-purs-tidy;
-      category = "general commands";
-      help = "Format all purs files in-place";
     }
     {
       package = pkgs.shellcheck;
@@ -74,10 +74,10 @@ inputs.std.lib.dev.mkShell {
       help = "Haskell build tool";
     }
     {
-      package = cell.packages.haskell-language-server;
-      name = "haskell-language-server";
+      package = cell.packages.haskell-language-server-wrapper;
+      name = "haskell-language-server-wrapper";
       category = "haskell";
-      help = "Haskell Language Server";
+      help = "Haskell Language Server Wrapper";
     }
     {
       package = cell.packages.hlint;
@@ -102,19 +102,31 @@ inputs.std.lib.dev.mkShell {
       category = "nix";
       help = "Nix code formatter";
     }
-    # TODO(std) bring this in eventually
-    # {
-    #   # tullia input isn't de-systemized for some reason
-    #   package = inputs.tullia.packages.${pkgs.system}.tullia;
-    #   category = "nix";
-    #   help = "Tools for working with CI tasks";
-    # }
   ];
 
   packages = [
     cell.packages.hie-bios
     cell.packages.sphinx-toolchain
+    cell.packages.hlint
+    cell.packages.stylish-haskell
+    cell.packages.haskell-language-server-wrapper
+    cell.packages.cabal-install
+    cell.packages.cabal-fmt
+    cell.packages.plutus-use-cases
+    cell.packages.cardano-wallet
 
+    cell.library.cardano-node.cardano-node
+    cell.library.cardano-node.cardano-cli
+
+    pkgs.plantuml
+    pkgs.shellcheck
+    pkgs.sqlite-interactive
+    pkgs.stack
+    pkgs.wget
+    pkgs.yq
+    pkgs.jq
+    pkgs.z3
+    pkgs.ghcid
     pkgs.editorconfig-core-c
     pkgs.jq
     pkgs.pre-commit
@@ -122,9 +134,10 @@ inputs.std.lib.dev.mkShell {
     pkgs.gnused
     pkgs.awscli2
     pkgs.bzip2
-
     pkgs.zlib
     pkgs.cacert
+    pkgs.dateutils
+    pkgs.act
   ];
 
   devshell.startup."pre-commit-check".text = cell.packages.pre-commit-check.shellHook;
@@ -137,85 +150,11 @@ inputs.std.lib.dev.mkShell {
       value = pkgs.lib.optionalString
         (pkgs.stdenv.hostPlatform.libc == "glibc") "${pkgs.glibcLocales}/lib/locale/locale-archive";
     }
-    # TODO(std) bring this in eventually
-    # {
-    #   name = "WEB_COMMON_SRC";
-    #   value = webCommon.cleanSrc;
-    # }
-    # TODO(std) most likely we don't need this
-    # {
-    #   name = "PYTHONPATH";
-    #   value = "";
-    # }
+
+    # This is used by doc/conf.py to link plutus-core read-the-docs pages
+    {
+      name = "PLUTUS_CORE_OBJECTS_INV";
+      value = cell.library.plutus-core-objects-inv;
+    }
   ];
 }
-
-# TODO(std) bring these in eventually
-# # Feed cardano-wallet, cardano-cli & cardano-node to our shell. This is stable as it doesn't mix
-# # dependencies with this code-base; the fetched binaries are the "standard" builds that people
-# # test. This should be fast as it mostly fetches Hydra caches without building much.
-# cardano-wallet = (import sources.flake-compat {
-#   inherit pkgs;
-#   src = builtins.fetchTree
-#     {
-#       type = "github";
-#       owner = "input-output-hk";
-#       repo = "cardano-wallet";
-#       rev = "18a931648550246695c790578d4a55ee2f10463e";
-#       narHash = "sha256-3Rnj/g3KLzOW5YSieqsUa9IF1Td22Eskk5KuVsOFgEQ=";
-#     };
-# }).defaultNix;
-# cardano-node = import
-#   (pkgs.fetchgit {
-#     url = "https://github.com/input-output-hk/cardano-node";
-#     # A standard release compatible with the cardano-wallet commit above is always preferred.
-#     rev = "1.35.4";
-#     sha256 = "1j01m2cp2vdcl26zx9xmipr551v3b2rz9kfn9ik8byfwj1z7652r";
-#   })
-#   { };
-
-# TODO(std) we want all these in the shell eventually
-# awscli2
-# bzip2
-# cacert
-# editorconfig-core-c
-# dateutils
-# ghcid
-# jq
-# nixFlakesAlias
-# nixpkgs-fmt
-# cabal-fmt
-# nodejs
-# plantuml
-# # See https://github.com/cachix/pre-commit-hooks.nix/issues/148 for why we need this
-# pre-commit
-# shellcheck
-# sqlite-interactive
-# stack
-# wget
-# yq
-# z3
-# zlib
-# cabal-install
-# cardano-node.cardano-cli
-# cardano-node.cardano-node
-# cardano-wallet.packages.${pkgs.system}.cardano-wallet
-# cardano-repo-tool
-# docs.build-and-serve-docs
-# fixPngOptimization
-# fix-purs-tidy
-# fixCabalFmt
-# fixStylishHaskell
-# haskell-language-server
-# haskell-language-server-wrapper
-# hie-bios
-# hlint
-# pab-nami-demo.start-backend
-# psa
-# purescript-language-server
-# purs-0_14_3
-# purs-tidy
-# spago
-# spago2nix
-# stylish-haskell
-# updateClientDeps

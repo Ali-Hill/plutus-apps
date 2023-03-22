@@ -55,18 +55,18 @@ let
             freer-extras.package.buildable = false;
             cardano-node-emulator.package.buildable = false;
             cardano-streaming.package.buildable = false;
-            marconi.package.buildable = false;
+            marconi-chain-index.package.buildable = false;
+            marconi-core.package.buildable = false;
+            marconi-sidechain.package.buildable = false;
             pab-blockfrost.package.buildable = false;
-            marconi-mamba.package.buildable = false;
-            playground-common.package.buildable = false;
             plutus-benchmark.package.buildable = false;
             plutus-chain-index.package.buildable = false;
             plutus-chain-index-core.package.buildable = false;
             plutus-contract.package.buildable = false;
             plutus-contract-certification.package.buildable = false;
+            plutus-e2e-tests.package.buildable = false;
             plutus-errors.package.buildable = false;
             plutus-ledger.package.buildable = false;
-            plutus-ledger-constraints.package.buildable = false;
             plutus-pab.package.buildable = false;
             plutus-pab-executables.package.buildable = false;
             plutus-script-utils.package.buildable = false;
@@ -113,13 +113,15 @@ let
         (lib.mkIf pkgs.stdenv.hostPlatform.isDarwin {
           packages = {
             plutus-pab-executables.components.tests.plutus-pab-test-full-long-running.buildable = lib.mkForce false;
-            playground-common.doHaddock = false; # Segfault 11
           };
         })
         ({ pkgs, config, ... }: {
           packages = {
-            marconi.doHaddock = deferPluginErrors;
-            marconi.flags.defer-plugin-errors = deferPluginErrors;
+            marconi-core.doHaddock = deferPluginErrors;
+            marconi-core.flags.defer-plugin-errors = deferPluginErrors;
+
+            marconi-chain-index.doHaddock = deferPluginErrors;
+            marconi-chain-index.flags.defer-plugin-errors = deferPluginErrors;
 
             # The lines `export CARDANO_NODE=...` and `export CARDANO_CLI=...`
             # is necessary to prevent the error
@@ -132,17 +134,27 @@ let
             # `configuration/defaults/byron-mainnet` directory.
             # Else, we'll get the error
             # `/nix/store/ls0ky8x6zi3fkxrv7n4vs4x9czcqh1pb-plutus-apps/marconi/test/configuration.yaml: openFile: does not exist (No such file or directory)`
-            marconi.preCheck = "
+            marconi-chain-index.preCheck = "
               export CARDANO_CLI=${config.hsPkgs.cardano-cli.components.exes.cardano-cli}/bin/cardano-cli${pkgs.stdenv.hostPlatform.extensions.executable}
               export CARDANO_NODE=${config.hsPkgs.cardano-node.components.exes.cardano-node}/bin/cardano-node${pkgs.stdenv.hostPlatform.extensions.executable}
               export CARDANO_NODE_SRC=${src}
             ";
 
-            marconi-mamba.doHaddock = deferPluginErrors;
-            marconi-mamba.flags.defer-plugin-errors = deferPluginErrors;
+            marconi-sidechain.doHaddock = deferPluginErrors;
+            marconi-sidechain.flags.defer-plugin-errors = deferPluginErrors;
 
             plutus-contract.doHaddock = deferPluginErrors;
             plutus-contract.flags.defer-plugin-errors = deferPluginErrors;
+
+            plutus-e2e-tests.doHaddock = deferPluginErrors;
+            plutus-e2e-tests.flags.defer-plugin-errors = deferPluginErrors;
+            plutus-e2e-tests.preCheck = "
+              export CARDANO_CLI=${config.hsPkgs.cardano-cli.components.exes.cardano-cli}/bin/cardano-cli${pkgs.stdenv.hostPlatform.extensions.executable}
+              export CARDANO_NODE=${config.hsPkgs.cardano-node.components.exes.cardano-node}/bin/cardano-node${pkgs.stdenv.hostPlatform.extensions.executable}
+              export CARDANO_NODE_SRC=${src}
+            ";
+            plutus-e2e-tests.components.tests.plutus-e2e-tests-test.build-tools =
+              lib.mkForce (with pkgs.buildPackages; [ jq coreutils shellcheck lsof ]);
 
             plutus-use-cases.doHaddock = deferPluginErrors;
             plutus-use-cases.flags.defer-plugin-errors = deferPluginErrors;
@@ -177,23 +189,21 @@ let
 
             # Werror everything. This is a pain, see https://github.com/input-output-hk/haskell.nix/issues/519
             cardano-streaming.ghcOptions = [ "-Werror" ];
-            marconi.ghcOptions = [ "-Werror" ];
+            marconi-chain-index.ghcOptions = [ "-Werror" ];
+            marconi-core.ghcOptions = [ "-Werror" ];
+            marconi-sidechain.ghcOptions = [ "-Werror" ];
             pab-blockfrost.ghcOptions = [ "-Werror" ];
-            marconi-mamba.ghcOptions = [ "-Werror" ];
-            playground-common.ghcOptions = [ "-Werror" ];
             plutus-chain-index.ghcOptions = [ "-Werror" ];
             plutus-chain-index-core.ghcOptions = [ "-Werror" ];
             plutus-contract.ghcOptions = [ "-Werror" ];
             plutus-doc.ghcOptions = [ "-Werror" ];
             plutus-example.ghcOptions = [ "-Werror" ];
             plutus-ledger.ghcOptions = [ "-Werror" ];
-            plutus-ledger-constraints.ghcOptions = [ "-Werror" ];
             plutus-pab.ghcOptions = [ "-Werror" ];
             plutus-pab-executables.ghcOptions = [ "-Werror" ];
             plutus-script-utils.ghcOptions = [ "-Werror" ];
             plutus-tx-constraints.ghcOptions = [ "-Werror" ];
             plutus-use-cases.ghcOptions = [ "-Werror" ];
-            rewindable-index.ghcOptions = [ "-Werror" ];
 
             # Honestly not sure why we need this, it has a mysterious unused dependency on "m"
             # This will go away when we upgrade nixpkgs and things use ieee754 anyway.

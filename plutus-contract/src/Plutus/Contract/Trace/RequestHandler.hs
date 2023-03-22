@@ -55,15 +55,15 @@ import Cardano.Node.Emulator.TimeSlot qualified as TimeSlot
 import Control.Monad.Freer.Extras.Log (LogMessage, LogMsg, LogObserve, logDebug, logWarn, surroundDebug)
 import Data.List.NonEmpty (NonEmpty)
 import Ledger (CardanoAddress, POSIXTime, POSIXTimeRange, Slot (..), SlotRange)
-import Ledger.Constraints.OffChain (UnbalancedTx, adjustUnbalancedTx)
 import Ledger.Tx (CardanoTx)
 import Ledger.Tx.CardanoAPI (ToCardanoError)
+import Ledger.Tx.Constraints (UnbalancedTx)
+import Ledger.Tx.Constraints qualified as Constraints
 import Plutus.ChainIndex (ChainIndexQueryEffect)
 import Plutus.ChainIndex.Effects qualified as ChainIndexEff
 import Plutus.ChainIndex.Types (Tip (..))
 import Plutus.Contract.Effects (ChainIndexQuery (..), ChainIndexResponse (..))
-import Plutus.Contract.Wallet qualified as Wallet
-import Wallet.API (WalletAPIError)
+import Wallet.API (WalletAPIError, signTxAndSubmit)
 import Wallet.Effects (NodeClientEffect, WalletEffect, getClientParams, getClientSlot)
 import Wallet.Effects qualified
 import Wallet.Emulator.LogMessages (RequestHandlerLogMsg (AdjustingUnbalancedTx, HandleTxFailed, SlotNoticationTargetVsCurrent))
@@ -235,7 +235,8 @@ handleUnbalancedTransactions ::
 handleUnbalancedTransactions =
     RequestHandler $ \unbalancedTx ->
         surroundDebug @Text "handleUnbalancedTransactions" $ do
-        Wallet.balanceTx unbalancedTx `Eff.handleError` (\err -> logWarn (HandleTxFailed err) >> pure (Left err))
+        Wallet.Effects.balanceTx unbalancedTx `Eff.handleError`
+          (\err -> logWarn (HandleTxFailed err) >> pure (Left err))
 
 handlePendingTransactions ::
     forall effs.
@@ -247,7 +248,7 @@ handlePendingTransactions ::
 handlePendingTransactions =
     RequestHandler $ \tx ->
         surroundDebug @Text "handlePendingTransactions" $ do
-        Eff.handleError (Right <$> Wallet.signTxAndSubmit tx)
+        Eff.handleError (Right <$> signTxAndSubmit tx)
                         (\err -> logWarn (HandleTxFailed err) >> pure (Left err))
 
 handleChainIndexQueries ::
@@ -294,7 +295,7 @@ handleYieldedUnbalancedTx ::
 handleYieldedUnbalancedTx =
     RequestHandler $ \utx ->
         surroundDebug @Text "handleYieldedUnbalancedTx" $ do
-            Wallet.yieldUnbalancedTx utx
+            Wallet.Effects.yieldUnbalancedTx utx
 
 handleAdjustUnbalancedTx ::
     forall effs.
@@ -307,7 +308,7 @@ handleAdjustUnbalancedTx =
     RequestHandler $ \utx ->
         surroundDebug @Text "handleAdjustUnbalancedTx" $ do
             params <- getClientParams
-            forM (adjustUnbalancedTx (emulatorPParams params) utx) $ \(missingAdaCosts, adjusted) -> do
+            forM (Constraints.adjustUnbalancedTx (emulatorPParams params) utx) $ \(missingAdaCosts, adjusted) -> do
                 logDebug $ AdjustingUnbalancedTx missingAdaCosts
                 pure adjusted
 

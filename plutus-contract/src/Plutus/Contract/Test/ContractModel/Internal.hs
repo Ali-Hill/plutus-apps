@@ -69,9 +69,9 @@ import GHC.Generics
 
 import Cardano.Api (AssetId, SlotNo (..))
 import Cardano.Api qualified as CardanoAPI
+import Cardano.Api.Shelley (ProtocolParameters)
 import Cardano.Crypto.Hash.Class qualified as Crypto
 import Cardano.Node.Emulator.Params ()
-import Ledger.Ada qualified as Ada
 import Ledger.Address
 import Ledger.Index as Index
 import Ledger.Scripts
@@ -92,6 +92,9 @@ import Test.QuickCheck.StateModel qualified as StateModel
 import Test.QuickCheck hiding (ShrinkState, checkCoverage, getSize, (.&&.), (.||.))
 import Test.QuickCheck qualified as QC
 import Test.QuickCheck.ContractModel as CM
+import Test.QuickCheck.ContractModel.Internal (ContractModelResult)
+import Test.QuickCheck.ContractModel.Internal.Model (annotatedStateAfter)
+import Test.QuickCheck.ContractModel.ThreatModel (ThreatModel, assertThreatModel)
 import Test.QuickCheck.Monadic (PropertyM, monadic)
 import Test.QuickCheck.Monadic qualified as QC
 
@@ -100,6 +103,7 @@ import Wallet.Emulator.MultiAgent (eteEvent)
 import Plutus.Trace.Effects.EmulatorControl qualified as EmulatorControl
 import Prettyprinter
 
+import Ledger.Value.CardanoAPI (lovelaceValueOf)
 import Plutus.Contract.Test.ContractModel.Internal.ContractInstance as Internal
 
 -- Drops StartContract from EmulatorEffects
@@ -175,13 +179,8 @@ instance HasChainIndex (EmulatorTraceWithInstances state) where
     -- Note, we don't store the genesis transaction in the index but put it in the before state
     -- instead to avoid showing that as a balance change in the models.
     where chainStateToChainIndex nid cs =
-            ChainIndex { before = beforeState
-                       , after  = CM.ChainState
-                                    { slot = fromInteger . toInteger $ _chainCurrentSlot cs
-                                    , utxo = makeUTxOs $ Index.initialise (_chainNewestFirst cs)
-                                    }
-                       -- The Backwards order
-                       , transactions = fst $ foldr addBlock ([], beforeState)
+            ChainIndex { -- The Backwards order
+                         transactions = fst $ foldr addBlock ([], beforeState)
                                                              ( reverse
                                                              . drop 1
                                                              . reverse
@@ -194,7 +193,7 @@ instance HasChainIndex (EmulatorTraceWithInstances state) where
                                                      $ Index.initialise (take 1 $ reverse (_chainNewestFirst cs))
                                               }
                   addBlock block (txs, state) =
-                    ( txs ++ [ TxInState ((\(CardanoApiEmulatorEraTx tx) -> tx) . _cardanoApiTx . unOnChain $ tx)
+                    ( txs ++ [ TxInState ((\(CardanoEmulatorEraTx tx) -> tx) . unOnChain $ tx)
                                          state
                                          (onChainTxIsValid tx)
                              | tx <- block ]
@@ -255,9 +254,12 @@ instance HasSymTokens (Action s) => HasSymTokens (Action (WithInstances s)) wher
   getAllSymTokens (UnderlyingAction a) = getAllSymTokens a
   getAllSymTokens Unilateral{}         = mempty
 
+deriving via StateModel.HasNoVariables Wallet instance StateModel.HasVariables Wallet
+
 instance forall s. ContractModel s => ContractModel (WithInstances s) where
   data Action (WithInstances s) = UnderlyingAction (Action s)
                                 | Unilateral Wallet
+                                deriving Generic
   initialState                        = WithInstances initialState
   waitProbability                     = waitProbability . fmap withoutInstances
   arbitraryWaitInterval               = arbitraryWaitInterval . fmap withoutInstances
@@ -303,7 +305,7 @@ defaultCoverageOptions = CoverageOptions
 -- to write `ContractModel`s that keep track of balances.
 defaultCheckOptionsContractModel :: CheckOptions
 defaultCheckOptionsContractModel =
-  let initialValue = Ada.lovelaceValueOf 100_000_000_000_000_000 in
+  let initialValue = lovelaceValueOf 100_000_000_000_000_000 in
   defaultCheckOptions & emulatorConfig
                       . initialChainState .~ (Left . Map.fromList $ zip knownWallets (repeat initialValue))
 
@@ -335,6 +337,33 @@ quickCheckWithCoverageAndResult qcargs copts prop = do
       when (chatty qcargs) $ putStrLn . show $ pretty report
       return (report, res)
 
+balanceChangePredicate :: ProtocolParameters -> ContractModelResult state -> Property
+balanceChangePredicate ps result =
+  let prettyAddr a = maybe (show a) show $ addressToWallet a
+  in assertBalanceChangesMatch (BalanceChangeOptions False signerPaysFees ps prettyAddr) result
+
+threatModelPredicate :: ThreatModel a -> ProtocolParameters -> ContractModelResult state -> Property
+threatModelPredicate m ps result = assertThreatModel m ps result
+
+-- | Check a threat model on all transactions produced by the given actions.
+checkThreatModel ::
+    CheckableContractModel state
+    => ThreatModel a
+    -> Actions (WithInstances state)                 -- ^ The actions to run
+    -> Property
+checkThreatModel = checkThreatModelWithOptions defaultCheckOptionsContractModel defaultCoverageOptions
+
+-- | Check a threat model on all transactions produced by the given actions.
+checkThreatModelWithOptions ::
+    CheckableContractModel state
+    => CheckOptions                                  -- ^ Emulator options
+    -> CoverageOptions                               -- ^ Coverage options
+    -> ThreatModel a
+    -> Actions (WithInstances state)                 -- ^ The actions to run
+    -> Property
+checkThreatModelWithOptions opts covopts m actions =
+  propRunActionsWithOptions opts covopts (\ _ -> pure True) (threatModelPredicate m) actions
+
 -- | Run a `Actions` in the emulator and check that the model and the emulator agree on the final
 --   wallet balance changes. Equivalent to
 --
@@ -346,7 +375,7 @@ propRunActions_ ::
     => Actions (WithInstances state)                 -- ^ The actions to run
     -> Property
 propRunActions_ actions =
-    propRunActions (\ _ -> pure True) actions
+    propRunActions (\ _ -> pure True) balanceChangePredicate actions
 
 -- | Run a `Actions` in the emulator and check that the model and the emulator agree on the final
 --   wallet balance changes, and that the given `TracePredicate` holds at the end. Equivalent to:
@@ -357,31 +386,32 @@ propRunActions_ actions =
 propRunActions ::
     CheckableContractModel state
     => (ModelState (WithInstances state) -> TracePredicate) -- ^ Predicate to check at the end
+    -> (ProtocolParameters -> ContractModelResult (WithInstances state) -> Property) -- ^ Predicate to run on the contract model
     -> Actions (WithInstances state)                        -- ^ The actions to run
     -> Property
 propRunActions = propRunActionsWithOptions defaultCheckOptionsContractModel defaultCoverageOptions
+
 
 propRunActionsWithOptions :: forall state.
     CheckableContractModel state
     => CheckOptions                                         -- ^ Emulator options
     -> CoverageOptions                                      -- ^ Coverage options
     -> (ModelState (WithInstances state) -> TracePredicate) -- ^ Predicate to check at the end of execution
+    -> (ProtocolParameters -> ContractModelResult (WithInstances state) -> Property) -- ^ Predicate to run on the contract model
     -> Actions (WithInstances state)                        -- ^ The actions to run
     -> Property
-propRunActionsWithOptions opts copts predicate actions =
+propRunActionsWithOptions opts copts predicate contractmodelPredicate actions =
     asserts finalState QC..&&.
     monadic runFinalPredicate monadicPredicate
     where
         finalState = stateAfter actions
-
-        prettyAddr a = maybe (show a) show $ addressToWallet a
 
         monadicPredicate :: PropertyM (RunMonad (EmulatorTraceWithInstances state)) Property
         monadicPredicate = do
             ps <- QC.run . lift $ fmap pProtocolParams EmulatorControl.getParams
             QC.run . lift $ activateWallets (\ _ -> error "No SymTokens yet") initialInstances
             result <- runContractModel actions
-            pure $ assertBalanceChangesMatch (BalanceChangeOptions False signerPaysFees ps prettyAddr) result
+            pure $ contractmodelPredicate ps result
 
         runFinalPredicate :: RunMonad (EmulatorTraceWithInstances state) Property
                           -> Property
@@ -485,7 +515,7 @@ checkNoLockedFundsProofWithOptions
 checkNoLockedFundsProofWithOptions options =
   checkNoLockedFundsProof' prop
   where
-    prop = propRunActionsWithOptions options defaultCoverageOptions (\ _ -> TracePredicate $ pure True)
+    prop = propRunActionsWithOptions options defaultCoverageOptions (\ _ -> TracePredicate $ pure True) balanceChangePredicate
 
 checkNoLockedFundsProofFastWithOptions
   :: CheckableContractModel model
@@ -504,26 +534,26 @@ checkNoLockedFundsProof' run NoLockedFundsProof{nlfpMainStrategy   = mainStrat,
                                                 nlfpOverhead       = overhead,
                                                 nlfpErrorMargin    = wiggle } =
     forAllDL anyActions_ $ \ (Actions as) ->
-    forAllUniqueDL (nextVarIdx as) (stateAfter $ Actions as) mainStrat $ \ (Actions as') ->
+    let ans0 = (annotatedStateAfter $ Actions as) in
+    forAllUniqueDL ans0 mainStrat $ \ (Actions as') ->
           let s0 = (stateAfter $ Actions as)
               s = stateAfter $ Actions (as ++ as') in
             foldl (QC..&&.) (counterexample "Main run prop" (run (Actions $ as ++ as')) QC..&&.
                              (counterexample "Main strategy" . counterexample (show . Actions $ as ++ as') $ prop s0 s))
-                            [ walletProp s0 as w bal
+                            [ walletProp ans0 s0 as w bal
                             | (addr, bal) <- Map.toList (s ^. balanceChanges)
                             , Just w <- [addressToWallet addr]
                             , not $ bal `symLeq` (s0 ^. balanceChange addr) ]
                             -- if the main strategy leaves w with <= the starting value, then doing nothing is a good wallet strategy.
     where
-        nextVarIdx as = 1 + maximum ([0] ++ [ i | i <- varNumOf <$> as ])
         prop s0 s =
           -- TODO: check that nothing is locked by scripts
           let lockedVal = lockedValue s
           in (counterexample ("Locked funds should be at most " ++ show (overhead s0) ++ ", but they are\n  " ++ show lockedVal)
             $ symLeq lockedVal (overhead s0))
 
-        walletProp s0 as w bal =
-          DL.forAllUniqueDL (nextVarIdx as) s0 (DL.action (ContractAction False $ Unilateral w) >> walletStrat w) $ \ acts ->
+        walletProp ans0 s0 as w bal =
+          DL.forAllUniqueDL ans0 (DL.action (ContractAction False $ Unilateral w) >> walletStrat w) $ \ acts ->
           let Actions as' = fromStateModelActions acts
               wig = wiggle s0
               err  = "Unilateral strategy for " ++ show w ++ " should have gotten it at least\n" ++
@@ -540,11 +570,7 @@ checkNoLockedFundsProof' run NoLockedFundsProof{nlfpMainStrategy   = mainStrat,
           QC..&&. counterexample err' (run smacts)
 
 actionsFromList :: [Action s] -> Actions s
-actionsFromList = Actions . zipWith NoBind (StateModel.Var <$> [0..])
-
-varNumOf :: Act s -> Int
-varNumOf (ActWaitUntil (StateModel.Var i) _) = i
-varNumOf act | StateModel.Var i <- varOf act = i
+actionsFromList = Actions . zipWith NoBind (StateModel.mkVar <$> [0..])
 
 -- TODO: possibly there's a nicer way to do this...?
 walletAddress :: Wallet -> CardanoAPI.AddressInEra Era
@@ -568,12 +594,12 @@ checkNoLockedFundsProofLight
   -> Property
 checkNoLockedFundsProofLight NoLockedFundsProofLight{nlfplMainStrategy = mainStrat} =
   forAllDL anyActions_ $ \ (Actions as) ->
-    forAllUniqueDL (nextVarIdx as) (stateAfter $ Actions as) mainStrat $ \ (Actions as') ->
+    forAllUniqueDL (annotatedStateAfter $ Actions as) mainStrat $ \ (Actions as') ->
       counterexample "Main run prop" (run $ Actions $ as ++ as')
   where
-    nextVarIdx as = 1 + maximum ([0] ++ [ i | StateModel.Var i <- varOf <$> as ])
     run = propRunActionsWithOptions defaultCheckOptionsContractModel
                                     defaultCoverageOptions (\ _ -> TracePredicate $ pure True)
+                                    balanceChangePredicate
 
 -- | A whitelist entry tells you what final log entry prefixes
 -- are acceptable for a given error
@@ -634,7 +660,7 @@ checkErrorWhitelistWithOptions :: forall m.
                                -> Actions (WithInstances m)
                                -> Property
 checkErrorWhitelistWithOptions opts copts whitelist =
-  propRunActionsWithOptions opts copts (const check)
+  propRunActionsWithOptions opts copts (const check) balanceChangePredicate
   where
     check :: TracePredicate
     check = checkOnchain .&&. (assertNoFailedTransactions .||. checkOffchain)

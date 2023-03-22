@@ -64,14 +64,14 @@ fromCardanoTx eraInMode tx@(C.Tx txBody@(C.TxBody C.TxBodyContent{..}) _) =
             , _citxData = datums
             , _citxRedeemers = redeemers
             , _citxScripts = scriptMap
-            , _citxCardanoTx = Just $ SomeTx tx eraInMode
+            , _citxCardanoTx = Just $ CardanoTx tx eraInMode
             }
 
 fromCardanoTxOut :: C.IsCardanoEra era => C.TxOut C.CtxTx era -> ChainIndexTxOut
 fromCardanoTxOut (C.TxOut addr val datum refScript) =
     ChainIndexTxOut
         (fromRight (error "BabbageEra should be the latest era") $ C.eraCast C.BabbageEra addr)
-        (fromCardanoValue $ C.txOutValueToValue val)
+        (C.txOutValueToValue val)
         (fromCardanoTxOutDatum datum)
         (fromCardanoTxOutRefScript refScript)
 

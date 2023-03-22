@@ -16,11 +16,9 @@ import Prelude hiding (lookup)
 import Cardano.Ledger.Alonzo.Scripts (ExUnits)
 import Cardano.Ledger.Alonzo.TxWitness (RdmrPtr)
 import Codec.Serialise (Serialise)
-import Control.DeepSeq (NFData)
 import Control.Lens (makeClassyPrisms)
 import Data.Aeson (FromJSON (..), ToJSON (..))
 import Data.Map qualified as Map
-import Data.OpenApi.Schema qualified as OpenApi
 import Data.Text (Text)
 import GHC.Generics (Generic)
 import Ledger.Orphans ()
@@ -33,8 +31,8 @@ import Prettyprinter.Extras (PrettyShow (..))
 -- | The UTxOs of a blockchain indexed by their references.
 newtype UtxoIndex = UtxoIndex { getIndex :: Map.Map PV1.TxOutRef TxOut }
     deriving stock (Show, Generic)
-    deriving newtype (Eq, Semigroup, OpenApi.ToSchema, Monoid, Serialise)
-    deriving anyclass (FromJSON, ToJSON, NFData)
+    deriving newtype (Eq, Semigroup, Monoid, Serialise)
+    deriving anyclass (FromJSON, ToJSON)
 
 -- | A reason why a transaction is invalid.
 data ValidationError =
@@ -45,6 +43,8 @@ data ValidationError =
     -- ^ For pay-to-script outputs: evaluation of the validator script failed.
     | CardanoLedgerValidationError Text
     -- ^ An error from Cardano.Ledger validation
+    | MaxCollateralInputsExceeded
+    -- ^ Balancing failed, it needed more than the maximum number of collateral inputs
     deriving (Eq, Show, Generic)
 makeClassyPrisms ''ValidationError
 

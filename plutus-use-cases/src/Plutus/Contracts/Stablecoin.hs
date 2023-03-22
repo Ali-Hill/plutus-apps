@@ -84,20 +84,21 @@ import Control.Monad (forever, guard)
 import Data.Aeson (FromJSON, ToJSON)
 import Data.Functor.Identity (Identity (..))
 import GHC.Generics (Generic)
-import Ledger.Ada qualified as Ada
 import Ledger.Address (PaymentPubKey)
-import Ledger.Constraints (TxConstraints)
-import Ledger.Constraints qualified as Constraints
-import Ledger.Interval qualified as Interval
 import Ledger.Scripts (MintingPolicyHash)
+import Ledger.Tx.Constraints (TxConstraints)
+import Ledger.Tx.Constraints qualified as Constraints
+import Ledger.Tx.Constraints.ValidityInterval qualified as Interval
 import Ledger.Typed.Scripts qualified as Scripts
-import Ledger.Value (AssetClass, TokenName, Value)
-import Ledger.Value qualified as Value
 import Plutus.Contract
 import Plutus.Contract.Oracle
 import Plutus.Contract.StateMachine (AsSMContractError, SMContractError, State (..), StateMachine,
                                      StateMachineClient (..), Void)
 import Plutus.Contract.StateMachine qualified as SM
+import Plutus.Script.Utils.Ada qualified as Ada
+import Plutus.Script.Utils.V2.Typed.Scripts as V2
+import Plutus.Script.Utils.Value (AssetClass, TokenName, Value)
+import Plutus.Script.Utils.Value qualified as Value
 import PlutusTx qualified
 import PlutusTx.Prelude
 import PlutusTx.Ratio qualified as R
@@ -157,7 +158,7 @@ initialState StateMachineClient{scInstance=SM.StateMachineInstance{SM.typedValid
         { bsReserves = 0
         , bsStablecoins = 0
         , bsReservecoins = 0
-        , bsMintingPolicyScript = Scripts.forwardingMintingPolicyHash typedValidator
+        , bsMintingPolicyScript = V2.forwardingMintingPolicyHash typedValidator
         }
 
 {-# INLINEABLE convert #-}
@@ -301,7 +302,7 @@ applyInput sc@Stablecoin{scOracle,scStablecoinTokenName,scReservecoinTokenName} 
                 { bsReservecoins = bsReservecoins bs + rc
                 , bsReserves = bsReserves bs + fmap round (fees + rcValue)
                 }, Constraints.mustMintCurrency bsMintingPolicyScript scReservecoinTokenName (unRC rc))
-    let dateConstraints = Constraints.mustValidateIn $ Interval.from obsTime
+    let dateConstraints = Constraints.mustValidateInTimeRange $ Interval.from obsTime
     pure (constraints <> newConstraints <> dateConstraints, newState)
 
 {-# INLINEABLE step #-}
@@ -315,13 +316,13 @@ step sc@Stablecoin{scOracle} bs i@Input{inpConversionRate} = do
 -- | A 'Value' with the given number of reservecoins
 reserveCoins :: Stablecoin -> RC Integer -> Value
 reserveCoins sc@Stablecoin{scReservecoinTokenName} =
-    let sym = Scripts.forwardingMintingPolicyHash $ typedValidator sc
+    let sym = V2.forwardingMintingPolicyHash $ typedValidator sc
     in Value.singleton (Value.mpsSymbol sym) scReservecoinTokenName . unRC
 
 -- | A 'Value' with the given number of stablecoins
 stableCoins :: Stablecoin -> SC Integer -> Value
 stableCoins sc@Stablecoin{scStablecoinTokenName} =
-    let sym = Scripts.forwardingMintingPolicyHash $ typedValidator sc
+    let sym = V2.forwardingMintingPolicyHash $ typedValidator sc
     in Value.singleton (Value.mpsSymbol sym) scStablecoinTokenName . unSC
 
 {-# INLINEABLE isValidState #-}
@@ -363,15 +364,15 @@ stablecoinStateMachine sc = SM.mkStateMachine Nothing (transition sc) isFinal
     -- to add a final state to the real thing)
     where isFinal _ = False
 
-typedValidator :: Stablecoin -> Scripts.TypedValidator (StateMachine BankState Input)
+typedValidator :: Stablecoin -> V2.TypedValidator (StateMachine BankState Input)
 typedValidator stablecoin =
     let val = $$(PlutusTx.compile [|| validator ||]) `PlutusTx.applyCode` PlutusTx.liftCode stablecoin
         validator d = SM.mkValidator (stablecoinStateMachine d)
-        wrap = Scripts.mkUntypedValidator @Scripts.ScriptContextV1 @BankState @Input
-    in Scripts.mkTypedValidator @(StateMachine BankState Input) val $$(PlutusTx.compile [|| wrap ||])
+        wrap = Scripts.mkUntypedValidator @Scripts.ScriptContextV2 @BankState @Input
+    in V2.mkTypedValidator @(StateMachine BankState Input) val $$(PlutusTx.compile [|| wrap ||])
 
 machineClient ::
-    Scripts.TypedValidator (StateMachine BankState Input)
+    V2.TypedValidator (StateMachine BankState Input)
     -> Stablecoin
     -> StateMachineClient BankState Input
 machineClient inst stablecoin =

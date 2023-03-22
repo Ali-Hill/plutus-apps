@@ -1,5 +1,3 @@
-# TODO(std) DUP(except purs-tidy)
-
 { inputs, cell }:
 
 let
@@ -22,19 +20,6 @@ inputs.pre-commit-hooks-nix.lib.run {
     cabal-fmt.enable = true;
     shellcheck.enable = true;
 
-    purs-tidy-hook = {
-      enable = true;
-      name = "purs-tidy";
-      entry = "${cell.library.easy-ps.purs-tidy}/bin/purs-tidy format-in-place";
-      files = "\\.purs$";
-      language = "system";
-    };
-
-    editorconfig-checker = {
-      enable = true;
-      entry = "${pkgs.editorconfig-checker}/bin/editorconfig-checker";
-    };
-
     nixpkgs-fmt = {
       enable = true;
       # While nixpkgs-fmt does exclude patterns specified in `.ignore` this
@@ -43,7 +28,6 @@ inputs.pre-commit-hooks-nix.lib.run {
       excludes =
         [
           ".*nix/pkgs/haskell/materialized.*/.*"
-          ".*/spago-packages.nix$"
           ".*/packages.nix$"
         ];
     };

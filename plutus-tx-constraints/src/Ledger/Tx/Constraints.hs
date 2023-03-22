@@ -9,6 +9,7 @@ module Ledger.Tx.Constraints(
     , TC.mustPayToTheScriptWithDatumHash
     , TC.mustPayToTheScriptWithDatumInTx
     , TC.mustPayToTheScriptWithInlineDatum
+    , TC.mustPayToTheScriptWithReferenceScript
     , TC.mustPayToAddress
     , TC.mustPayToAddressWithDatumHash
     , TC.mustPayToAddressWithDatumInTx
@@ -23,12 +24,14 @@ module Ledger.Tx.Constraints(
     , TC.mustSpendAtLeast
     , TC.mustSpendPubKeyOutput
     , TC.mustSpendOutputFromTheScript
+    , TC.mustSpendOutputFromTheReferencedScript
     , TC.mustSpendScriptOutput
     , TC.mustSpendScriptOutputWithReference
     , TC.mustSpendScriptOutputWithMatchingDatumAndValue
     , TC.mustUseOutputAsCollateral
     , TC.mustReferenceOutput
-    , TC.mustValidateIn
+    , TC.mustValidateInSlotRange
+    , TC.mustValidateInTimeRange
     , TC.mustBeSignedBy
     , TC.mustProduceAtLeast
     , TC.mustIncludeDatumInTxWithHash
@@ -50,12 +53,13 @@ module Ledger.Tx.Constraints(
     , TC.mustPayToOtherScriptAddressWithDatumInTx
     , TC.mustPayToOtherScriptAddressWithInlineDatum
     -- * Defining off-chain only constraints
-    , TC.collectFromPlutusV1Script
-    , TC.collectFromPlutusV1ScriptFilter
-    , TC.collectFromTheScriptFilter
-    , TC.collectFromTheScript
-    , TC.collectFromPlutusV2Script
-    , TC.collectFromPlutusV2ScriptFilter
+    , TC.spendUtxosFromPlutusV1Script
+    , TC.spendUtxosFromPlutusV1ScriptFilter
+    , TC.spendUtxosFromTheScriptFilter
+    , TC.spendUtxosFromTheScript
+    , TC.spendUtxosFromTheReferencedScript
+    , TC.spendUtxosFromPlutusV2Script
+    , TC.spendUtxosFromPlutusV2ScriptFilter
     -- * Queries on constraints
     , TC.modifiesUtxoSet
     , TC.isSatisfiable
@@ -67,6 +71,7 @@ module Ledger.Tx.Constraints(
     -- ** Combining multiple typed scripts into one transaction
     , OC.SomeLookupsAndConstraints(..)
     , OC.mkSomeTx
+    , OC.mkTxWithParams
     -- ** Lookups
     , OC.ScriptLookups(..)
     , OC.typedValidatorLookups
@@ -80,8 +85,6 @@ module Ledger.Tx.Constraints(
     , OC.otherData
     , OC.paymentPubKey
     , OC.paymentPubKeyHash
-    , OC.ownPaymentPubKeyHash
-    , OC.ownStakingCredential
     -- * Deprecated
     , TC.mustPayToTheScript
     , TC.mustPayToAddressWithDatum
@@ -93,10 +96,11 @@ module Ledger.Tx.Constraints(
     , TC.mustPayWithInlineDatumToPubKeyAddress
     , TC.mustPayToOtherScript
     , TC.mustPayToOtherScriptAddress
+    , TC.mustValidateIn
     ) where
 
-import Ledger.Constraints.TxConstraints qualified as TC
 import Ledger.Tx.Constraints.OffChain qualified as OC
+import Ledger.Tx.Constraints.TxConstraints qualified as TC
 
 -- $constraints
 -- This module defines 'Ledger.Tx.Constraints.TxConstraints.TxConstraints', a list

@@ -23,11 +23,10 @@
 
 module Wallet.Emulator.Wallet where
 
-import Cardano.Api (makeSignedTransaction)
+import Cardano.Api qualified as C
 import Cardano.Node.Emulator.Chain (ChainState (_index))
 import Cardano.Node.Emulator.Fee qualified as Fee
 import Cardano.Node.Emulator.Params (Params (..))
-import Cardano.Wallet.Primitive.Types qualified as Cardano.Wallet
 import Control.Lens (makeLenses, makePrisms, view)
 import Control.Monad (foldM, (<=<))
 import Control.Monad.Freer (Eff, Member, Members, interpret, type (~>))
@@ -35,9 +34,12 @@ import Control.Monad.Freer.Error (Error, runError, throwError)
 import Control.Monad.Freer.Extras.Log (LogMsg, logInfo, logWarn)
 import Control.Monad.Freer.State (State, get, gets, put)
 import Control.Monad.Freer.TH (makeEffect)
+import Crypto.Hash qualified as Crypto
 import Data.Aeson (FromJSON (parseJSON), ToJSON (toJSON), ToJSONKey)
 import Data.Aeson qualified as Aeson
-import Data.Bifunctor (bimap, first)
+import Data.Bifunctor (first)
+import Data.ByteArray.Encoding (Base (Base16), convertFromBase, convertToBase)
+import Data.ByteString (ByteString)
 import Data.Data (Data)
 import Data.Default (Default (def))
 import Data.Foldable (find, foldl')
@@ -45,30 +47,28 @@ import Data.List.NonEmpty (NonEmpty)
 import Data.List.NonEmpty qualified as NonEmpty
 import Data.Map qualified as Map
 import Data.Maybe (catMaybes, fromMaybe)
-import Data.OpenApi.Schema qualified as OpenApi
-import Data.Set qualified as Set
 import Data.String (IsString (fromString))
 import Data.Text qualified as T
-import Data.Text.Class (fromText, toText)
+import Data.Text.Encoding qualified as T
 import GHC.Generics (Generic)
-import Ledger (CardanoTx, DecoratedTxOut, PubKeyHash, TxOutRef, UtxoIndex (..), Value)
+import Ledger (CardanoTx, DecoratedTxOut, PubKeyHash, TxOutRef, UtxoIndex (..))
 import Ledger qualified
 import Ledger.Address (CardanoAddress, PaymentPrivateKey (..), PaymentPubKey, PaymentPubKeyHash (PaymentPubKeyHash),
                        cardanoAddressCredential)
 import Ledger.CardanoWallet (MockWallet, WalletNumber)
 import Ledger.CardanoWallet qualified as CW
-import Ledger.Constraints.OffChain (UnbalancedTx)
-import Ledger.Constraints.OffChain qualified as U
 import Ledger.Credential (Credential (PubKeyCredential, ScriptCredential))
 import Ledger.Tx qualified as Tx
-import Ledger.Tx.CardanoAPI (getRequiredSigners)
+import Ledger.Tx.CardanoAPI (fromCardanoValue, getRequiredSigners)
 import Ledger.Tx.CardanoAPI qualified as CardanoAPI
+import Ledger.Tx.Constraints.OffChain (UnbalancedTx)
+import Ledger.Tx.Constraints.OffChain qualified as U
 import Plutus.ChainIndex (PageQuery)
 import Plutus.ChainIndex qualified as ChainIndex
 import Plutus.ChainIndex.Api (UtxosResponse (page))
 import Plutus.ChainIndex.Emulator (ChainIndexEmulatorState, ChainIndexQueryEffect)
 import Plutus.Contract.Checkpoint (CheckpointLogMsg)
-import Plutus.V1.Ledger.Api (ValidatorHash)
+import Plutus.V1.Ledger.Api (ValidatorHash, Value)
 import Prettyprinter (Pretty (pretty))
 import Servant.API (FromHttpApiData (parseUrlPiece), ToHttpApiData (toUrlPiece))
 import Wallet.Effects (NodeClientEffect,
@@ -109,7 +109,6 @@ toMockWallet :: MockWallet -> Wallet
 toMockWallet mw =
   Wallet (CW.mwPrintAs mw)
   . WalletId
-  . Cardano.Wallet.WalletId
   . CW.mwWalletId $ mw
 
 knownWallets :: [Wallet]
@@ -129,11 +128,7 @@ instance Pretty Wallet where
     pretty (Wallet Nothing i)  = "W" <> pretty (T.take 7 $ toBase16 i)
     pretty (Wallet (Just s) _) = "W[" <> fromString s <> "]"
 
-deriving anyclass instance OpenApi.ToSchema Wallet
-deriving anyclass instance OpenApi.ToSchema Cardano.Wallet.WalletId
-deriving instance Data Cardano.Wallet.WalletId
-
-newtype WalletId = WalletId { unWalletId :: Cardano.Wallet.WalletId }
+newtype WalletId = WalletId { unWalletId :: Crypto.Digest Crypto.Blake2b_160 }
     deriving (Eq, Ord, Generic, Data)
     deriving anyclass (ToJSONKey)
 
@@ -147,18 +142,20 @@ instance ToHttpApiData WalletId where
     toUrlPiece = toBase16
 instance FromHttpApiData WalletId where
     parseUrlPiece = first T.pack . fromBase16
-deriving anyclass instance OpenApi.ToSchema WalletId
 
 toBase16 :: WalletId -> T.Text
-toBase16 = toText . unWalletId
+toBase16 = T.decodeUtf8 . convertToBase Base16 . unWalletId
 
 fromBase16 :: T.Text -> Either String WalletId
-fromBase16 s = bimap show WalletId (fromText s)
+fromBase16 s = maybe (Left $ show s) (Right . WalletId)
+    (decodeHex s >>= Crypto.digestFromByteString @_ @ByteString)
+    where
+    decodeHex = either (const Nothing) Just . convertFromBase Base16 . T.encodeUtf8
 
 -- | The 'MockWallet' whose ID is the given wallet ID (if it exists)
 walletToMockWallet :: Wallet -> Maybe MockWallet
 walletToMockWallet (Wallet _ wid) =
-  find ((==) wid . WalletId . Cardano.Wallet.WalletId . CW.mwWalletId) CW.knownMockWallets
+  find ((==) wid . WalletId . CW.mwWalletId) CW.knownMockWallets
 
 -- | The same as @walletToMockWallet@ but fails with an error instead of returning @Nothing@.
 walletToMockWallet' :: Wallet -> MockWallet
@@ -281,7 +278,7 @@ handleWallet = \case
         handleAddSignature txCTx
 
     totalFundsH :: (Member (State WalletState) effs, Member ChainIndexQueryEffect effs) => Eff effs Value
-    totalFundsH = foldMap (view Ledger.decoratedTxOutValue) <$> (get >>= ownOutputs)
+    totalFundsH = fromCardanoValue . foldMap (view Ledger.decoratedTxOutValue) <$> (get >>= ownOutputs)
 
     yieldUnbalancedTxH ::
         ( Member (Error WalletAPIError) effs
@@ -308,12 +305,10 @@ handleBalance ::
     => UnbalancedTx
     -> Eff effs CardanoTx
 handleBalance utx = do
-    params@Params { pNetworkId, emulatorPParams } <- getClientParams
+    params@Params { pNetworkId } <- getClientParams
     utxo <- get >>= ownOutputs
     mappedUtxo <- either (throwError . WAPI.ToCardanoError) pure $ traverse (Tx.toTxOut pNetworkId) utxo
-    let eitherTx = U.unBalancedTxTx utx
-        requiredSigners = Set.toList (U.unBalancedTxRequiredSignatories utx)
-    unbalancedBodyContent <- either pure (handleError eitherTx . first Right . CardanoAPI.toCardanoTxBodyContent pNetworkId emulatorPParams requiredSigners) eitherTx
+    let unbalancedBodyContent = U.unBalancedCardanoBuildTx utx
     ownAddr <- gets ownAddress
     -- filter out inputs from utxo that are already in unBalancedTx
     let inputsOutRefs = map Tx.txInRef $ Tx.getTxBodyContentInputs $ CardanoAPI.getCardanoBuildTx unbalancedBodyContent
@@ -323,18 +318,17 @@ handleBalance utx = do
         params
         (UtxoIndex $ U.unBalancedTxUtxoIndex utx)
         ownAddr
-        (handleBalancingError eitherTx . Fee.utxoProviderFromWalletOutputs filteredUtxo)
-        (handleError eitherTx . Left)
+        (handleBalancingError utx . Fee.utxoProviderFromWalletOutputs filteredUtxo)
+        (handleError utx . Left)
         unbalancedBodyContent
-    pure $ Tx.CardanoApiTx (Tx.CardanoApiEmulatorEraTx cTx)
+    pure $ Tx.CardanoEmulatorEraTx cTx
     where
-        handleError tx (Left (Left (ph, ve))) = do
+        handleError utx' (Left (Left (ph, ve))) = do
             tx' <- either (throwError . WAPI.ToCardanoError)
                            pure
-                 $ either (fmap (Tx.CardanoApiTx . Tx.CardanoApiEmulatorEraTx . makeSignedTransaction [])
-                          . CardanoAPI.makeTransactionBody Nothing mempty)
-                          (pure . Tx.EmulatorTx)
-                 $ tx
+                 $ fmap (Tx.CardanoEmulatorEraTx . C.makeSignedTransaction [])
+                          . CardanoAPI.makeTransactionBody Nothing mempty
+                 $ U.unBalancedCardanoBuildTx utx'
             logWarn $ ValidationFailed ph (Ledger.getCardanoTxId tx') tx' ve mempty []
             throwError $ WAPI.ValidationError ve
         handleError _ (Left (Right ce)) = throwError $ WAPI.ToCardanoError ce
@@ -343,7 +337,7 @@ handleBalance utx = do
             $ T.unwords
                 [ "Total:", T.pack $ show total
                 , "expected:", T.pack $ show expected ]
-        handleBalancingError tx (Left (Fee.CardanoLedgerError e)) = handleError tx (Left e)
+        handleBalancingError utx' (Left (Fee.CardanoLedgerError e)) = handleError utx' (Left e)
         handleBalancingError _ (Right v) = pure v
 
 handleAddSignature ::
@@ -352,17 +346,14 @@ handleAddSignature ::
     )
     => CardanoTx
     -> Eff effs CardanoTx
-handleAddSignature tx = do
+handleAddSignature tx@(Tx.CardanoEmulatorEraTx ctx) = do
     msp <- gets _signingProcess
     case msp of
         Nothing -> do
             PaymentPrivateKey privKey <- gets ownPaymentPrivateKey
             pure $ Tx.addCardanoTxSignature privKey tx
         Just (SigningProcess sp) -> do
-            let ctx = case tx of
-                    Tx.CardanoApiTx (Tx.CardanoApiEmulatorEraTx ctx') -> ctx'
-                    _ -> error "handleAddSignature: Need a Cardano API Tx from the Alonzo era to get the required signers"
-                reqSigners = getRequiredSigners ctx
+            let reqSigners = getRequiredSigners ctx
             sp reqSigners tx
 
 ownOutputs :: forall effs.
@@ -466,7 +457,7 @@ walletPaymentPubKeyHashes = foldl' f Map.empty . Map.toList
 
 -- | For a set of wallets, convert them into a map of value: entity,
 -- where entity is one of 'Entity'.
-balances :: ChainState -> WalletSet -> Map.Map Entity Value
+balances :: ChainState -> WalletSet -> Map.Map Entity C.Value
 balances state wallets = foldl' f Map.empty . getIndex . _index $ state
   where
     toEntity :: CardanoAddress -> Entity

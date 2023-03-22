@@ -23,11 +23,10 @@ import Data.String (IsString (fromString))
 import Data.Text (Text)
 import Data.Text qualified as T
 import GHC.Generics (Generic)
-import Ledger.Tx.Constraints qualified as Tx.Constraints
 import Prettyprinter (Pretty (pretty), viaShow, (<+>))
 
 import Data.Aeson qualified as JSON
-import Ledger.Constraints.OffChain (MkTxError)
+import Ledger.Tx.Constraints.OffChain (MkTxError)
 import Plutus.Contract.CardanoAPI (ToCardanoError)
 import Plutus.Contract.Checkpoint (AsCheckpointError (_CheckpointError), CheckpointError)
 import Plutus.Contract.Effects (ChainIndexResponse)
@@ -61,9 +60,7 @@ instance AsAssertionError T.Text where
 data ContractError =
     WalletContractError WalletAPIError
   | ChainIndexContractError T.Text ChainIndexResponse
-  | EmulatorAssertionContractError AssertionError -- TODO: Why do we need this constructor
   | ConstraintResolutionContractError MkTxError
-  | TxConstraintResolutionContractError Tx.Constraints.MkTxError
   | TxToCardanoConvertContractError ToCardanoError
   | ResumableContractError MatchingError
   | CCheckpointContractError CheckpointError
@@ -88,9 +85,7 @@ instance Pretty ContractError where
         <+> pretty expectedResp
         <> ", got"
         <+> pretty actualResp
-    EmulatorAssertionContractError a    -> "Emulator assertion error:" <+> pretty a
     ConstraintResolutionContractError e -> "Constraint resolution error:" <+> pretty e
-    TxConstraintResolutionContractError e -> "Constraint resolution error:" <+> pretty e
     TxToCardanoConvertContractError e   -> "To Cardano transaction conversation error:" <+> pretty e
     ResumableContractError e            -> "Resumable error:" <+> pretty e
     CCheckpointContractError e          -> "Checkpoint error:" <+> pretty e
@@ -109,9 +104,6 @@ instance AsContractError T.Text where
 
 instance IsString ContractError where
   fromString = OtherContractError . fromString
-
-instance AsAssertionError ContractError where
-    _AssertionError = _EmulatorAssertionContractError
 
 instance AsCheckpointError ContractError where
   _CheckpointError = _CCheckpointContractError

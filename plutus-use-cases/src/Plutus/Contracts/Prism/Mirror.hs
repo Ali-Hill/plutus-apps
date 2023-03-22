@@ -21,18 +21,17 @@ import Control.Lens
 import Control.Monad (forever, void)
 import Data.Aeson (FromJSON, ToJSON)
 import GHC.Generics (Generic)
-import Ledger.Ada qualified as Ada
 import Ledger.Address (PaymentPubKeyHash)
-import Ledger.Constraints qualified as Constraints
+import Ledger.Tx.Constraints qualified as Constraints
 import Ledger.Typed.Scripts qualified as Scripts
-import Ledger.Value (TokenName)
 import Plutus.Contract
 import Plutus.Contract.StateMachine (AsSMContractError (..), SMContractError, StateMachineTransition (..))
 import Plutus.Contract.StateMachine qualified as SM
 import Plutus.Contracts.Prism.Credential (Credential (..), CredentialAuthority (..))
 import Plutus.Contracts.Prism.Credential qualified as Credential
 import Plutus.Contracts.Prism.StateMachine as StateMachine
-import Schema (ToSchema)
+import Plutus.Script.Utils.Ada qualified as Ada
+import Plutus.Script.Utils.Value (TokenName)
 import Wallet.Emulator (mockWalletPaymentPubKeyHash)
 import Wallet.Emulator.Wallet (Wallet)
 
@@ -45,7 +44,7 @@ data CredentialOwnerReference =
         , coOwner     :: Wallet
         }
     deriving stock (Generic, Eq, Show, Ord)
-    deriving anyclass (ToJSON, FromJSON, ToSchema)
+    deriving anyclass (ToJSON, FromJSON)
 
 type MirrorSchema =
         Endpoint "issue" CredentialOwnerReference -- lock a single credential token in a state machine tied to the credential token owner
@@ -71,7 +70,7 @@ createTokens ::
 createTokens authority = endpoint @"issue" $ \CredentialOwnerReference{coTokenName, coOwner} -> do
     logInfo @String "Endpoint 'issue' called"
     let pk      = Credential.unCredentialAuthority authority
-        lookups = Constraints.plutusV1MintingPolicy (Credential.policy authority)
+        lookups = Constraints.plutusV2MintingPolicy (Credential.policy authority)
         theToken = Credential.token Credential{credAuthority=authority,credName=coTokenName}
         constraints =
             Constraints.mustMintValue theToken
@@ -90,7 +89,7 @@ revokeToken ::
     -> Promise w s MirrorError ()
 revokeToken authority = endpoint @"revoke" $ \CredentialOwnerReference{coTokenName, coOwner} -> do
     let stateMachine = StateMachine.mkMachineClient authority (mockWalletPaymentPubKeyHash coOwner) coTokenName
-        lookups = Constraints.plutusV1MintingPolicy (Credential.policy authority)
+        lookups = Constraints.plutusV2MintingPolicy (Credential.policy authority)
     t <- mapError StateMachineError $ SM.mkStep stateMachine RevokeCredential
     case t of
         Left{} -> return () -- Ignore invalid transitions

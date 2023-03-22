@@ -37,10 +37,11 @@ import Control.Monad (forever, void)
 import Data.Aeson (FromJSON, ToJSON)
 import Data.Monoid (Last (..))
 import GHC.Generics (Generic)
-import Ledger.Ada qualified as Ada
-import Ledger.Constraints (TxConstraints)
+import Ledger.Tx.Constraints (TxConstraints)
 import Ledger.Typed.Scripts qualified as Scripts
-import Plutus.Script.Utils.Typed (ScriptContextV1)
+import Plutus.Script.Utils.Ada qualified as Ada
+import Plutus.Script.Utils.Typed (ScriptContextV2)
+import Plutus.Script.Utils.V2.Typed.Scripts qualified as V2
 import PlutusTx qualified
 import PlutusTx.Prelude hiding (Applicative (..), check)
 
@@ -99,15 +100,15 @@ machine = SM.mkStateMachine Nothing transition isFinal where
     isFinal _       = False
 
 {-# INLINABLE mkValidator #-}
-mkValidator :: Scripts.ValidatorType (SM.StateMachine PingPongState Input)
+mkValidator :: V2.ValidatorType (SM.StateMachine PingPongState Input)
 mkValidator = SM.mkValidator machine
 
-typedValidator :: Scripts.TypedValidator (SM.StateMachine PingPongState Input)
-typedValidator = Scripts.mkTypedValidator @(SM.StateMachine PingPongState Input)
+typedValidator :: V2.TypedValidator (SM.StateMachine PingPongState Input)
+typedValidator = V2.mkTypedValidator @(SM.StateMachine PingPongState Input)
     $$(PlutusTx.compile [|| mkValidator ||])
     $$(PlutusTx.compile [|| wrap ||])
     where
-        wrap = Scripts.mkUntypedValidator @ScriptContextV1 @PingPongState @Input
+        wrap = Scripts.mkUntypedValidator @ScriptContextV2 @PingPongState @Input
 
 machineInstance :: SM.StateMachineInstance PingPongState Input
 machineInstance = SM.StateMachineInstance machine typedValidator

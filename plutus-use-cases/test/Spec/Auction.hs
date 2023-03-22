@@ -5,6 +5,7 @@
 {-# LANGUAGE GADTs              #-}
 {-# LANGUAGE NumericUnderscores #-}
 {-# LANGUAGE OverloadedStrings  #-}
+{-# LANGUAGE RankNTypes         #-}
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TemplateHaskell    #-}
 {-# LANGUAGE TypeApplications   #-}
@@ -23,8 +24,7 @@ module Spec.Auction
     , prop_SanityCheckAssertions
     , prop_Whitelist
     , prop_CrashTolerance
-    -- TODO: re-activate when ThreatModelling framework is merged
-    -- , prop_doubleSatisfaction
+    , prop_doubleSatisfaction
     , check_propAuctionWithCoverage
     ) where
 
@@ -33,27 +33,26 @@ import Control.Monad (void, when)
 import Control.Monad.Freer qualified as Freer
 import Control.Monad.Freer.Error qualified as Freer
 import Control.Monad.Freer.Extras.Log (LogLevel (..))
-import Data.Data
 import Data.Default (Default (def))
 import Data.Monoid (Last (..))
 
-import Ledger (Ada, Slot (..), Value)
-import Ledger qualified
-import Ledger.Ada qualified as Ada
-import Plutus.Contract hiding (currentSlot)
-import Plutus.Contract.Test hiding (not)
-import Plutus.Script.Utils.V1.Generators (someTokenValue)
-import Streaming.Prelude qualified as S
-import Wallet.Emulator.Folds qualified as Folds
-import Wallet.Emulator.Stream qualified as Stream
-
+import Cardano.Api qualified as C
+import Cardano.Node.Emulator.Generators qualified as Gen
 import Cardano.Node.Emulator.TimeSlot (SlotConfig)
 import Cardano.Node.Emulator.TimeSlot qualified as TimeSlot
+import Ledger (Slot (..))
+import Ledger qualified
+import Ledger.Value.CardanoAPI qualified as Value
+import Plutus.Contract hiding (currentSlot)
+import Plutus.Contract.Test hiding (not)
 import Plutus.Contract.Test.ContractModel
 import Plutus.Contract.Test.ContractModel.CrashTolerance
 import Plutus.Contracts.Auction hiding (Bid)
+import Plutus.Script.Utils.Ada qualified as Ada
 import Plutus.Trace.Emulator qualified as Trace
-import PlutusTx.Monoid (inv)
+import Streaming.Prelude qualified as S
+import Wallet.Emulator.Folds qualified as Folds
+import Wallet.Emulator.Stream qualified as Stream
 
 import Test.QuickCheck hiding ((.&&.))
 import Test.Tasty
@@ -66,15 +65,15 @@ params :: AuctionParams
 params =
     AuctionParams
         { apOwner   = Ledger.toPlutusAddress $ mockWalletAddress w1
-        , apAsset   = theToken
+        , apAsset   = Value.fromCardanoValue theToken
         , apEndTime = TimeSlot.scSlotZeroTime slotCfg + 100000
         }
 
 -- | The token that we are auctioning off.
-theToken :: Value
+theToken :: C.Value
 theToken =
     -- This currency is created by the initial transaction.
-    someTokenValue "token" 1
+    Gen.someTokenValue "token" 1
 
 -- | 'CheckOptions' that includes 'theToken' in the initial distribution of Wallet 1.
 options :: CheckOptions
@@ -88,7 +87,7 @@ seller = auctionSeller (apAsset params) (apEndTime params)
 buyer :: ThreadToken -> Contract AuctionOutput BuyerSchema AuctionError ()
 buyer cur = auctionBuyer cur params
 
-trace1WinningBid :: Ada
+trace1WinningBid :: Ada.Ada
 trace1WinningBid = Ada.adaOf 50
 
 auctionTrace1 :: Trace.EmulatorTrace ()
@@ -102,7 +101,7 @@ auctionTrace1 = do
     void $ Trace.waitUntilTime $ apEndTime params
     void $ Trace.waitNSlots 1
 
-trace2WinningBid :: Ada
+trace2WinningBid :: Ada.Ada
 trace2WinningBid = Ada.adaOf 70
 
 extractAssetClass :: Trace.ContractHandle AuctionOutput SellerSchema AuctionError -> Trace.EmulatorTrace ThreadToken
@@ -172,10 +171,10 @@ data AuctionModel = AuctionModel
     , _winner     :: Wallet
     , _endSlot    :: Slot
     , _phase      :: Phase
-    } deriving (Show, Eq, Data)
+    } deriving (Show, Eq, Generic)
 
 data Phase = NotStarted | Bidding | AuctionOver
-    deriving (Eq, Show, Data)
+    deriving (Eq, Show, Generic)
 
 makeLenses 'AuctionModel
 
@@ -188,7 +187,7 @@ instance ContractModel AuctionModel where
         SellerH :: ContractInstanceKey AuctionModel AuctionOutput SellerSchema AuctionError ()
         BuyerH  :: Wallet -> ContractInstanceKey AuctionModel AuctionOutput BuyerSchema AuctionError ()
 
-    data Action AuctionModel = Init | Bid Wallet Integer
+    data Action AuctionModel = Init | Bid Wallet Integer | WaitForDeadline
         deriving (Eq, Show, Generic)
 
     initialState = AuctionModel
@@ -211,8 +210,9 @@ instance ContractModel AuctionModel where
 
     arbitraryAction s
         | p /= NotStarted = do
-            oneof [ Bid w <$> validBid
-                  | w <- [w2, w3, w4] ]
+            oneof $ pure WaitForDeadline : [ Bid w <$> validBid
+                                           | w <- [w2, w3, w4] ]
+
         | otherwise = pure $ Init
         where
             p    = s ^. contractState . phase
@@ -227,6 +227,7 @@ instance ContractModel AuctionModel where
       s ^. contractState . phase /= NotStarted &&
       bid >= Ada.getLovelace (Ada.adaOf 2) &&
       bid > s ^. contractState . currentBid
+    precondition s WaitForDeadline = s ^. currentSlot < s ^. contractState . endSlot
 
     nextReactiveState slot' = do
       end  <- viewContractState endSlot
@@ -262,6 +263,10 @@ instance ContractModel AuctionModel where
                     currentBid .= bid
                     winner     .= w
                 wait 2
+            WaitForDeadline -> do
+              end <- viewContractState endSlot
+              slot <- viewModelState currentSlot
+              wait (fromIntegral $ end - slot)
 
     perform _      _ _ Init        = delay 3
     perform handle _ _ (Bid w bid) = do
@@ -274,9 +279,11 @@ instance ContractModel AuctionModel where
         delay 1
         Trace.callEndpoint @"bid" (handle $ BuyerH w) (Ada.lovelaceOf bid)
         delay 1
+    perform _ _ s WaitForDeadline = delay (fromIntegral $ s ^. contractState . endSlot - s ^. currentSlot)
 
-    shrinkAction _ Init      = []
-    shrinkAction _ (Bid w v) = [ Bid w v' | v' <- shrink v ]
+    shrinkAction _ Init            = []
+    shrinkAction _ (Bid w v)       = WaitForDeadline : [ Bid w v' | v' <- shrink v ]
+    shrinkAction _ WaitForDeadline = []
 
     monitoring _ (Bid _ bid) =
       classify (Ada.lovelaceOf bid == Ada.adaOf 100 - (Ledger.minAdaTxOutEstimated <> Ledger.maxFee))
@@ -339,8 +346,9 @@ prop_Whitelist :: Actions AuctionModel -> Property
 prop_Whitelist = checkErrorWhitelist defaultWhitelist
 
 instance CrashTolerance AuctionModel where
-  available (Bid w _) alive = (Key $ BuyerH  w) `elem` alive
-  available Init      _     = True
+  available (Bid w _) alive   = (Key $ BuyerH  w) `elem` alive
+  available Init      _       = True
+  available WaitForDeadline _ = True
 
   restartArguments _ BuyerH{}  = ()
   restartArguments _ SellerH{} = ()
@@ -358,9 +366,9 @@ check_propAuctionWithCoverage = do
         (set minLogLevel Critical options) covopts (const (pure True))
   writeCoverageReport "Auction" cr
 
--- TODO: re-activate when thread modelling framework is merged
--- prop_doubleSatisfaction :: Actions AuctionModel -> Property
--- prop_doubleSatisfaction = checkDoubleSatisfactionWithOptions options defaultCoverageOptions
+-- | Note: this property fails, because the contract is vulnerable to double satisfaction.
+prop_doubleSatisfaction :: Actions AuctionModel -> Property
+prop_doubleSatisfaction = checkDoubleSatisfactionWithOptions options defaultCoverageOptions
 
 tests :: TestTree
 tests =
@@ -369,8 +377,8 @@ tests =
             (assertDone seller (Trace.walletInstanceTag w1) (const True) "seller should be done"
             .&&. assertDone (buyer threadToken) (Trace.walletInstanceTag w2) (const True) "buyer should be done"
             .&&. assertAccumState (buyer threadToken) (Trace.walletInstanceTag w2) ((==) trace1FinalState ) "wallet 2 final state should be OK"
-            .&&. walletFundsChange w1 (Ada.toValue trace1WinningBid <> inv theToken)
-            .&&. walletFundsChange w2 (inv (Ada.toValue trace1WinningBid) <> theToken))
+            .&&. walletFundsChange w1 (Value.adaToCardanoValue trace1WinningBid <> C.negateValue theToken)
+            .&&. walletFundsChange w2 (Value.adaToCardanoValue (-trace1WinningBid) <> theToken))
             auctionTrace1
         , checkPredicateOptions options "run an auction with multiple bids"
             (assertDone seller (Trace.walletInstanceTag w1) (const True) "seller should be done"
@@ -378,8 +386,8 @@ tests =
             .&&. assertDone (buyer threadToken) (Trace.walletInstanceTag w3) (const True) "3rd party should be done"
             .&&. assertAccumState (buyer threadToken) (Trace.walletInstanceTag w2) ((==) trace2FinalState) "wallet 2 final state should be OK"
             .&&. assertAccumState (buyer threadToken) (Trace.walletInstanceTag w3) ((==) trace2FinalState) "wallet 3 final state should be OK"
-            .&&. walletFundsChange w1 (Ada.toValue trace2WinningBid <> inv theToken)
-            .&&. walletFundsChange w2 (inv (Ada.toValue trace2WinningBid) <> theToken)
+            .&&. walletFundsChange w1 (Value.adaToCardanoValue trace2WinningBid <> C.negateValue theToken)
+            .&&. walletFundsChange w2 (Value.adaToCardanoValue (-trace2WinningBid) <> theToken)
             .&&. walletFundsChange w3 mempty)
             auctionTrace2
         , testProperty "QuickCheck property FinishAuction" prop_FinishAuction
@@ -387,7 +395,7 @@ tests =
         , testProperty "NLFP fails" $ expectFailure $ noShrinking prop_NoLockedFunds
         , testProperty "prop_Reactive" $
             withMaxSuccess 1000 (propSanityCheckReactive @AuctionModel)
-        -- TODO: re-activate when threat modelling framework is merged
-        -- , testProperty "prop_doubleSatisfaction fails" $
-        --     expectFailure $ noShrinking prop_doubleSatisfaction
+        , testProperty "prop_doubleSatisfaction fails" $
+            expectFailure $ noShrinking prop_doubleSatisfaction
         ]
+

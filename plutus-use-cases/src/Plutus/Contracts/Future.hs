@@ -52,20 +52,20 @@ import PlutusTx qualified
 import PlutusTx.Prelude
 
 import Ledger (Address, POSIXTime, PaymentPubKey, PaymentPubKeyHash)
-import Ledger.Constraints qualified as Constraints
-import Ledger.Constraints.TxConstraints (TxConstraints)
-import Ledger.Interval qualified as Interval
 import Ledger.Scripts (unitDatum)
 import Ledger.Tokens
+import Ledger.Tx.Constraints (TxConstraints)
+import Ledger.Tx.Constraints qualified as Constraints
+import Ledger.Tx.Constraints.ValidityInterval qualified as Interval
 import Ledger.Typed.Scripts qualified as Scripts
-import Ledger.Value as Value
 import Plutus.Contract
 import Plutus.Contract.Oracle (Observation (..), SignedMessage (..))
 import Plutus.Contract.Oracle qualified as Oracle
 import Plutus.Contract.Util (loopM)
-import Plutus.Script.Utils.V1.Address (mkValidatorAddress)
-import Plutus.Script.Utils.V1.Scripts (validatorHash)
-import Plutus.V1.Ledger.Api (Datum (Datum), Validator, ValidatorHash)
+import Plutus.Script.Utils.V2.Address (mkValidatorAddress)
+import Plutus.Script.Utils.V2.Typed.Scripts qualified as V2
+import Plutus.Script.Utils.Value as Value
+import Plutus.V2.Ledger.Api (Datum (Datum), Validator, ValidatorHash)
 
 import Plutus.Contract.StateMachine (AsSMContractError, State (..), StateMachine (..), Void)
 import Plutus.Contract.StateMachine qualified as SM
@@ -309,7 +309,7 @@ futureStateMachine ft fos = SM.mkStateMachine Nothing (transition ft fos) isFina
     isFinal Finished = True
     isFinal _        = False
 
-typedValidator :: Future -> FutureAccounts -> Scripts.TypedValidator (SM.StateMachine FutureState FutureAction)
+typedValidator :: Future -> FutureAccounts -> V2.TypedValidator (SM.StateMachine FutureState FutureAction)
 typedValidator future ftos =
     let val = $$(PlutusTx.compile [|| validatorParam ||])
             `PlutusTx.applyCode`
@@ -317,9 +317,9 @@ typedValidator future ftos =
                 `PlutusTx.applyCode`
                     PlutusTx.liftCode ftos
         validatorParam f g = SM.mkValidator (futureStateMachine f g)
-        wrap = Scripts.mkUntypedValidator @Scripts.ScriptContextV1 @FutureState @FutureAction
+        wrap = Scripts.mkUntypedValidator @Scripts.ScriptContextV2 @FutureState @FutureAction
 
-    in Scripts.mkTypedValidator @(SM.StateMachine FutureState FutureAction)
+    in V2.mkTypedValidator @(SM.StateMachine FutureState FutureAction)
         val
         $$(PlutusTx.compile [|| wrap ||])
 
@@ -362,7 +362,7 @@ transition future@Future{ftDeliveryDate, ftPriceOracle} owners State{stateData=s
             | Just (Observation{obsValue=spotPrice, obsTime=oracleDate}, oracleConstraints) <- verifyOracle ftPriceOracle ov, ftDeliveryDate == oracleDate ->
                 let payment = payouts future accounts spotPrice
                     constraints =
-                        Constraints.mustValidateIn (Interval.from ftDeliveryDate)
+                        Constraints.mustValidateInTimeRange (Interval.from ftDeliveryDate)
                         <> oracleConstraints
                         <> payoutsTx payment owners
                 in Just ( constraints
@@ -592,7 +592,7 @@ escrowParams
     -> EscrowParams Datum
 escrowParams client future ftos FutureSetup{longPK, shortPK, contractStart} =
     let
-        address = validatorHash $ Scripts.validatorScript $ SM.typedValidator $ SM.scInstance client
+        address = V2.validatorHash $ SM.typedValidator $ SM.scInstance client
         dataScript  = Datum $ PlutusTx.toBuiltinData $ initialState future
         targets =
             [ Escrow.payToScriptTarget address

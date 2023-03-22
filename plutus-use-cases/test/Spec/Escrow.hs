@@ -19,7 +19,9 @@ module Spec.Escrow( tests
                   , EscrowModel
                   , certification
                   , prop_CrashTolerance
-                  , prop_UnitTest) where
+                  , prop_UnitTest
+                  , prop_validityChecks
+                  , EscrowModel) where
 
 import Control.Lens hiding (both)
 import Control.Monad (void, when)
@@ -28,21 +30,29 @@ import Data.Foldable
 import Data.Map (Map)
 import Data.Map qualified as Map
 
+import Cardano.Api.Shelley (TxValidityLowerBound (..), TxValidityUpperBound (..), ValidityLowerBoundSupportedInEra (..),
+                            ValidityNoUpperBoundSupportedInEra (..), ValidityUpperBoundSupportedInEra (..),
+                            toPlutusData)
+import Cardano.Node.Emulator.Params qualified as Params
 import Cardano.Node.Emulator.TimeSlot qualified as TimeSlot
 import Ledger (Slot (..), minAdaTxOutEstimated)
-import Ledger.Ada qualified as Ada
 import Ledger.Time (POSIXTime)
 import Ledger.Typed.Scripts qualified as Scripts
-import Ledger.Value
+import Ledger.Value.CardanoAPI qualified as Value
 import Plutus.Contract hiding (currentSlot)
 import Plutus.Contract.Test
 import Plutus.Contract.Test.ContractModel
+import Plutus.Script.Utils.Ada qualified as Ada
+import Plutus.Script.Utils.Value
 
 import Plutus.Contracts.Escrow hiding (Action (..))
+import Plutus.Contracts.Escrow qualified as Impl
 import Plutus.Trace.Emulator qualified as Trace
+import PlutusTx (fromData)
 import PlutusTx.Monoid (inv)
 
 import Test.QuickCheck as QC hiding ((.&&.))
+import Test.QuickCheck.ContractModel.ThreatModel
 import Test.Tasty
 import Test.Tasty.HUnit qualified as HUnit
 -- import Test.Tasty.QuickCheck hiding ((.&&.))
@@ -203,13 +213,31 @@ noLockProof = defaultNLFP
 prop_NoLockedFunds :: Property
 prop_NoLockedFunds = checkNoLockedFundsProofWithOptions options noLockProof
 
+-- | Check that you can't redeem after the deadline and not refund before the deadline.
+validityChecks :: ThreatModel ()
+validityChecks = do
+  let startTime  = TimeSlot.scSlotZeroTime def
+      params     = escrowParams startTime
+      deadline   = toSlotNo . TimeSlot.posixTimeToEnclosingSlot def $ escrowDeadline params
+      scriptAddr = Scripts.validatorCardanoAddressAny Params.testnet $ typedValidator params
+  input <- anyInputSuchThat $ (scriptAddr ==) . addressOf
+  rmdr  <- (fromData . toPlutusData =<<) <$> getRedeemer input
+  case rmdr of
+    Nothing          -> fail "Missing or bad redeemer"
+    Just Impl.Redeem -> shouldNotValidate $ changeValidityRange (TxValidityLowerBound ValidityLowerBoundInBabbageEra deadline,
+                                                                 TxValidityNoUpperBound ValidityNoUpperBoundInBabbageEra)
+    Just Impl.Refund -> shouldNotValidate $ changeValidityRange (TxValidityNoLowerBound,
+                                                                 TxValidityUpperBound ValidityUpperBoundInBabbageEra (deadline - 1))
+
+prop_validityChecks :: Actions EscrowModel -> Property
+prop_validityChecks = checkThreatModelWithOptions options defaultCoverageOptions validityChecks
 
 tests :: TestTree
 tests = testGroup "escrow"
     [ let con = void $ payEp @() @EscrowSchema @EscrowError (escrowParams startTime) in
       checkPredicateOptions options "can pay"
         ( assertDone con (Trace.walletInstanceTag w1) (const True) "escrow pay not done"
-        .&&. walletFundsChange w1 (Ada.adaValueOf (-10))
+        .&&. walletFundsChange w1 (Value.adaValueOf (-10))
         )
         $ do
           hdl <- Trace.activateContractWallet w1 con
@@ -223,8 +251,8 @@ tests = testGroup "escrow"
                                     (redeemEp (escrowParams startTime)) in
       checkPredicateOptions options "can redeem"
         ( assertDone con (Trace.walletInstanceTag w3) (const True) "escrow redeem not done"
-          .&&. walletFundsChange w1 (Ada.adaValueOf (-10))
-          .&&. walletFundsChange w2 (Ada.adaValueOf 10)
+          .&&. walletFundsChange w1 (Value.adaValueOf (-10))
+          .&&. walletFundsChange w2 (Value.adaValueOf 10)
           .&&. walletFundsChange w3 mempty
         )
         redeemTrace
@@ -244,13 +272,13 @@ tests = testGroup "escrow"
 
           -- Wallet 1 pays 20 and receives 10 from the escrow contract and another 10
           -- in excess inputs
-          ( walletFundsChange w1 (Ada.lovelaceValueOf 0)
+          ( walletFundsChange w1 (Value.lovelaceValueOf 0)
 
           -- Wallet 2 pays 10 and receives 20, as per the contract.
-            .&&. walletFundsChange w2 (Ada.adaValueOf 10)
+            .&&. walletFundsChange w2 (Value.adaValueOf 10)
 
           -- Wallet 3 pays 10 and doesn't receive anything.
-            .&&. walletFundsChange w3 (Ada.adaValueOf (-10))
+            .&&. walletFundsChange w3 (Value.adaValueOf (-10))
           )
           redeem2Trace
 
@@ -269,9 +297,9 @@ tests = testGroup "escrow"
                                (Scripts.validatorScript $ typedValidator (escrowParams startTime))
                                32000
 
-    -- Ali: Disables these tests for now as I am using certification instead.
-    -- , testProperty "QuickCheck ContractModel" prop_Escrow
-    -- , testProperty "QuickCheck NoLockedFunds" prop_NoLockedFunds
+    , testProperty "QuickCheck ContractModel" prop_Escrow
+    , testProperty "QuickCheck NoLockedFunds" prop_NoLockedFunds
+    , testProperty "QuickCheck validityChecks" $ withMaxSuccess 30 prop_validityChecks
 
     -- TODO: commented because the test fails after 'CardanoTx(Both)' was deleted.
     -- The fix would be to start using CardanoTx instead of EmulatorTx in 'DoubleSatisfation.doubleSatisfactionCandidates'.

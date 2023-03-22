@@ -1,10 +1,7 @@
 {-# LANGUAGE DataKinds           #-}
 {-# LANGUAGE LambdaCase          #-}
-{-# LANGUAGE NamedFieldPuns      #-}
 {-# LANGUAGE OverloadedStrings   #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE TemplateHaskell     #-}
-{-# LANGUAGE TypeApplications    #-}
 {-# LANGUAGE TypeFamilies        #-}
 {-# OPTIONS_GHC -fno-warn-incomplete-uni-patterns #-}
 {-# OPTIONS_GHC -fno-ignore-interface-pragmas #-}
@@ -12,14 +9,11 @@
 {-# OPTIONS_GHC -fno-warn-unused-do-bind #-}
 module Spec.Emulator(tests) where
 
-import Cardano.Api.Shelley qualified as C
 import Cardano.Node.Emulator.Chain qualified as Chain
 import Cardano.Node.Emulator.Fee (selectCoin)
 import Cardano.Node.Emulator.Generators (Mockchain (Mockchain))
 import Cardano.Node.Emulator.Generators qualified as Gen
-import Cardano.Node.Emulator.Params (Params (Params, pNetworkId))
-import Cardano.Node.Emulator.Validation qualified as Validation
-import Control.Lens ((&), (.~), (^.))
+import Control.Lens ((&), (.~))
 import Control.Monad (void)
 import Control.Monad.Freer qualified as Eff
 import Control.Monad.Freer.Extras.Log (LogLevel (Debug))
@@ -28,30 +22,21 @@ import Data.ByteString.Lazy qualified as BSL
 import Data.ByteString.Lazy.Char8 (pack)
 import Data.Default (Default (def))
 import Data.Foldable (fold)
-import Data.Map qualified as Map
 import Data.Maybe (fromMaybe)
 import Data.Text qualified as Text
 import Hedgehog (Property, forAll, property)
 import Hedgehog qualified
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
-import Ledger (CardanoTx (..), Language (PlutusV1), OnChainTx (Valid), PaymentPubKeyHash, ScriptError (EvaluationError),
-               Tx (txMint), TxInType (ScriptAddress), TxOut (TxOut), Validator, Value,
-               Versioned (Versioned, unversioned), cardanoTxMap, getCardanoTxOutRefs, getCardanoTxOutputs,
-               mkValidatorScript, onCardanoTx, outputs, txOutValue, unitDatum, unitRedeemer, unspentOutputs)
-import Ledger.Ada qualified as Ada
+import Ledger (CardanoTx (..), OnChainTx (Valid), PaymentPubKeyHash, unspentOutputs)
 import Ledger.Index qualified as Index
-import Ledger.Tx.CardanoAPI (fromPlutusIndex, toCardanoAddressInEra, toCardanoTxOutDatumInTx, toCardanoTxOutValue)
-import Ledger.Value qualified as Value
+import Ledger.Value.CardanoAPI qualified as Value
 import Plutus.Contract.Test hiding (not)
-import Plutus.Script.Utils.V1.Address (mkValidatorAddress)
-import Plutus.Script.Utils.V1.Typed.Scripts (mkUntypedValidator)
+import Plutus.Script.Utils.Ada qualified as Ada
+import Plutus.Script.Utils.Value (Value)
 import Plutus.Trace (EmulatorTrace, PrintEffect (PrintLn))
 import Plutus.Trace qualified as Trace
-import Plutus.V1.Ledger.Contexts (ScriptContext)
-import PlutusTx qualified
 import PlutusTx.Numeric qualified as P
-import PlutusTx.Prelude qualified as PlutusTx
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.Golden (goldenVsString)
 import Test.Tasty.Hedgehog (testPropertyNamed)
@@ -69,9 +54,7 @@ tests = testGroup "all tests" [
     testGroup "traces" [
         testPropertyNamed "accept valid txn" "validTrace" validTrace,
         testPropertyNamed "accept valid txn 2" "validTrace2" validTrace2,
-        testPropertyNamed "reject invalid txn" "invalidTrace" invalidTrace,
         testPropertyNamed "notify wallet" "notifyWallet" notifyWallet,
-        testPropertyNamed "log script validation failures" "invalidScript" invalidScript,
         testPropertyNamed "payToPaymentPubkey" "payToPaymentPubKeyScript" payToPaymentPubKeyScript,
         testPropertyNamed "payToPaymentPubkey-2" "payToPaymentPubKeyScript2" payToPaymentPubKeyScript2
         ],
@@ -127,8 +110,8 @@ pubKey3 = mockWalletPaymentPubKeyHash wallet3
 
 utxo :: Property
 utxo = property $ do
-    Mockchain txPool o params <- forAll Gen.genMockchain
-    Hedgehog.assert (unspentOutputs [map (Valid . Gen.signTx params o) txPool] == o)
+    Mockchain txPool o _params <- forAll Gen.genMockchain
+    Hedgehog.assert (unspentOutputs [map Valid txPool] == o)
 
 txnValid :: Property
 txnValid = property $ do
@@ -142,21 +125,20 @@ selectCoinProp = property $ do
     let result = selectCoin inputs target
     case result of
         Left _ ->
-            Hedgehog.assert $ not $ foldMap snd inputs `Value.geq` target
+            Hedgehog.assert $ not $ foldMap snd inputs `Value.valueGeq` target
         Right (ins, change) ->
-            Hedgehog.assert $ foldMap (fromMaybe mempty . (`lookup` inputs)) ins == (target P.+ change)
+            Hedgehog.assert $ foldMap (fromMaybe mempty . (`lookup` inputs)) ins == (target <> change)
 
 txnUpdateUtxo :: Property
 txnUpdateUtxo = property $ do
-    (Mockchain m utxos params, txn) <- forAll genChainTxn
+    (Mockchain m _utxos _params, txn) <- forAll genChainTxn
     let options = defaultCheckOptions & emulatorConfig . Trace.initialChainState .~ Right m
-        signedTx = Gen.signTx params utxos txn
 
         -- submit the same txn twice, so it should be accepted the first time
         -- and rejected the second time.
         trace = do
-            Trace.liftWallet wallet1 (submitTxn signedTx)
-            Trace.liftWallet wallet1 (submitTxn signedTx)
+            Trace.liftWallet wallet1 (submitTxn txn)
+            Trace.liftWallet wallet1 (submitTxn txn)
         pred = \case
             [ Chain.TxnValidate{}
                 , Chain.SlotAdd _
@@ -170,84 +152,20 @@ txnUpdateUtxo = property $ do
 
 validTrace :: Property
 validTrace = property $ do
-    (Mockchain m utxo params, txn) <- forAll genChainTxn
+    (Mockchain m _utxo _params, txn) <- forAll genChainTxn
     let options = defaultCheckOptions & emulatorConfig . Trace.initialChainState .~ Right m
-        signedTx = Gen.signTx params utxo txn
-        trace = Trace.liftWallet wallet1 (submitTxn signedTx)
+        trace = Trace.liftWallet wallet1 (submitTxn txn)
     void $  checkPredicateInner options assertNoFailedTransactions trace Hedgehog.annotate Hedgehog.assert (const $ pure ())
 
 validTrace2 :: Property
 validTrace2 = property $ do
-    (Mockchain m utxo params, txn) <- forAll genChainTxn
+    (Mockchain m _utxo _params, txn) <- forAll genChainTxn
     let options = defaultCheckOptions & emulatorConfig . Trace.initialChainState .~ Right m
-        signedTx = Gen.signTx params utxo txn
         trace = do
-            Trace.liftWallet wallet1 (submitTxn signedTx)
-            Trace.liftWallet wallet1 (submitTxn signedTx)
+            Trace.liftWallet wallet1 (submitTxn txn)
+            Trace.liftWallet wallet1 (submitTxn txn)
         predicate = assertFailedTransaction (\_ _ -> True)
     void $  checkPredicateInner options predicate trace Hedgehog.annotate Hedgehog.assert (const $ pure ())
-
-invalidTrace :: Property
-invalidTrace = property $ do
-    (Mockchain m utxo params, txn) <- forAll genChainTxn
-    let invalidTxn = cardanoTxMap (\tx -> tx { txMint = Ada.adaValueOf 1 }) (\_ -> error "Unexpected Cardano.Api.Tx") txn
-        signedTxn = Gen.signTx params utxo invalidTxn
-        options = defaultCheckOptions & emulatorConfig . Trace.initialChainState .~ Right m
-        trace = Trace.liftWallet wallet1 (submitTxn signedTxn)
-        pred = \case
-            [ Chain.TxnValidate{}
-                , Chain.SlotAdd _
-                , Chain.TxnValidationFail _ _ _ (Index.CardanoLedgerValidationError msg) _ _
-                , Chain.SlotAdd _
-                ] -> "ValueNotConservedUTxO" `Text.isInfixOf` msg
-            _ -> False
-    void $ checkPredicateInner options (assertChainEvents pred) trace Hedgehog.annotate Hedgehog.assert (const $ pure ())
-
-invalidScript :: Property
-invalidScript = property $ do
-    (Mockchain _ _ params@Params{pNetworkId}, txn1) <- forAll genChainTxn
-
-    -- modify one of the outputs to be a script output
-    index <- forAll $ Gen.int (Range.linear 0 ((length $ getCardanoTxOutputs txn1) - 1))
-    let emulatorTx = onCardanoTx id (\_ -> error "Unexpected Cardano.Api.Tx") txn1
-    let setOutputs o =
-            either (const Hedgehog.failure) (pure . TxOut)
-          $ C.TxOut <$> toCardanoAddressInEra pNetworkId (mkValidatorAddress $ unversioned failValidator)
-            <*> toCardanoTxOutValue (txOutValue o)
-            <*> Right (toCardanoTxOutDatumInTx unitDatum)
-            <*> pure C.ReferenceScriptNone
-    outs <- traverse setOutputs $ emulatorTx ^. outputs
-    let scriptTxn = EmulatorTx $
-            emulatorTx
-          & outputs .~ outs
-    Hedgehog.annotateShow scriptTxn
-    let outToSpend = getCardanoTxOutRefs scriptTxn !! index
-    let totalVal = txOutValue (fst outToSpend)
-
-    -- try and spend the script output
-    let invalidTxnUtxo = [(snd outToSpend, fst outToSpend)]
-    invalidTxn <- forAll
-        $ Gen.genValidTransactionSpending
-            [Gen.TxInputWitnessed (snd outToSpend) (ScriptAddress (Left failValidator) unitRedeemer (Just unitDatum))]
-            totalVal
-    Hedgehog.annotateShow invalidTxn
-
-    let cUtxoIndex = either (error . show) id $ fromPlutusIndex $ Index.UtxoIndex $ Map.fromList invalidTxnUtxo
-        signedInvalidTxn = onCardanoTx
-          (\t -> Validation.fromPlutusTxSigned' params cUtxoIndex t Gen.knownPaymentKeys)
-          (const $ error "unexpected CardanoTx")
-          invalidTxn
-
-    Hedgehog.annotateShow signedInvalidTxn
-    Hedgehog.assert (case signedInvalidTxn of
-      Left (Left (Index.Phase2, Index.ScriptFailure (EvaluationError msgs _))) -> elem "I always fail everything" msgs
-      _                                                                        -> False
-      )
-    where
-        failValidator :: Versioned Validator
-        failValidator = Versioned (mkValidatorScript $$(PlutusTx.compile [|| mkUntypedValidator validator ||])) PlutusV1
-        validator :: () -> () -> ScriptContext -> Bool
-        validator _ _ _ = PlutusTx.traceError "I always fail everything"
 
 txnFlowsTest :: Property
 txnFlowsTest =
@@ -313,7 +231,7 @@ evalEmulatorTraceTest = property $ do
     Hedgehog.annotateShow res
     Hedgehog.assert (either (const False) (const True) res)
 
-genChainTxn :: Hedgehog.MonadGen m => m (Mockchain, CardanoTx)
+genChainTxn :: Hedgehog.Gen (Mockchain, CardanoTx)
 genChainTxn = do
     m <- Gen.genMockchain
     txn <- Gen.genValidTransaction m

@@ -19,22 +19,24 @@ module Plutus.Contracts.SimpleEscrow
   where
 
 import Cardano.Node.Emulator.Params qualified as Params
-import Control.Lens (makeClassyPrisms, view)
+import Control.Lens (makeClassyPrisms)
 import Control.Monad (void)
 import Control.Monad.Error.Lens (throwing)
 import Data.Aeson (FromJSON, ToJSON)
 import GHC.Generics (Generic)
 
-import Ledger (POSIXTime, PaymentPubKeyHash (unPaymentPubKeyHash), TxId, getCardanoTxId, txSignedBy, valuePaidTo)
+import Ledger (POSIXTime, PaymentPubKeyHash (unPaymentPubKeyHash), TxId, getCardanoTxId)
 import Ledger qualified
-import Ledger.Constraints qualified as Constraints
 import Ledger.Interval (after, before)
-import Ledger.Interval qualified as Interval
-import Ledger.Tx qualified as Tx
-import Ledger.Typed.Scripts (ScriptContextV1)
+import Ledger.Tx.Constraints qualified as Constraints
+import Ledger.Tx.Constraints.ValidityInterval qualified as Interval
+import Ledger.Typed.Scripts (ScriptContextV2)
 import Ledger.Typed.Scripts qualified as Scripts
-import Ledger.Value (Value, geq)
-import Plutus.V1.Ledger.Api (ScriptContext (..), TxInfo (..))
+import Plutus.Script.Utils.V2.Typed.Scripts qualified as V2
+import Plutus.Script.Utils.Value (Value, geq)
+import Plutus.V2.Ledger.Api (txInfoValidRange)
+import Plutus.V2.Ledger.Contexts (txSignedBy, valuePaidTo)
+import Plutus.V2.Ledger.Contexts qualified as V2
 
 import Plutus.Contract
 import PlutusTx qualified
@@ -96,16 +98,16 @@ instance Scripts.ValidatorTypes Escrow where
 escrowAddress :: Ledger.CardanoAddress
 escrowAddress = Scripts.validatorCardanoAddress Params.testnet escrowInstance
 
-escrowInstance :: Scripts.TypedValidator Escrow
-escrowInstance = Scripts.mkTypedValidator @Escrow
+escrowInstance :: V2.TypedValidator Escrow
+escrowInstance = V2.mkTypedValidator @Escrow
     $$(PlutusTx.compile [|| validate ||])
     $$(PlutusTx.compile [|| wrap ||])
       where
-        wrap = Scripts.mkUntypedValidator @ScriptContextV1 @EscrowParams @Action
+        wrap = Scripts.mkUntypedValidator @ScriptContextV2 @EscrowParams @Action
 
 {-# INLINABLE validate #-}
-validate :: EscrowParams -> Action -> ScriptContext -> Bool
-validate params action ScriptContext{scriptContextTxInfo=txInfo} =
+validate :: EscrowParams -> Action -> V2.ScriptContext -> Bool
+validate params action V2.ScriptContext{V2.scriptContextTxInfo=txInfo} =
   case action of
     Redeem ->
           -- Can't redeem after the deadline
@@ -127,14 +129,9 @@ validate params action ScriptContext{scriptContextTxInfo=txInfo} =
 -- requirement that the transaction validates before the 'deadline'.
 lockEp :: Promise () EscrowSchema EscrowError ()
 lockEp = endpoint @"lock" $ \params -> do
-  -- Correct validity interval should be:
-  -- @
-  --   Interval (LowerBound NegInf True) (Interval.strictUpperBound $ deadline params)
-  -- @
-  -- See Note [Validity Interval's upper bound]
-  let valRange = Interval.to (Haskell.pred $ Haskell.pred $ deadline params)
+  let valRange = Interval.lessThan (Haskell.pred $ Haskell.pred $ deadline params)
       tx = Constraints.mustPayToTheScriptWithDatumInTx params (paying params)
-            <> Constraints.mustValidateIn valRange
+            <> Constraints.mustValidateInTimeRange valRange
   void $ mkTxConstraints (Constraints.typedValidatorLookups escrowInstance) tx
          >>= adjustUnbalancedTx >>= submitUnbalancedTx
 
@@ -148,15 +145,10 @@ redeemEp = endpoint @"redeem" redeem
       pk <- ownFirstPaymentPubKeyHash
       unspentOutputs <- utxosAt escrowAddress
 
-      let value = foldMap (view Tx.decoratedTxOutValue) unspentOutputs
-          -- Correct validity interval should be:
-          -- @
-          --   Interval (LowerBound NegInf True) (Interval.strictUpperBound $ deadline params)
-          -- @
-          -- See Note [Validity Interval's upper bound]
-          validityTimeRange = Interval.to (Haskell.pred $ Haskell.pred $ deadline params)
-          tx = Constraints.collectFromTheScript unspentOutputs Redeem
-                      <> Constraints.mustValidateIn validityTimeRange
+      let value = foldMap Ledger.decoratedTxOutPlutusValue unspentOutputs
+          validityTimeRange = Interval.lessThan (Haskell.pred $ Haskell.pred $ deadline params)
+          tx = Constraints.spendUtxosFromTheScript unspentOutputs Redeem
+                      <> Constraints.mustValidateInTimeRange validityTimeRange
                       -- Pay me the output of this script
                       <> Constraints.mustPayToPubKey pk value
                       -- Pay the payee their due
@@ -177,8 +169,8 @@ refundEp = endpoint @"refund" refund
     refund params = do
       unspentOutputs <- utxosAt escrowAddress
 
-      let tx = Constraints.collectFromTheScript unspentOutputs Refund
-                  <> Constraints.mustValidateIn (Interval.from (deadline params))
+      let tx = Constraints.spendUtxosFromTheScript unspentOutputs Refund
+                  <> Constraints.mustValidateInTimeRange (Interval.from (deadline params))
                   <> Constraints.mustBeSignedBy (payee params)
 
       if Constraints.modifiesUtxoSet tx

@@ -17,17 +17,18 @@ import Data.Maybe (fromMaybe)
 import Hedgehog.Gen qualified as Gen
 import System.Random.MWC as MWC
 
+import Cardano.Api qualified as C
 import Cardano.Node.Emulator.Generators (TxInputWitnessed (TxInputWitnessed))
 import Cardano.Node.Emulator.Generators qualified as Generators
 import Cardano.Node.Emulator.Params (Params (pSlotConfig))
 import Cardano.Node.Emulator.Validation qualified as Validation
-import Ledger.Ada qualified as Ada
 import Ledger.Address (CardanoAddress)
 import Ledger.CardanoWallet qualified as CW
 import Ledger.Index (UtxoIndex (..))
 import Ledger.Slot (Slot (..))
-import Ledger.Tx (CardanoTx (EmulatorTx), Tx, TxInType (ConsumePublicKeyAddress), txOutAddress, txOutValue)
+import Ledger.Tx (CardanoTx (CardanoEmulatorEraTx), TxInType (ConsumePublicKeyAddress), txOutAddress, txOutValue)
 import Ledger.Tx.CardanoAPI (fromPlutusIndex)
+import Ledger.Value.CardanoAPI (isAdaOnlyValue)
 
 -- $randomTx
 -- Generate a random, valid transaction that moves some ada
@@ -53,7 +54,7 @@ generateTx
   :: GenIO       -- ^ Reused across all function invocations (for performance reasons).
   -> Slot        -- ^ Used to validate transctions.
   -> UtxoIndex   -- ^ Used to generate new transactions.
-  -> IO Tx
+  -> IO (C.Tx C.BabbageEra)
 generateTx gen slot (UtxoIndex utxo) = do
   sourceAddress <- pickNEL gen keyPairs
   -- outputs at the source address
@@ -65,9 +66,7 @@ generateTx gen slot (UtxoIndex utxo) = do
   -- We definitely need this for creating multi currency transactions!
         =
           filter
-            (\(_, txOut ) ->
-                txOutValue txOut ==
-                  Ada.toValue (Ada.fromValue $ txOutValue txOut)) $
+            (\(_, txOut ) -> isAdaOnlyValue (txOutValue txOut)) $
           filter
             (\(_, txOut) ->
                 txOutAddress txOut == sourceAddress) $
@@ -85,16 +84,15 @@ generateTx gen slot (UtxoIndex utxo) = do
             inputs
         -- inputs of the transaction
         sourceTxIns = fmap ((`TxInputWitnessed` ConsumePublicKeyAddress) . fst) inputs
-    EmulatorTx tx <- Gen.sample $
+    txn@(CardanoEmulatorEraTx cTx) <- Gen.sample $
       Generators.genValidTransactionSpending sourceTxIns sourceAda
     slotCfg <- Gen.sample Generators.genSlotConfig
     let
       params = def { pSlotConfig = slotCfg }
       utxoIndex = either (error . show) id $ fromPlutusIndex $ UtxoIndex utxo
-      txn = Validation.fromPlutusTxSigned params utxoIndex tx CW.knownPaymentKeys
       validationResult = Validation.validateCardanoTx params slot utxoIndex txn
     case validationResult of
-      Left _  -> pure tx
+      Left _  -> pure cTx
       Right _ -> generateTx gen slot (UtxoIndex utxo)
 
 keyPairs :: NonEmpty CardanoAddress
