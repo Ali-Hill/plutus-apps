@@ -1,5 +1,6 @@
 {-# LANGUAGE DataKinds           #-}
 {-# LANGUAGE DeriveDataTypeable  #-}
+{-# LANGUAGE DeriveGeneric       #-}
 {-# LANGUAGE FlexibleContexts    #-}
 {-# LANGUAGE FlexibleInstances   #-}
 {-# LANGUAGE GADTs               #-}
@@ -14,7 +15,7 @@
 {-# LANGUAGE TypeFamilies        #-}
 {-# OPTIONS_GHC -fno-ignore-interface-pragmas #-}
 
-module Spec.Governance(tests, doVoting) where
+module Spec.Governance(tests, doVoting, prop_Gov, prop_Fail, prop_Fail2) where
 
 import Control.Lens hiding (both, elements)
 import Control.Monad
@@ -60,14 +61,14 @@ options = defaultCheckOptionsContractModel & (increaseTransactionLimits . increa
 
 
 data GovernanceModel = GovernanceModel { _state        :: (BuiltinByteString, Bool)
-                                       , _targets      :: Map TokenName Bool
+                                       , _targets      :: Map (Wallet, TokenName) Bool -- TokenName Bool
                                        , _walletTokens :: Map Wallet TokenName
                                        , _endSlot      :: Slot
                                        , _phase        :: Phase
                                        , _proposedLaw  :: BuiltinByteString
-                                      } deriving (Eq, Show, Data)
+                                      } deriving (Eq, Show, Data, Generic)
 
-data Phase = Initial | Establishing | Proposing | Voting | Tallying | Finish deriving (Eq, Show, Data)
+data Phase = Initial | Establishing | Proposing | Voting | Tallying | Finish deriving (Eq, Show, Data, Generic)
 
 makeLenses ''GovernanceModel
 
@@ -82,11 +83,11 @@ instance ContractModel GovernanceModel where
                           | StartProposal Wallet BuiltinByteString TokenName Slot
                           | CheckLaw Wallet
                           | Tally Wallet
-    deriving (Eq, Show, Data)
+    deriving (Eq, Show, Data, Generic)
 
   data ContractInstanceKey GovernanceModel w s e params where
       GovH  :: Wallet -> ContractInstanceKey GovernanceModel () Gov.Schema Gov.GovError ()
-      ProposalH :: Wallet -> ContractInstanceKey GovernanceModel () EmptySchema Gov.GovError Gov.Proposal
+      ProposalH :: Wallet -> ContractInstanceKey GovernanceModel () EmptySchema Gov.GovError (Ledger.Address, Gov.Proposal)
 
   --start a contract instance in each of the test wallets (with contract parameter ()),
   --initialInstances = [StartContract (GovH w) () | w <- testWallets]
@@ -98,17 +99,18 @@ instance ContractModel GovernanceModel where
 
 
   -- tells the framework which contract to run for each key
-  instanceContract _ GovH{} _      = Gov.contract @Gov.GovError params
-  instanceContract _ ProposalH{} p = Gov.proposalContract @Gov.GovError params p
+  instanceContract _ GovH{} _            = Gov.contract @Gov.GovError params
+  instanceContract _ ProposalH{} (a , p) = Gov.proposalContract @Gov.GovError params a p
 
   startInstances _ (Init _) =
     [StartContract (GovH w) () | w <- testWallets]
   startInstances _ (StartProposal w l t slot) =
     [StartContract (ProposalH w)
+              (Ledger.toPlutusAddress $ mockWalletAddress w,
               Gov.Proposal { Gov.newLaw = Gov.Law l
                                  , Gov.votingDeadline = TimeSlot.slotToEndPOSIXTime def $ slot -- POSIXTime (getSlot slot)
                                  , Gov.tokenName = t
-                                 }]
+                                 })]
   startInstances _ _ = []
 
   perform h _ s a = case a of
@@ -118,7 +120,7 @@ instance ContractModel GovernanceModel where
       Trace.callEndpoint @"new-law" (h $ GovH w) (Gov.Law l)
       delay 2
     AddVote w t b     -> do
-      Trace.callEndpoint @"add-vote" (h $ GovH w) (t , b)
+      Trace.callEndpoint @"add-vote" (h $ GovH w) (Ledger.toPlutusAddress $ mockWalletAddress w, t , b)
       delay 1
     StartProposal _ _ _ _ -> do
       return ()
@@ -147,10 +149,10 @@ instance ContractModel GovernanceModel where
         state .= (l , True)
         phase .= Proposing
         wait 2
-    AddVote _ t v -> do
+    AddVote w t v -> do
         -- adds vote but there is no change in wallet.
         oldMap <- viewContractState targets
-        targets .= Map.insert t v oldMap
+        targets .= Map.insert (w , t) v oldMap
         wait 1
     StartProposal _ l _ slot  -> do
       proposedLaw .= l
@@ -173,7 +175,8 @@ instance ContractModel GovernanceModel where
     pLaw <- (viewContractState proposedLaw)
     when ((slot >= deadline) && (s == Voting)) $ do
       let Sum ayes = foldMap (\b -> Sum $ if b then 1 else (0 :: Int)) votes
-      when (ayes >= 5) $ state .= (pLaw, True)
+      -- fix so the below is a parameter
+      when (ayes >= 6) $ state .= (pLaw, True)
       phase .= Tallying
 
 
