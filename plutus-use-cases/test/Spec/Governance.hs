@@ -308,17 +308,17 @@ validatorAddress
 tests :: TestTree
 tests =
     testGroup "governance tests"
-    [ checkPredicateOptions (defaultCheckOptions & increaseTransactionLimits) "vote all in favor, 2 rounds - SUCCESS"
+    [ checkPredicateOptions options "vote all in favor, 2 rounds - SUCCESS"
         (assertNoFailedTransactions
         .&&. dataAtAddress validatorAddress (maybe False ((== lawv3) . Gov.law) . listToMaybe))
         (doVoting 10 0 2)
 
-    , checkPredicateOptions (defaultCheckOptions & increaseTransactionLimits) "vote 60/40, accepted - SUCCESS"
+    , checkPredicateOptions options "vote 60/40, accepted - SUCCESS"
         (assertNoFailedTransactions
         .&&. dataAtAddress validatorAddress (maybe False ((== lawv2) . Gov.law) . listToMaybe))
         (doVoting 6 4 1)
 
-    , checkPredicateOptions (defaultCheckOptions & increaseTransactionLimits) "vote 50/50, rejected - SUCCESS"
+    , checkPredicateOptions options "vote 50/50, rejected - SUCCESS"
         (assertNoFailedTransactions
         .&&. dataAtAddress validatorAddress (maybe False ((== lawv1) . Gov.law) . listToMaybe ))
         (doVoting 5 5 1)
