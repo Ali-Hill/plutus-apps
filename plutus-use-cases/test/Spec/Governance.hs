@@ -15,7 +15,14 @@
 {-# LANGUAGE TypeFamilies        #-}
 {-# OPTIONS_GHC -fno-ignore-interface-pragmas #-}
 
-module Spec.Governance(tests, doVoting, prop_Gov, prop_Fail, prop_Fail2) where
+module Spec.Governance(tests
+                      , doVoting
+                      , check_propGovernanceWithCoverage
+                      , prop_Check
+                      , prop_FinishFast
+                      , prop_FinishGovernance
+                      , prop_Gov
+                      , prop_NoLockedFunds) where
 
 import Control.Lens hiding (both, elements)
 import Control.Monad
@@ -44,24 +51,21 @@ import Plutus.Trace.Emulator (EmulatorTrace)
 import Plutus.Trace.Emulator qualified as Trace
 import PlutusTx.Prelude (BuiltinByteString)
 
-
 import Test.QuickCheck qualified as QC
 
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit qualified as HUnit
+import Test.Tasty.QuickCheck hiding ((.&&.))
 
-
-
-
-
-------------------------------------------------
-
+-- Governance model needs to increase the transaction limits in order to run
 options :: CheckOptions
 options = defaultCheckOptionsContractModel & (increaseTransactionLimits . increaseTransactionLimits . increaseTransactionLimits . increaseTransactionLimits)
 
 
+-- | Model state track whether the law and whether it has been set
+-- the targets keep track of the votes given by each wallet.
 data GovernanceModel = GovernanceModel { _state        :: (BuiltinByteString, Bool)
-                                       , _targets      :: Map (Wallet, TokenName) Bool -- TokenName Bool
+                                       , _targets      :: Map (Wallet, TokenName) Bool
                                        , _walletTokens :: Map Wallet TokenName
                                        , _endSlot      :: Slot
                                        , _phase        :: Phase
@@ -72,12 +76,17 @@ data Phase = Initial | Establishing | Proposing | Voting | Tallying | Finish der
 
 makeLenses ''GovernanceModel
 
-
 deriving instance Eq (ContractInstanceKey GovernanceModel w s e params)
 deriving instance Show (ContractInstanceKey GovernanceModel w s e params)
 
+-- | Init initialises the wallets
+-- NewLaw starts the governance contract
+-- AddVote adds a vote to an ongoing proposal
+-- StartProposal starts the proposal contract
+-- CheckLaw calls an off-chain endpoint to check whether the law has been changed
+-- Tally waits a slot to ensure that the contract has updated the law before checking the law
 instance ContractModel GovernanceModel where
-  data Action GovernanceModel = Init Wallet --might not need wallet here
+  data Action GovernanceModel = Init Wallet
                           | NewLaw Wallet BuiltinByteString
                           | AddVote Wallet TokenName Bool
                           | StartProposal Wallet BuiltinByteString TokenName Slot
@@ -89,16 +98,12 @@ instance ContractModel GovernanceModel where
       GovH  :: Wallet -> ContractInstanceKey GovernanceModel () Gov.Schema Gov.GovError ()
       ProposalH :: Wallet -> ContractInstanceKey GovernanceModel () EmptySchema Gov.GovError (Ledger.Address, Gov.Proposal)
 
-  --start a contract instance in each of the test wallets (with contract parameter ()),
-  --initialInstances = [StartContract (GovH w) () | w <- testWallets]
-  initialInstances = [] -- old
+  initialInstances = []
 
-  --tells the framework which wallet each contr
   instanceWallet (GovH w)      = w
   instanceWallet (ProposalH w) = w
 
 
-  -- tells the framework which contract to run for each key
   instanceContract _ GovH{} _            = Gov.contract @Gov.GovError params
   instanceContract _ ProposalH{} (a , p) = Gov.proposalContract @Gov.GovError params a p
 
@@ -108,7 +113,7 @@ instance ContractModel GovernanceModel where
     [StartContract (ProposalH w)
               (Ledger.toPlutusAddress $ mockWalletAddress w,
               Gov.Proposal { Gov.newLaw = Gov.Law l
-                                 , Gov.votingDeadline = TimeSlot.slotToEndPOSIXTime def $ slot -- POSIXTime (getSlot slot)
+                                 , Gov.votingDeadline = TimeSlot.slotToEndPOSIXTime def slot
                                  , Gov.tokenName = t
                                  })]
   startInstances _ _ = []
@@ -135,17 +140,13 @@ instance ContractModel GovernanceModel where
     Init _ -> do
       phase .= Establishing
     NewLaw w l -> do
-        -- will all wallets not get 2 ada and a token
         let mph = Scripts.forwardingMintingPolicyHash (Gov.typedValidator params)
-
         walletTokens .= Map.fromList [(w' , t) | w' <- testWallets | t <- tokens]
-
+        -- distribute tokens to all wallets
         sequence_ [deposit w' $ Ada.toValue Ledger.minAdaTxOutEstimated | w' <- testWallets]
         sequence_ [deposit w' $ Gov.votingValue mph t | w' <- testWallets | t <- tokens]
-
         -- the current wallet loses the minimum ada * (no of wallets + 1) since we deposit ada to all wallets
         withdraw w $ Ada.toValue (Ledger.minAdaTxOutEstimated * (fromInteger $ numberOfHolders + 1))
-
         state .= (l , True)
         phase .= Proposing
         wait 2
@@ -168,6 +169,7 @@ instance ContractModel GovernanceModel where
       phase .= Finish
       wait 1
 
+  -- When the deadline is reached count all the votes and update the law if necessary.
   nextReactiveState slot = do
     deadline <- viewContractState endSlot
     s <- viewContractState phase
@@ -175,8 +177,7 @@ instance ContractModel GovernanceModel where
     pLaw <- (viewContractState proposedLaw)
     when ((slot >= deadline) && (s == Voting)) $ do
       let Sum ayes = foldMap (\b -> Sum $ if b then 1 else (0 :: Int)) votes
-      -- fix so the below is a parameter
-      when (ayes >= 6) $ state .= (pLaw, True)
+      when (ayes >= fromInteger (Gov.requiredVotes params)) $ state .= (pLaw, True)
       phase .= Tallying
 
 
@@ -213,14 +214,9 @@ instance ContractModel GovernanceModel where
                       && ownsVotingToken' w t (s ^. contractState . walletTokens)
     StartProposal w _ t _ -> currentPhase == Proposing
                                 && ownsVotingToken' w t (s ^. contractState . walletTokens)
-                                -- && viewModelState currentSlot < slot Note: I thought I would be able to do this
     Tally _ -> currentPhase == Tallying
     CheckLaw _ -> currentPhase == Finish
-                                -- Gov.ownsVotingToken (Scripts.forwardingMintingPolicyHash (Gov.typedValidator params)) t
-                                -- && snd (s ^. contractState . state) == False
     where currentPhase = s ^. contractState . phase
-
-
 
 ownsVotingToken' :: Wallet -> TokenName -> Map Wallet TokenName -> Bool
 ownsVotingToken' w t m = case Map.lookup w m of
@@ -232,16 +228,6 @@ laws = ["lawv1", "lawv2", "lawv3"]
 
 tokens :: [TokenName]
 tokens = zipWith (const (Gov.mkTokenName (Gov.baseTokenName params))) (Gov.initialHolders params) [1..]
-
-{-
--- | A governance contract that requires 5 votes out of 10
-params :: Gov.Params
-params = Gov.Params
-    { Gov.initialHolders = EM.mockWalletPaymentPubKeyHash . knownWallet <$> [1..numberOfHolders]
-    , Gov.requiredVotes = 5
-    , Gov.baseTokenName = baseName
-    }
--}
 
 prop_Gov :: Actions GovernanceModel -> QC.Property
 prop_Gov = propRunActionsWithOptions options defaultCoverageOptions (\ _ -> pure True)
@@ -257,8 +243,6 @@ finishGovernance = do
 
 finishingStrategy :: DL GovernanceModel ()
 finishingStrategy = do
-    -- contribs <- viewContractState contributions
-    -- monitor (tabulate "Refunded wallets" [show . Map.size $ contribs])
     slot     <- viewModelState currentSlot
     currentPhase <- viewContractState phase
     monitor $ QC.tabulate "Phase" [show currentPhase]
@@ -266,7 +250,6 @@ finishingStrategy = do
       action $ StartProposal w1 "lawv1" "TestLawToken1" (slot + 10)
     when (currentPhase /= Initial && currentPhase /= Establishing) $ do
       waitUntilDeadline
-    --sequence_ [action $ Refund w | w <- testWallets, w `Map.member` contribs]
 
 walletStrategy :: Wallet -> DL GovernanceModel ()
 walletStrategy _ = do
@@ -283,29 +266,24 @@ noLockProof = defaultNLFP
   { nlfpMainStrategy   = finishingStrategy
   , nlfpWalletStrategy = walletStrategy    }
 
-prop_finishGovernance :: QC.Property
-prop_finishGovernance = forAllDL finishGovernance prop_Gov
+-- The governance contract will always lock funds so these properties  will fail
+prop_FinishGovernance :: QC.Property
+prop_FinishGovernance = forAllDL finishGovernance prop_Gov
 
 prop_FinishFast :: QC.Property
 prop_FinishFast = forAllDL finishGovernance $ const True
 
 prop_NoLockedFunds :: QC.Property
-prop_NoLockedFunds = checkNoLockedFundsProof noLockProof
+prop_NoLockedFunds = checkNoLockedFundsProofWithOptions options noLockProof
 
-prop_NoLockedFundsFast :: QC.Property
-prop_NoLockedFundsFast = checkNoLockedFundsProofFast noLockProof
-
-{- fix later
 check_propGovernanceWithCoverage :: IO ()
 check_propGovernanceWithCoverage = do
-  cr <- quickCheckWithCoverage QC.stdArgs (set coverageIndex Gov.covIdx' $ defaultCoverageOptions) $ \covopts ->
+  cr <- quickCheckWithCoverage QC.stdArgs (set coverageIndex Gov.covIdx' defaultCoverageOptions) $ \covopts ->
     QC.withMaxSuccess 50 $ propRunActionsWithOptions @GovernanceModel options covopts (const (pure True))
   writeCoverageReport "Governance" cr
--}
 
-
-failDL :: DL GovernanceModel ()
-failDL = do
+checkDL :: DL GovernanceModel ()
+checkDL = do
           action $ Init w10
           action $ NewLaw w9 "lawv3"
           action $ StartProposal w9 "lawv2" "TestLawToken9" (Slot {getSlot = 1054})
@@ -319,30 +297,8 @@ failDL = do
           action $ CheckLaw w8
 
 
-failDL2 :: DL GovernanceModel ()
-failDL2 = do
-          action $ Init w6
-          action $ NewLaw w3 "lawv1"
-          waitUntilDL 127
-          action $ StartProposal w7 "lawv1" "TestLawToken7" (Slot {getSlot = 127})
-          action $ StartProposal w9 "lawv2" "TestLawToken9" (Slot {getSlot = 968})
-          action $ AddVote w2 "TestLawToken2" True
-          action $ AddVote w5 "TestLawToken5" True
-          action $ AddVote w7 "TestLawToken7" True
-          action $ AddVote w6 "TestLawToken6" True
-          action $ AddVote w4 "TestLawToken4" True
-          waitUntilDL 968
-          action $ Tally w3
-          action $ CheckLaw w3
-
-prop_Fail :: QC.Property
-prop_Fail = QC.withMaxSuccess 1 $ forAllDL failDL prop_Gov
-
-prop_Fail2 :: QC.Property
-prop_Fail2 = QC.withMaxSuccess 1 $ forAllDL failDL2 prop_Gov
-
------------------------------------------------
-
+prop_Check :: QC.Property
+prop_Check = QC.withMaxSuccess 1 $ forAllDL checkDL prop_Gov
 
 validatorAddress :: Ledger.CardanoAddress
 validatorAddress
@@ -374,6 +330,9 @@ tests =
                      ( reasonable (Scripts.validatorScript $ Gov.typedValidator params)
                                   23000
                      )
+
+    , testProperty "Simple DL Test" prop_Check
+    , testProperty "QuickCheck ContractModel" prop_Gov
     ]
 
 numberOfHolders :: Integer

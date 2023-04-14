@@ -116,6 +116,7 @@ getLaw (GovState (Law l) _ _) = l
 --
 -- * @new-law@ to create a new law and distribute voting tokens
 -- * @add-vote@ to vote on a proposal with the name of the voting token and a boolean to vote in favor or against.
+-- * @check-law@ to check to see if the law has changed. (temporarily needed for the contract model)
 type Schema =
     Endpoint "new-law" Law
         .\/ Endpoint "add-vote" (Address, TokenName, Bool)
@@ -225,6 +226,7 @@ contract params = forever $ mapError (review _GovError) endpoints where
         let tokens = Haskell.zipWith (const (mkTokenName (baseTokenName params))) (initialHolders params) [1..]
         void $ SM.runStep theClient $ MintTokens tokens
 
+    -- Temporary endpoint for checking the state of the contract to see if the law has changed
     checkLaw = endpoint @"check-law" $ \l -> do
                maybeState <- SM.getOnChainState theClient
                case maybeState of
