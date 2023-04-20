@@ -4,7 +4,6 @@
 {-# LANGUAGE FlexibleContexts    #-}
 {-# LANGUAGE FlexibleInstances   #-}
 {-# LANGUAGE GADTs               #-}
-{-# LANGUAGE MonoLocalBinds      #-}
 {-# LANGUAGE OverloadedStrings   #-}
 {-# LANGUAGE ParallelListComp    #-}
 {-# LANGUAGE ScopedTypeVariables #-}
